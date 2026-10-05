@@ -38,7 +38,7 @@ Registry 提供静态启用状态，ExecutionEngine 在显式允许入口后加�
 
 ## 请求与结果
 
-`validate_request(request, bound, now=..., clock_domain=...)` 校验请求输入与参数，补齐合法默认值并返回 ExecutionRequest，控制授权是结构化 ControlToken，此步骤只校验结构，设备侧有效性由步骤 3 实现
+`validate_request(request, bound, now=..., clock_domain=...)` 校验请求输入与参数，补齐合法默认值并返回 ExecutionRequest，控制授权是结构化 ControlToken，契约入口校验结构，ControlManager 与最终模拟设备网关校验实际控制有效性
 
 `validate_snapshot(snapshot, capability=None, now=..., clock_domain=...)` 校验 OperationSnapshot，提供能力描述时进一步检查反馈数据和结果输出
 

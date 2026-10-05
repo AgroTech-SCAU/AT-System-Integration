@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Protocol
 from uuid import uuid4
 
+from .control import ControlManager, DeviceGateway
 from .errors import ContractValidationError, fail, parse
 from .models import (ExecutionRequest, OperationError, OperationFeedback,
                      OperationSnapshot, OperationState, StopState)
@@ -75,15 +76,24 @@ def _positive(value, name):
 class ExecutionEngine:
     def __init__(self, bound: BoundSystem, registry: Registry, *, clock: Clock | None = None,
                  execution_timeout_s=None, cancel_timeout_s=2.0, feedback_timeout_s=1.0,
-                 authorize=None):
+                 authorize=None, control=None, records=None, resource_timeout_s=0):
         self.bound = bound
         self.registry = registry
-        self.clock = clock or MonotonicClock()
+        self.clock = clock or (control.clock if control is not None else MonotonicClock())
         self.execution_timeout_s = (None if execution_timeout_s is None else
                                     _positive(execution_timeout_s, 'execution_timeout_s'))
         self.cancel_timeout_s = _positive(cancel_timeout_s, 'cancel_timeout_s')
         self.feedback_timeout_s = _positive(feedback_timeout_s, 'feedback_timeout_s')
         self.authorize = authorize
+        if records is None and control is None:
+            fail('$.records', 'ledger_required', '执行器需要显式配置 SQLite 操作台账')
+        self.records = records if records is not None else control.records
+        self.control = control or ControlManager(clock=self.clock, records=self.records)
+        if self.control.records is not self.records or self.control.clock is not self.clock:
+            fail('$.control', 'incompatible_control', '控制门控与执行器必须共享台账和时钟')
+        self.resource_timeout_s = resource_timeout_s
+        self.gateway = DeviceGateway(self.control, self.bound)
+        self.control.resources.restore(self.records.recover_pending())
         self._adapters: dict[str, Adapter] = {}
         self._operations: dict[str, _Operation] = {}
         self._requests: dict[str, tuple[str, str]] = {}
@@ -109,7 +119,7 @@ class ExecutionEngine:
         try:
             factory = getattr(importlib.import_module(module), name)
             adapter = factory(backend_instance=backend_instance, clock=self.clock,
-                              before_effect=self._before_effect, **options)
+                              before_effect=self._before_effect, gateway=self.gateway, **options)
             if not callable(getattr(adapter, 'accept', None)) or not callable(getattr(adapter, 'aclose', None)):
                 fail('$.adapter_entrypoint', 'invalid_adapter', '适配器必须实现 accept 与 aclose')
         except ContractValidationError:
@@ -121,6 +131,8 @@ class ExecutionEngine:
         return adapter
 
     async def _authorize(self, request):
+        cap = self.bound.capabilities[(request.backend_instance, request.capability_id)]
+        self.control.validate_control(request.control, cap.resources)
         if self.authorize is None:
             return
         cap = self.bound.capabilities[(request.backend_instance, request.capability_id)]
@@ -173,6 +185,11 @@ class ExecutionEngine:
                 if previous[0] != fingerprint:
                     fail('$.request_id', 'request_id_conflict', '同一请求标识不能对应不同载荷')
                 return previous[1]
+            persisted = self.records.get_record(raw.request_id)
+            if persisted is not None:
+                if persisted['fingerprint'] != fingerprint:
+                    fail('$.request_id', 'request_id_conflict', '同一请求标识不能对应不同载荷')
+                return persisted['operation_id']
             parsed = validate_request(raw, self.bound, now=self.clock.now(), clock_domain=self.clock.clock_domain)
             backend = self.bound.backends[parsed.backend_instance]
             if not self.registry.is_enabled(backend.package_id):
@@ -187,14 +204,24 @@ class ExecutionEngine:
                 fail('$.backend_instance', 'adapter_disabled', '适配器已禁用')
             parsed = validate_request(parsed, self.bound, now=self.clock.now(), clock_domain=self.clock.clock_domain)
             op_id = 'operation_' + uuid4().hex
+            cap = self.bound.capabilities[(parsed.backend_instance, parsed.capability_id)]
+            await self.control.resources.acquire(op_id, cap.resources, timeout_s=self.resource_timeout_s)
             try:
+                if self._closed:
+                    fail('$', 'engine_closed', '执行器已关闭')
+                self.control.validate_control(parsed.control, cap.resources)
+                parsed = validate_request(parsed, self.bound, now=self.clock.now(), clock_domain=self.clock.clock_domain)
+                self.records.reserve(parsed, op_id, fingerprint, cap.resources)
                 handle = adapter.accept(parsed.model_copy(deep=True), op_id)
-            except ContractValidationError:
+                if not all(callable(getattr(handle, name, None)) for name in ('run', 'request_cancel', 'wait_stopped')):
+                    fail('$', 'backend_rejected', '后端没有返回合法执行句柄')
+            except BaseException:
+                self.control.resources.settle(op_id, cap.resources, StopState.CONFIRMED)
+                try:
+                    self.records.discard_unaccepted(op_id)
+                except ContractValidationError:
+                    pass
                 raise
-            except Exception as exc:
-                fail('$', 'backend_rejected', f'后端没有接纳请求: {exc}')
-            if not all(callable(getattr(handle, name, None)) for name in ('run', 'request_cancel', 'wait_stopped')):
-                fail('$', 'backend_rejected', '后端没有返回合法执行句柄')
             cap = self.bound.capabilities[(parsed.backend_instance, parsed.capability_id)]
             timeout = cap.timeout_s if self.execution_timeout_s is None else min(cap.timeout_s, self.execution_timeout_s)
             snapshot = OperationSnapshot(operation_id=op_id, state=OperationState.ACCEPTED,
@@ -203,6 +230,7 @@ class ExecutionEngine:
             operation = _Operation(parsed, snapshot, handle, self.clock.now() + timeout)
             self._operations[op_id] = operation
             self._requests[parsed.request_id] = (fingerprint, op_id)
+            self._notify(operation)
             operation.worker = self._spawn(self._drive(operation))
             return op_id
 
@@ -212,7 +240,19 @@ class ExecutionEngine:
         return self._operations[op_id]
 
     def get_operation(self, operation_id) -> OperationSnapshot:
+        if operation_id not in self._operations:
+            return self.records.get_operation(operation_id)
         return self._get(operation_id).snapshot.model_copy(deep=True)
+
+    def _notify(self, operation):
+        cap = self.bound.capabilities[(operation.request.backend_instance, operation.request.capability_id)]
+        try:
+            self.records.save(operation.snapshot)
+        except ContractValidationError:
+            self.control.resources.settle(operation.snapshot.operation_id, cap.resources, StopState.UNCONFIRMED)
+            raise
+        if operation.snapshot.state in TERMINAL:
+            self.control.resources.settle(operation.snapshot.operation_id, cap.resources, operation.snapshot.stop_state)
 
     def _request_cancel(self, operation, error=None):
         snapshot = operation.snapshot
@@ -225,8 +265,14 @@ class ExecutionEngine:
             operation.cancel_event.set()
         if snapshot.state not in TERMINAL:
             snapshot.state = OperationState.CANCELING
+        self._notify(operation)
 
     def cancel(self, operation_id) -> OperationSnapshot:
+        if operation_id not in self._operations:
+            snapshot = self.records.get_operation(operation_id)
+            if snapshot.state == OperationState.UNKNOWN:
+                fail('$.operation_id', 'recovery_requires_review', '重启后没有在途句柄，需要核对设备状态')
+            return snapshot
         operation = self._get(operation_id)
         if operation.snapshot.state in TERMINAL:
             if (not self._closed and operation.snapshot.state == OperationState.UNKNOWN and
@@ -256,6 +302,7 @@ class ExecutionEngine:
             cap = self.bound.capabilities[(operation.request.backend_instance, operation.request.capability_id)]
             validate_snapshot(candidate, cap, now=self.clock.now(), clock_domain=self.clock.clock_domain)
             operation.snapshot.feedback = feedback
+            self._notify(operation)
         except ContractValidationError as exc:
             issue = exc.issues[0]
             self._request_cancel(operation, OperationError(code=issue.code, reason=issue.reason, path=issue.path))
@@ -276,6 +323,7 @@ class ExecutionEngine:
         if candidate.feedback.stage is None:
             candidate.feedback = operation.snapshot.feedback.model_copy(deep=True)
         operation.snapshot = candidate
+        self._notify(operation)
         return True
 
     async def _late_confirmation(self, operation, work):
@@ -283,6 +331,7 @@ class ExecutionEngine:
             stopped = await work
             if stopped in {StopState.CONFIRMED, StopState.NOT_APPLICABLE}:
                 operation.snapshot.stop_state = stopped
+                self._notify(operation)
         except asyncio.CancelledError:
             work.cancel()
             raise
@@ -302,6 +351,7 @@ class ExecutionEngine:
         async def confirm():
             accepted = await operation.handle.request_cancel()
             operation.snapshot.cancel_accepted = accepted is True
+            self._notify(operation)
             if accepted is not True:
                 return StopState.UNCONFIRMED
             return await operation.handle.wait_stopped()
@@ -346,10 +396,13 @@ class ExecutionEngine:
                 operation.snapshot.state = OperationState.UNKNOWN
                 operation.snapshot.error = OperationError(code='cancel_failed', reason=f'取消异常，停止未确认: {exc}')
         finally:
-            if not keep_waiting:
-                work.cancel()
-            timer.cancel()
-            await asyncio.gather(timer, *([] if keep_waiting else [work]), return_exceptions=True)
+            try:
+                self._notify(operation)
+            finally:
+                if not keep_waiting:
+                    work.cancel()
+                timer.cancel()
+                await asyncio.gather(timer, *([] if keep_waiting else [work]), return_exceptions=True)
 
     async def _drive(self, operation):
         timer = None
@@ -357,6 +410,7 @@ class ExecutionEngine:
         try:
             if not operation.snapshot.cancel_requested:
                 operation.snapshot.state = OperationState.RUNNING
+            self._notify(operation)
             operation.run_task = asyncio.create_task(operation.handle.run(lambda feedback: self._feedback(operation, feedback)))
             timer = asyncio.create_task(self._sleep_until(operation.deadline))
             cancellation = asyncio.create_task(operation.cancel_event.wait())
@@ -375,6 +429,10 @@ class ExecutionEngine:
             operation.snapshot.stop_state = StopState.UNCONFIRMED
             operation.snapshot.error = OperationError(code='backend_result_unknown', reason=f'后端结果无法确认: {exc}')
         finally:
+            try:
+                self._notify(operation)
+            except ContractValidationError:
+                pass
             tasks = [task for task in (operation.run_task, timer, cancellation) if task is not None]
             for task in tasks:
                 task.cancel()
@@ -386,10 +444,17 @@ class ExecutionEngine:
         self._closed = True
         for operation in self._operations.values():
             if operation.snapshot.state not in TERMINAL:
-                self._request_cancel(operation)
+                try:
+                    self._request_cancel(operation)
+                except ContractValidationError:
+                    pass
                 operation.snapshot.state = OperationState.UNKNOWN
                 operation.snapshot.stop_state = StopState.UNCONFIRMED
                 operation.snapshot.error = OperationError(code='engine_closed', reason='执行器关闭，未确认的操作需要核对')
+                try:
+                    self._notify(operation)
+                except ContractValidationError:
+                    pass
         tasks = list(self._tasks)
         for task in tasks:
             task.cancel()

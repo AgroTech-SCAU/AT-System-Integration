@@ -108,6 +108,7 @@ class MockOperation:
     def _produce(self):
         request = self.request
         cap = request.capability_id
+        self.adapter.gateway.validate(request, self.operation_id)
         world = self.adapter.world
         clock = self.adapter.clock
         if cap == 'navigation.move_to_waypoint':
@@ -161,10 +162,11 @@ class MockOperation:
 
 
 class MockAdapter:
-    def __init__(self, *, backend_instance, clock, before_effect=None, faults=None):
+    def __init__(self, *, backend_instance, clock, gateway, before_effect=None, faults=None):
         self.backend_instance = backend_instance
         self.clock = clock
         self.before_effect = before_effect
+        self.gateway = gateway
         self.faults = faults or FaultPlan()
         self.world = MockWorld()
         self.accepted_requests = 0
@@ -185,6 +187,6 @@ class MockAdapter:
         await asyncio.gather(*(operation.aclose() for operation in self._operations))
 
 
-def create_adapter(*, backend_instance, clock, before_effect=None, faults=None):
-    return MockAdapter(backend_instance=backend_instance, clock=clock,
+def create_adapter(*, backend_instance, clock, gateway, before_effect=None, faults=None):
+    return MockAdapter(backend_instance=backend_instance, clock=clock, gateway=gateway,
                        before_effect=before_effect, faults=faults)

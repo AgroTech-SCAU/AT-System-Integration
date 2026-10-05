@@ -8,19 +8,24 @@
 
 ```python
 from agro_runtime.execution import ExecutionEngine
+from agro_runtime.records import OperationLedger
 
-engine = ExecutionEngine(bound, registry)
+records = OperationLedger(state_directory / 'operations.db')
+engine = ExecutionEngine(bound, registry, records=records)
 adapter = engine.enable_adapter(
     backend_instance,
     allowed_entrypoints={'agro_mock:create_adapter'},
 )
+token = engine.control.begin_task('task_1')
+request['control'] = token.model_dump(mode='json')
 operation_id = await engine.submit(request)
 snapshot = engine.get_operation(operation_id)
 cancel_snapshot = engine.cancel(operation_id)
 await engine.aclose()
+records.close()
 ```
 
-上述片段在异步上下文中使用，`bound`、`registry`、`backend_instance` 和 `request` 来自调用方已校验的系统与请求
+上述片段在异步上下文中使用，state_directory 是调用方准备的状态目录，bound、registry、backend_instance 和请求字典 request 来自已校验的系统与新鲜请求，Engine 关闭后由调用方关闭台账
 
 描述导入只读取数据，`enable_adapter` 检查入口允许列表后才导入模块并创建实例，`submit` 在后端本地接纳请求后返回 operation_id，后续执行由异步任务完成
 
@@ -40,7 +45,7 @@ await engine.aclose()
 
 执行期限采用能力 timeout_s，可用 execution_timeout_s 设置更短的上限，取消确认使用独立 cancel_timeout_s，反馈有效期使用 feedback_timeout_s
 
-同一 request_id 与相同载荷返回同一执行实例，不同载荷复用标识返回 request_id_conflict，当前去重仅在执行器内存中保存，持久化由步骤 3 实现
+同一 request_id 与相同载荷返回同一执行实例，不同载荷复用标识返回 request_id_conflict，已知请求的意图、标识、目标与结果保存在调用方配置的 SQLite 台账，重启恢复时在途操作转为 UNKNOWN 并隔离相应资源，不重发动作
 
 不支持取消的能力返回 cancellation_unsupported，执行超时后记录 UNKNOWN，状态查询继续可用
 
@@ -58,7 +63,19 @@ await engine.aclose()
 
 `authorize(request, resources)` 可返回布尔值或异步布尔值，也可抛出结构化校验错误，执行器在接纳前与最终模拟副作用前调用该入口
 
-默认未接入控制策略，步骤 3 将接入模式、控制令牌与资源门控，当前模拟不连接真实设备
+执行器默认使用强制模式、令牌与资源门控，控制器初始化为 STANDBY，begin_task 检查门控前置条件并转 AUTO，模块运行与就绪检查由步骤 4 接入
+
+最终模拟设备网关在 _produce 前独立校验 owner、control_epoch、过期时间、时间域和资源持有情况，人工接管先推进持久化代次，旧令牌随后到达也不能产生副作用
+
+资源全量尝试获取，资源冲突默认立即拒绝，可用 resource_timeout_s 配置有界等待，未确认停止的资源不会因令牌到期而释放，迟到的停止确认会更新台账并解除对应隔离
+
+急停独立于模式，set_estop(True) 先锁存 FAULT 并撤销本地授权，存储失败也维持阻止动作，解除必须由设备确认，解除后仍需 clear_fault 回到 STANDBY
+
+执行器要求显式提供 SQLite 台账，文件路径用于持久化，显式 :memory: 只适合隔离验证，不具备重启去重或授权代次持久化能力
+
+台账保证已知请求去重与重启后不自动重放，外部设备副作用是否已经发生仍可能需要重新观测或人工核对，不承诺物理 exactly-once
+
+当前门控为单机模拟实现，资源状态由一个执行器协调，生产服务生命周期、多主机协调与真实设备仍由后续步骤接入
 
 ## 验证记录
 
