@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68,<80"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agro-runtime"
+version = "0.0.0"
+requires-python = ">=3.10"
+dependencies = ["pydantic>=2.10,<3", "PyYAML>=6,<7"]
+
+[project.optional-dependencies]
+test = ["pytest>=7,<9"]
+
+[project.scripts]
+agroctl = "agro_runtime.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
