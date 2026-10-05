@@ -80,3 +80,48 @@ records.close()
 ## 验证记录
 
 步骤 2 验证脚本在工作区外的临时目录执行，仓库只保留实现和验证结果，具体命令与结果记录于 `docs/plan.md`
+
+## Agent 与统一 CLI
+
+安装项目后，在一个终端运行 Agent，状态目录保存本地会话密钥、配置快照与 SQLite 台账
+
+```bash
+agroctl agent serve --config adapters/mock/system.yaml --state-dir /tmp/agro-agent
+```
+
+在另一个终端通过同一个管理 API 操作系统
+
+```bash
+agroctl --session-file /tmp/agro-agent/session.token system start
+agroctl --session-file /tmp/agro-agent/session.token system status
+agroctl --session-file /tmp/agro-agent/session.token system snapshot
+agroctl --session-file /tmp/agro-agent/session.token control take AUTO
+agroctl --session-file /tmp/agro-agent/session.token operation submit /tmp/request.json
+agroctl --session-file /tmp/agro-agent/session.token operation status operation_id
+agroctl --session-file /tmp/agro-agent/session.token operation cancel operation_id
+agroctl --session-file /tmp/agro-agent/session.token system stop
+```
+
+`request.json` 使用共享 ExecutionRequest 契约，control 字段填入 control take 返回的令牌，位姿使用同一主机 monotonic_host 时钟，新鲜性仍由执行入口与设备网关校验
+
+默认 API 为 `http://127.0.0.1:8765`，可在命令前加 `--endpoint` 指定另一个回环端口，所有 API 都需要会话文件中的 Bearer 密钥，不应输出或分享密钥，远程客户端未来通过 SSH 隧道访问同一回环入口
+
+system start 与 system stop 返回 accepted 后通过 status 观察完成状态，operation submit 返回 ACCEPTED 或 RUNNING 表示已接受，只有后续状态为 SUCCEEDED 才表示能力完成，关闭 CLI 连接不会自动取消任务
+
+模拟运行模块由本地进程组管理，Agent 中的适配器与控制网关负责能力执行，模块正常启动后处于 STANDBY，control take AUTO 才开始任务授权，重复 start 合并到同一个 system_run_id
+
+接入包 runtime 定义 manager、target、dependencies、argv、start_timeout_s 与 stop_timeout_s，实例可通过 runtime 覆盖，依赖名称引用 backend instance_id，systemd 仅管理目标 unit，ros_launch 仅管理 launch 根进程及其组，组内节点不再由 Agent 单独启动
+
+同一状态目录只允许一个 Agent，启动失败或模块崩溃不自动重启，先查看原因再 stop 并 start，历史操作仍按 request_id 去重，不重发设备动作
+
+按能力检查使用 `POST /system/readiness`，分别返回 process、interface、data、authorization，后端可向 Runtime 注入按能力与阶段检查的 readiness_probe，未提供数据检查的能力前置条件会显示 data_check_required
+
+后端 native_config 引用独立于框架 config，只有对应接入包提供 native_validators 校验器时才允许应用，快照保存实际校验内容，编辑原始 YAML、原生配置或返回的快照不会改变本次运行配置
+
+停止系统会立即阻止新操作并撤销授权，再取消在途操作，停止未确认时显示 STOP_UNCONFIRMED 并保留网关和诊断进程，Agent 的正常退出信号同样等待停止确认，不能把这种状态当作已安全退出
+
+异常退出后 Agent 进入 RECOVERING，读取原运行 ID、操作台账和本地进程身份，不能直接开始任务，先 stop 核对停止状态，历史 UNKNOWN/UNCONFIRMED 会继续保持 STOP_UNCONFIRMED，需要项目定义的设备核对才能解除资源隔离
+
+本地模块持久化 PID、启动时间、主机启动身份与实际命令，并让进程组根继承管理锁，身份不符或旧进程仍持锁时拒绝重复启动，停止不向身份变化后的 PID 发送信号
+
+原生配置应用使用只读冻结 JSON 文件，JSON 同时可作为 YAML 输入，本地或 launch 启动 argv 通过 `{native_config}` 引用该文件，systemd 后端必须提供 native_appliers 并明确确认冻结配置应用成功，否则启动显示 native_apply_required，不把原文件引用当作已经应用

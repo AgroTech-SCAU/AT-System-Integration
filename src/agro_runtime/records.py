@@ -3,7 +3,7 @@ import json
 from contextlib import contextmanager
 import sqlite3
 
-from .errors import fail
+from .errors import fail, parse
 from .models import OperationError, OperationSnapshot, OperationState, StopState
 
 
@@ -128,6 +128,10 @@ class OperationLedger:
                 if snapshot.stop_state == StopState.UNCONFIRMED:
                     unresolved.append((row['operation_id'], json.loads(row['resources'])))
         return unresolved
+
+    def list_operations(self):
+        rows = self._execute('SELECT snapshot FROM operations WHERE snapshot IS NOT NULL ORDER BY rowid').fetchall()
+        return [parse(OperationSnapshot, json.loads(row['snapshot'])) for row in rows]
 
     def close(self):
         if not self._closed:

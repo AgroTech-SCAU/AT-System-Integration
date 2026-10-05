@@ -28,6 +28,30 @@
           },
           "title": "Config",
           "type": "object"
+        },
+        "runtime": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeDescriptor"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "native_config": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Native Config"
         }
       },
       "required": [
@@ -808,6 +832,26 @@
           "minLength": 1,
           "title": "Health Check",
           "type": "string"
+        },
+        "argv": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Argv",
+          "type": "array"
+        },
+        "start_timeout_s": {
+          "default": 10.0,
+          "exclusiveMinimum": 0,
+          "title": "Start Timeout S",
+          "type": "number"
+        },
+        "stop_timeout_s": {
+          "default": 5.0,
+          "exclusiveMinimum": 0,
+          "title": "Stop Timeout S",
+          "type": "number"
         }
       },
       "required": [

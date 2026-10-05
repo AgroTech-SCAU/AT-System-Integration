@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "agro-runtime"
 version = "0.0.0"
 requires-python = ">=3.10"
-dependencies = ["pydantic>=2.10,<3", "PyYAML>=6,<7"]
+dependencies = ["pydantic>=2.10,<3", "PyYAML>=6,<7", "fastapi>=0.115,<1", "uvicorn>=0.30,<1", "httpx>=0.27,<1"]
 
 [project.scripts]
 agroctl = "agro_runtime.cli:main"
@@ -19,4 +19,4 @@ packages = ["agro_runtime", "agro_mock"]
 agro_mock = "adapters/mock"
 
 [tool.setuptools.package-data]
-agro_mock = ["package.yaml"]
+agro_mock = ["package.yaml", "system.yaml"]

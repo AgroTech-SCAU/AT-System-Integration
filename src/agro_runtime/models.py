@@ -143,6 +143,9 @@ class RuntimeDescriptor(ContractModel):
     target: Nonempty
     dependencies: list[Identifier] = Field(default_factory=list)
     health_check: Nonempty
+    argv: list[Nonempty] = Field(default_factory=list)
+    start_timeout_s: Positive = 10.0
+    stop_timeout_s: Positive = 5.0
 
 
 class PackageDescriptor(ContractModel):
@@ -165,6 +168,8 @@ class BackendInstance(ContractModel):
     instance_id: Identifier
     package_id: Identifier
     config: dict[Identifier, JsonValue] = Field(default_factory=dict)
+    runtime: RuntimeDescriptor | None = None
+    native_config: Nonempty | None = None
 
 
 class RoleBinding(ContractModel):

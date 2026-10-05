@@ -394,7 +394,7 @@ Python、C++ 和 GUI 未来均使用同一契约样例验证消息语义，不�
 验证资源冲突、停止未确认、旧请求和重启去重，不接真机或建设分布式仲裁
 ```
 
-### 步骤 4 `[ ]` 打通运行管理、Agent 与统一 CLI
+### 步骤 4 `[x]` 打通运行管理、Agent 与统一 CLI
 
 **前置条件**
 
@@ -427,11 +427,30 @@ Python、C++ 和 GUI 未来均使用同一契约样例验证消息语义，不�
 
 **最小验证**
 
-- [ ] 慢启动、模块缺失、依赖环分别产生正确状态与原因
-- [ ] 重复启动不创建第二份进程，模拟崩溃不自动重放操作
-- [ ] 当前不需要定位的模块能进入就绪，不误用整机统一门槛
-- [ ] API 结果、CLI 输出和核心状态一致，未授权本地会话拒绝控制请求
-- [ ] `python -m pytest tests/test_runtime_api.py -q` 全部通过
+- [x] 慢启动、模块缺失、依赖环分别产生正确状态与原因
+- [x] 重复启动不创建第二份进程，模拟崩溃不自动重放操作
+- [x] 当前不需要定位的模块能进入就绪，不误用整机统一门槛
+- [x] API 结果、CLI 输出和核心状态一致，未授权本地会话拒绝控制请求
+- [x] `python -m pytest tests/test_runtime_api.py -q` 全部通过
+
+**实际完成证据**
+
+- 实现 `runtime.py` 的单机生命周期、依赖排序、唯一管理者校验、启动停止超时、崩溃监测与按能力及阶段的四类就绪检查，启动后进入 STANDBY，重复启动复用同一 system_run_id
+- 本地及 launch 根进程使用独立进程组，持久化 PID、启动时间、主机启动身份和配置身份，组根继承管理锁，Agent 重启识别遗留组或拒绝重复启动，状态目录用排他锁限制单 Agent
+- systemd 路径通过可替换管理器发出 unit 请求，默认适配器使用用户级 systemctl，所有生命周期验证使用 FakeServiceManager，不修改当前主机服务
+- 实现 `api.py` 的 package、system、operation、control 管理入口，所有请求校验本地 Bearer 会话，Agent 默认监听回环地址，CLI 只调用同一 API，HTTP 接受与动作完成分别查询
+- 配置保存为内容摘要标识的只读快照，返回值为独立副本，原生配置独立校验，本地 argv 通过 `{native_config}` 读取冻结文件，systemd 后端缺少冻结配置应用器时拒绝启动
+- system stop 先关闭派发并撤销授权，再取消在途操作，UNKNOWN/UNCONFIRMED 与模块停止超时保留 STOP_UNCONFIRMED、网关及诊断，正常退出信号也等待停止确认
+- 重启恢复 RECOVERING 与原运行 ID，历史未确认操作不会被初始 STOPPED 状态覆盖，旧操作不重放，停止核对后才能重启模块
+- 新增模拟启动配置 `adapters/mock/system.yaml` 与模块入口 `worker.py`，在 `adapters/mock/README.md` 记录 CLI、会话、就绪、配置冻结与恢复方法，不进入任务或行为树步骤
+- 步骤 4 验证脚本为 `/tmp/agro-step4-tests/test_runtime_api.py`，20 项覆盖慢启动、超时、缺失模块、依赖环、启动幂等、伪造 systemd、能力及阶段门槛、未授权会话、非法认证编码、CLI 阻塞原因、客户端断开、停止未确认、崩溃去重、原生配置冻结和恢复状态
+- 新上下文只读代码审查提出三项重要问题，重启后错误报告停止完成、原生配置未实际冻结、遗留进程重复启动均已修复，并用临时回归及真实崩溃演示验证，无遗留重要问题
+- `PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 /tmp/agro-step1-venv/bin/python -m pytest /tmp/agro-step4-tests/test_runtime_api.py /tmp/agro-step3-tests/test_control.py /tmp/agro-step2-tests/test_execution.py /tmp/agro-step2-tests/test_registry.py -q -p no:cacheprovider` 返回 112 passed
+- 原有 package validate 与 system validate 样例仍返回 valid=true，新模拟系统静态校验通过，依赖环在静态 CLI 校验阶段即拒绝
+- 在 `/tmp/agro-step4-package` 构建 wheel，安装到 `/tmp/agro-step4-installed` 后验证 runtime、API、CLI、模拟 worker 与 package/system 配置随包交付，`pip check` 返回 No broken requirements found
+- `/tmp/agro-step4-tests/demo.py` 通过真实回环 HTTP 完成 system start、AUTO 授权、operation submit/status、system stop，实际运行 ID 为 `system_f69f96191b10497b9d57bd7b049f2b45`，操作 ID 为 `operation_077a41a0880c4de98781ccf6312848b0`，操作结果 SUCCEEDED/CONFIRMED，系统回到 STOPPED/STANDBY，Agent 退出码为 0
+- `/tmp/agro-step4-tests/crash_demo.py` 终止临时 Agent 后识别遗留模拟进程，恢复运行 ID `system_a494691594c841dab6e7868d2ea51181`，保持 RECOVERING 并完成停止，不创建第二份模块
+- `git diff --check` 通过，测试、构建与运行状态文件均在工作区外，不交付测试源码，不创建提交或自动进入步骤 5
 
 **Codex Prompt**
 
@@ -580,9 +599,9 @@ systemd 操作用测试替身验证，不修改当前主机服务
 
 ## 12 当前立即执行
 
-步骤 1 至步骤 3 已完成，实际接口、样例与验证证据见第 9 节
+步骤 1 至步骤 4 已完成，实际接口、样例与验证证据见第 9 节
 
-下一步为步骤 4，后续收到执行请求时将总执行 Prompt 与步骤 4 Codex Prompt 一起交给当前仓库中的 Agent，验证脚本遵守工作区外临时执行约束，本次不自动启动后续步骤
+下一步为步骤 5，后续收到执行请求时将总执行 Prompt 与步骤 5 Codex Prompt 一起交给当前仓库中的 Agent，验证脚本遵守工作区外临时执行约束，本次不自动启动后续步骤
 
 ## 13 进度统计
 
@@ -591,11 +610,11 @@ systemd 操作用测试替身验证，不修改当前主机服务
 | 1 | 接入契约与能力注册 | [x] |
 | 2 | 异步能力执行与模拟适配器 | [x] |
 | 3 | 模式、资源门控与操作台账 | [x] |
-| 4 | 运行管理、Agent 与 CLI | [ ] |
+| 4 | 运行管理、Agent 与 CLI | [x] |
 | 5 | 实际 BehaviorTree.CPP 执行器 | [ ] |
 | 6 | 番茄模拟任务与阶段验收 | [ ] |
 | 最终验收 | P1 完成标准核对 | [ ] |
 
-当前已完成 3 / 6，步骤 1 至步骤 3 通过，P1 最终验收仍未完成
+当前已完成 4 / 6，步骤 1 至步骤 4 通过，P1 最终验收仍未完成
 
 后续阶段只有 P1 验收通过后才依据真实接口细化，每阶段继续遵守 mini-step-plan，不提前把路线图扩成几十个未验证任务
