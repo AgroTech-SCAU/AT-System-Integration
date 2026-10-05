@@ -248,6 +248,8 @@ class OperationError(ContractModel):
 
 
 class OperationFeedback(ContractModel):
+    timestamp: Nonnegative | None = None
+    clock_domain: QualifiedName | None = None
     stage: Nonempty | None = None
     progress: Annotated[Number, Field(ge=0, le=1)] | None = None
     data: dict[Identifier, JsonValue] = Field(default_factory=dict)
@@ -264,9 +266,13 @@ class OperationSnapshot(ContractModel):
     feedback: OperationFeedback = Field(default_factory=OperationFeedback)
     result: OperationResult | None = None
     error: OperationError | None = None
+    cancel_requested: StrictBool = False
+    cancel_accepted: StrictBool = False
 
     @model_validator(mode='after')
     def check_state(self):
+        if self.cancel_accepted and not self.cancel_requested:
+            invalid(('cancel_accepted',), 'invalid_state', '没有取消请求时不能记录后端接受取消')
         if self.state == OperationState.CANCELED and self.stop_state == StopState.UNCONFIRMED:
             invalid(('stop_state',), 'stop_unconfirmed', '适用的停止未确认，不能记录 CANCELED')
         if self.state == OperationState.SUCCEEDED and self.result is None:

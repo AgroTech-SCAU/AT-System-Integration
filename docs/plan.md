@@ -12,6 +12,13 @@
 
 若目标仓库已有等价实现，读取后复用并记录对应关系，不为迎合本计划移动目录或重写实现
 
+### 新增执行约束
+
+测试与验证脚本只放在工作区外的临时目录，验证成功后不作为仓库交付，不新增或保留 `tests/` 源码，仓库只记录实际命令与结果
+
+下文原有 tests 路径与测试文件名表达验证范围，执行时改用临时目录中的同名验证脚本，此约束优先于各步骤原先的测试文件交付要求
+
+
 ## 1 全工程阶段路线图
 
 | 阶段 | 可独立验收的目标 | 主交付 | 进入下一阶段的条件 |
@@ -121,7 +128,7 @@ P1 至 P5 都属于目标工程，后续阶段不计入当前阶段进度，也�
 | `src/agro_runtime/runtime.py`、`api.py`、`cli.py` | 进程管理、就绪、管理接口与命令 | 步骤 4 |
 | `task_engine/` | C++ 行为树执行器与能力客户端 | 步骤 5 |
 | `examples/tomato_picker/` | 模拟系统、资产和任务 XML | 步骤 6 |
-| `tests/` | 当前步骤所需的契约、组件和闭环验证 | 各步骤随实现增加 |
+| 工作区外临时验证目录 | 当前步骤所需的契约、组件和闭环验证，不交付测试源码 | 各步骤执行时临时生成 |
 
 目录是新工程默认约定，存在现有结构时保持项目风格并更新实际路径映射
 
@@ -189,7 +196,7 @@ Python、C++ 和 GUI 未来均使用同一契约样例验证消息语义，不�
 
 不主动新建或切换分支，不执行 git commit、git push、合并、发布或部署到用户设备
 如执行环境强制隔离，仅使用已有授权的隔离工作区，不自行改动用户当前分支
-仅修改本步骤需要的源码、配置、测试、资源及计划进度
+仅修改本步骤需要的源码、配置、资源及计划进度，测试与验证脚本仅在工作区外临时目录执行，不向仓库交付测试源码
 当前步骤未完成前不修改无关 README、CHANGELOG、设计文档或其他计划
 直接使用前序步骤明确的接口，必要接口变更记录证据并仅修订受影响部分
 
@@ -267,7 +274,7 @@ Python、C++ 和 GUI 未来均使用同一契约样例验证消息语义，不�
 只运行 test_registry.py 和对应 CLI 校验，不启动机器人或建设插件平台
 ```
 
-### 步骤 2 `[ ]` 实现异步能力执行与模拟适配器
+### 步骤 2 `[x]` 实现异步能力执行与模拟适配器
 
 **前置条件**
 
@@ -279,7 +286,7 @@ Python、C++ 和 GUI 未来均使用同一契约样例验证消息语义，不�
 
 **修改范围**
 
-`src/agro_runtime/execution.py`、`adapters/mock/`、`tests/test_execution.py`
+`src/agro_runtime/execution.py`、`adapters/mock/`、工作区外临时 `test_execution.py`
 
 **必做**
 
@@ -296,11 +303,25 @@ Python、C++ 和 GUI 未来均使用同一契约样例验证消息语义，不�
 
 **最小验证**
 
-- [ ] 接受请求后先 RUNNING 再 SUCCEEDED，过程存在可读反馈
-- [ ] 取消请求只进入 CANCELING，停止确认后才 CANCELED
-- [ ] 结果丢失进入 UNKNOWN，停止未确认保持 UNCONFIRMED
-- [ ] 同一 request_id 重复提交不重复执行，不同载荷复用该 ID 被拒绝
-- [ ] `python -m pytest tests/test_execution.py -q` 全部通过
+- [x] 接受请求后先 RUNNING 再 SUCCEEDED，过程存在可读反馈
+- [x] 取消请求只进入 CANCELING，停止确认后才 CANCELED
+- [x] 结果丢失进入 UNKNOWN，停止未确认保持 UNCONFIRMED
+- [x] 同一 request_id 重复提交不重复执行，不同载荷复用该 ID 被拒绝
+- [x] 临时目录中的 `test_execution.py` 全部通过
+
+**实际完成证据**
+
+- 新增 `src/agro_runtime/execution.py`，实现异步 submit、快照查询 get_operation、非阻塞 cancel、显式适配器加载与本地追踪清理
+- 新增 `adapters/mock/`，安装模块为 agro_mock，提供导航、单目标检测、位姿平移、机械臂运动、末端夹持释放与结果验证
+- 更新 OperationFeedback 的可选时间戳和时间域，以及 OperationSnapshot 的 cancel_requested 与 cancel_accepted，共享 Schema 已从权威模型重新导出
+- 执行超时触发取消，取消确认使用独立期限，未确认停止进入 UNKNOWN，迟到的停止确认只更新 stop_state，未知结果保留供核对
+- 同一 request_id 的相同载荷只执行一次，载荷冲突返回结构化错误，当前去重保存在内存中，未声称支持重启持久化去重
+- 使用注入时钟验证慢启动、执行失败、过期反馈、结果丢失、取消未确认与独立超时，没有长时间等待或真机动作
+- 预留 authorize(request, resources)，接纳前与最终模拟副作用前均检查，异步检查返回后再次核对关闭、取消、启用状态、执行期限和数据新鲜度
+- 独立代码审查复现六个阻塞问题，取消覆盖已完成结果、异步授权竞态、关闭后接纳、迟到停止确认丢失、延迟动作数据过期与不支持取消声明被忽略，均已通过先失败再通过的回归验证修复
+- 步骤 1 验证脚本已移到 `/tmp/agro-step2-tests/test_registry.py`，步骤 2 验证脚本位于 `/tmp/agro-step2-tests/test_execution.py`，仓库不交付测试源码
+- 实际命令 `PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 /tmp/agro-step1-venv/bin/python -m pytest /tmp/agro-step2-tests/test_execution.py /tmp/agro-step2-tests/test_registry.py -q -p no:cacheprovider` 结果为 71 passed
+- 取消只追踪确认，资源仲裁、控制令牌有效性与持久化台账仍属于步骤 3，完整模拟采摘任务与行为树尚未验收
 
 **Codex Prompt**
 
@@ -544,22 +565,22 @@ systemd 操作用测试替身验证，不修改当前主机服务
 
 ## 12 当前立即执行
 
-步骤 1 已完成，实际接口、样例与验证证据见第 9 节步骤 1
+步骤 1 和步骤 2 已完成，实际接口、样例与验证证据见第 9 节
 
-下一步为步骤 2，后续收到执行请求时将总执行 Prompt 与步骤 2 Codex Prompt 一起交给当前仓库中的 Agent，本次不自动启动后续步骤
+下一步为步骤 3，后续收到执行请求时将总执行 Prompt 与步骤 3 Codex Prompt 一起交给当前仓库中的 Agent，验证脚本遵守工作区外临时执行约束，本次不自动启动后续步骤
 
 ## 13 进度统计
 
 | 步骤 | 任务 | 状态 |
 |---|---|---|
 | 1 | 接入契约与能力注册 | [x] |
-| 2 | 异步能力执行与模拟适配器 | [ ] |
+| 2 | 异步能力执行与模拟适配器 | [x] |
 | 3 | 模式、资源门控与操作台账 | [ ] |
 | 4 | 运行管理、Agent 与 CLI | [ ] |
 | 5 | 实际 BehaviorTree.CPP 执行器 | [ ] |
 | 6 | 番茄模拟任务与阶段验收 | [ ] |
 | 最终验收 | P1 完成标准核对 | [ ] |
 
-当前已完成 1 / 6，仅步骤 1 通过，P1 最终验收仍未完成
+当前已完成 2 / 6，步骤 1 和步骤 2 通过，P1 最终验收仍未完成
 
 后续阶段只有 P1 验收通过后才依据真实接口细化，每阶段继续遵守 mini-step-plan，不提前把路线图扩成几十个未验证任务

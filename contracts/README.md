@@ -7,10 +7,9 @@ JSON Schema 描述字段结构，单位要求、范围关系、默认值合法�
 ## 静态入口
 
 ```bash
-python -m pip install -e '.[test]'
+python -m pip install -e .
 agroctl package validate contracts/examples/tomato_mock.package.yaml
 agroctl system validate contracts/examples/tomato_mock.system.yaml
-python -m pytest tests/test_registry.py -q
 python contracts/export_schema.py
 ```
 
@@ -35,7 +34,7 @@ python contracts/export_schema.py
 
 注册后描述可见，但默认未启用，`Registry.enable(package_id, allowed_entrypoints=...)` 仅记录显式允许的 module:function 入口，既不导入也不调用模块，`disable` 保留已注册描述
 
-此步骤提供静态启用状态，执行适配器加载与实际安装由后续步骤实现，`bind_system` 可校验尚未启用的描述，不能据此直接执行能力
+Registry 提供静态启用状态，ExecutionEngine 在显式允许入口后加载适配器，`bind_system` 可校验尚未启用的描述，不能据此直接执行能力
 
 ## 请求与结果
 
@@ -48,3 +47,7 @@ python contracts/export_schema.py
 SUCCEEDED 必须有结果，FAILED 与 UNKNOWN 必须有原因，UNKNOWN 不允许标记可直接重试，停止仍适用且未确认时不能记录 CANCELED
 
 `examples/move.request.json` 是当前单机单调时钟域位姿请求，验证上下文使用 `now=100.5` 与 `clock_domain=monotonic_host`，`examples/unknown.operation.json` 展示结果未知与停止未确认的独立表达
+
+异步执行器复用上述模型，反馈可携带 timestamp 与 clock_domain，快照新增 cancel_requested 与 cancel_accepted，分别记录取消请求和后端接受，停止确认仍使用独立 stop_state
+
+模拟能力描述和接入说明位于 `adapters/mock/`，开发验证脚本仅在工作区外临时目录执行，仓库保留验证结果

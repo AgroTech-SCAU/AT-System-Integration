@@ -308,6 +308,32 @@
           "title": "Extensions",
           "type": "object"
         },
+        "timestamp": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timestamp"
+        },
+        "clock_domain": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Clock Domain"
+        },
         "stage": {
           "anyOf": [
             {
@@ -416,6 +442,16 @@
             }
           ],
           "default": null
+        },
+        "cancel_requested": {
+          "default": false,
+          "title": "Cancel Requested",
+          "type": "boolean"
+        },
+        "cancel_accepted": {
+          "default": false,
+          "title": "Cancel Accepted",
+          "type": "boolean"
         }
       },
       "required": [

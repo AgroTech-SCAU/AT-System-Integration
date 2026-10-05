@@ -8,14 +8,15 @@ version = "0.0.0"
 requires-python = ">=3.10"
 dependencies = ["pydantic>=2.10,<3", "PyYAML>=6,<7"]
 
-[project.optional-dependencies]
-test = ["pytest>=7,<9"]
-
 [project.scripts]
 agroctl = "agro_runtime.cli:main"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.setuptools]
+packages = ["agro_runtime", "agro_mock"]
 
-[tool.pytest.ini_options]
-pythonpath = ["src"]
+[tool.setuptools.package-dir]
+"" = "src"
+agro_mock = "adapters/mock"
+
+[tool.setuptools.package-data]
+agro_mock = ["package.yaml"]
