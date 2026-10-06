@@ -6,12 +6,12 @@ from pydantic.json_schema import models_json_schema
 
 from agro_runtime.models import (CapabilityDescriptor, ExecutionRequest,
                                  OperationSnapshot, PackageDescriptor,
-                                 StampedPose, SystemConfig)
+                                 StampedPose, SystemConfig, TargetList, PickResult)
 
 
 def main():
     models = [PackageDescriptor, CapabilityDescriptor, SystemConfig,
-              StampedPose, ExecutionRequest, OperationSnapshot]
+              StampedPose, ExecutionRequest, OperationSnapshot, TargetList, PickResult]
     _, schema = models_json_schema([(model, 'validation') for model in models],
                                   title='Agricultural capability contracts')
     schema['$schema'] = 'https://json-schema.org/draft/2020-12/schema'

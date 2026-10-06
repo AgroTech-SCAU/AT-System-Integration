@@ -462,7 +462,7 @@ systemd 操作用测试替身验证，不修改当前主机服务
 停止未确认时保持必要网关与诊断，执行 test_runtime_api.py
 ```
 
-### 步骤 5 `[ ]` 接入实际 BehaviorTree.CPP 执行器
+### 步骤 5 `[x]` 接入实际 BehaviorTree.CPP 执行器
 
 **前置条件**
 
@@ -494,13 +494,29 @@ systemd 操作用测试替身验证，不修改当前主机服务
 
 **最小验证**
 
-- [ ] Sequence、Fallback 与子树在真实引擎中执行，端口映射可追踪
-- [ ] 慢能力持续 RUNNING，取消和服务断线时 tick 不被网络阻塞
-- [ ] XML 引用未知节点、错误端口类型或无后端绑定时执行前失败
-- [ ] `cmake -S task_engine -B build/task_engine` 成功
-- [ ] `cmake --build build/task_engine` 成功
-- [ ] `ctest --test-dir build/task_engine --output-on-failure` 全部通过
-- [ ] `python -m pytest tests/test_bt_bridge.py -q` 全部通过
+- [x] Sequence、Fallback 与子树在真实引擎中执行，端口映射可追踪
+- [x] 慢能力持续 RUNNING，取消和服务断线时 tick 不被网络阻塞
+- [x] XML 引用未知节点、错误端口类型或无后端绑定时执行前失败
+- [x] `cmake -S task_engine -B build/task_engine` 成功
+- [x] `cmake --build build/task_engine` 成功
+- [x] `ctest --test-dir build/task_engine --output-on-failure` 全部通过
+- [x] `python -m pytest tests/test_bt_bridge.py -q` 全部通过
+
+**实际完成证据**
+
+- 新增 `task_engine/`，由真实 BehaviorTree.CPP 加载 XML，能力节点、参数及类型端口从注册快照生成，复用本机 Agent 的 submit、poll、cancel 与既有授权、资源门控和操作台账
+- 两个有界网络工作线程处理请求，tick 不执行网络，独立取消期限追踪设备停止，树状态、节点路径、操作状态、反馈、原因与停止确认分别保留
+- halt、异常退出和未知结果停止后续派发，提交超时与 HTTP 服务错误不自动重发，响应核对操作身份及共享状态约束，UNKNOWN 不会因后续停止确认而改写成成功
+- 支持带单位数值、严格整数、StampedPose、TargetList 与 PickResult，校验节点、绑定、重复 node_id、输入来源、端口类型、单位和坐标系，运行数据有效期继续由 Python 请求入口验证
+- 新增观察与转换示例 `task_engine/examples/bridge.xml`、离线注册样例与共享目标列表及单果结果样例，更新共享模型、校验入口与导出 Schema，不实现步骤 6 的任务会话或采摘闭环
+- 新上下文只读审查指出异常取消等待、HTTP 5xx 分类、响应身份与完整性、输入来源、整数截断、列表 choices 及 Schema 导出问题，均已修复并补入临时验证，单果原因与未知字段规则也已核对
+- 临时环境重建后重新运行验证，不沿用已失效的临时测试结果，构建与全部测试源码均在 `/tmp`，仓库不交付测试文件
+- `cmake -S task_engine -B /tmp/agro-step5-build -DFETCHCONTENT_SOURCE_DIR_BEHAVIORTREE_CPP=/tmp/agro-step5-deps/BehaviorTree.CPP-4.7.0 -DAGRO_CPP_TEST_SOURCE=/tmp/agro-step5-tests/bt_unit.cpp -DAGRO_CPP_TEST_REGISTRY="$PWD/contracts/examples/bt.registry.json"` 配置成功，`cmake --build /tmp/agro-step5-build -j2` 构建成功
+- `ctest --test-dir /tmp/agro-step5-build --output-on-failure` 返回 7 / 7 passed，覆盖非阻塞 tick、halt、提交未知、HTTP 5xx、错误操作身份、缺少失败原因与停止未确认的取消状态
+- `PYTHONDONTWRITEBYTECODE=1 /tmp/agro-step5-venv/bin/python -m pytest /tmp/agro-step5-tests/test_bt_bridge.py -q -p no:cacheprovider` 返回 22 passed，覆盖真实 API、Sequence/Fallback/SubTree、类型转换、角色参数、取消、断线与结果丢失不重发、异常退出停止、非法输入与共享样例
+- `/tmp/agro-step5-build/agro-bt --xml task_engine/examples/bridge.xml --registry contracts/examples/bt.registry.json --validate-only --models /tmp/agro-step5-tests/node-models.xml` 返回 valid=true 并导出实际节点模型
+- `/tmp/agro-step5-venv/bin/agroctl package validate adapters/mock/package.yaml` 与 `system validate adapters/mock/system.yaml` 返回 valid=true，`python contracts/export_schema.py` 导出共享 Schema，临时环境 `pip check` 无依赖冲突，`git diff --check` 通过
+- 未修改主机服务或操作设备，未创建提交，步骤 6 与 P1 最终验收仍待执行
 
 **Codex Prompt**
 
@@ -599,9 +615,9 @@ systemd 操作用测试替身验证，不修改当前主机服务
 
 ## 12 当前立即执行
 
-步骤 1 至步骤 4 已完成，实际接口、样例与验证证据见第 9 节
+步骤 1 至步骤 5 已完成，实际接口、样例与验证证据见第 9 节
 
-下一步为步骤 5，后续收到执行请求时将总执行 Prompt 与步骤 5 Codex Prompt 一起交给当前仓库中的 Agent，验证脚本遵守工作区外临时执行约束，本次不自动启动后续步骤
+下一步为步骤 6，后续收到执行请求时将总执行 Prompt 与步骤 6 Codex Prompt 一起交给当前仓库中的 Agent，验证脚本遵守工作区外临时执行约束，本次不自动启动后续步骤
 
 ## 13 进度统计
 
@@ -611,10 +627,10 @@ systemd 操作用测试替身验证，不修改当前主机服务
 | 2 | 异步能力执行与模拟适配器 | [x] |
 | 3 | 模式、资源门控与操作台账 | [x] |
 | 4 | 运行管理、Agent 与 CLI | [x] |
-| 5 | 实际 BehaviorTree.CPP 执行器 | [ ] |
+| 5 | 实际 BehaviorTree.CPP 执行器 | [x] |
 | 6 | 番茄模拟任务与阶段验收 | [ ] |
 | 最终验收 | P1 完成标准核对 | [ ] |
 
-当前已完成 4 / 6，步骤 1 至步骤 4 通过，P1 最终验收仍未完成
+当前已完成 5 / 6，步骤 1 至步骤 5 通过，P1 最终验收仍未完成
 
 后续阶段只有 P1 验收通过后才依据真实接口细化，每阶段继续遵守 mini-step-plan，不提前把路线图扩成几十个未验证任务

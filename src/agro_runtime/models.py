@@ -4,7 +4,7 @@ from enum import Enum
 from typing import Annotated, Literal
 
 from pydantic import (BaseModel, ConfigDict, Field, JsonValue, StrictBool,
-                      StrictFloat, StrictInt, StrictStr, ValidationError, model_serializer, model_validator)
+                      StrictFloat, StrictInt, StrictStr, RootModel, ValidationError, model_serializer, model_validator)
 from pydantic_core import PydanticCustomError
 
 IDENTIFIER = r'^[a-z][a-z0-9_]*$'
@@ -38,7 +38,7 @@ class ContractModel(BaseModel):
 
 
 class TypeDescriptor(ContractModel):
-    type: Literal['string', 'integer', 'number', 'boolean', 'stamped_pose']
+    type: Literal['string', 'integer', 'number', 'boolean', 'stamped_pose', 'target_list', 'pick_result']
     unit: Nonempty | None = None
     minimum: Number | None = None
     maximum: Number | None = None
@@ -49,13 +49,13 @@ class TypeDescriptor(ContractModel):
 
     @model_validator(mode='after')
     def check_type(self):
-        if self.type in {'integer', 'number', 'stamped_pose'} and self.unit is None:
+        if self.type in {'integer', 'number', 'stamped_pose', 'target_list'} and self.unit is None:
             invalid(('unit',), 'unit_required', '数值与位姿必须声明单位，无量纲数值使用 1')
         if self.minimum is not None and self.maximum is not None and self.minimum > self.maximum:
             invalid(('maximum',), 'invalid_range', '最大值不能小于最小值')
         if self.type not in {'number', 'integer'} and (self.minimum is not None or self.maximum is not None):
             invalid(('minimum',), 'invalid_range', '只有数值类型支持数值范围')
-        if self.type == 'stamped_pose':
+        if self.type in {'stamped_pose', 'target_list'}:
             if self.unit != 'm':
                 invalid(('unit',), 'unit_mismatch', '位姿位置使用 m')
             for field in ('frame_id', 'clock_domain', 'max_age_s'):
@@ -78,7 +78,9 @@ def scalar_error(spec, value, *, check_choices=True):
              'integer': lambda x: type(x) is int,
              'number': lambda x: type(x) is int or (type(x) is float and math.isfinite(x)),
              'boolean': lambda x: type(x) is bool,
-             'stamped_pose': lambda x: isinstance(x, dict)}
+             'stamped_pose': lambda x: isinstance(x, dict),
+             'target_list': lambda x: isinstance(x, list),
+             'pick_result': lambda x: isinstance(x, dict)}
     if not types[spec.type](value):
         return 'invalid_type', f'需要 {spec.type} 类型'
     if spec.type in {'number', 'integer'}:
@@ -208,6 +210,22 @@ class StampedPose(ContractModel):
     def check_orientation(self):
         if not math.isclose(sum(x*x for x in self.orientation), 1.0, abs_tol=1e-6):
             invalid(('orientation',), 'invalid_orientation', '四元数 xyzw 必须归一化')
+        return self
+
+
+class TargetList(RootModel[list[StampedPose]]):
+    pass
+
+
+class PickResult(ContractModel):
+    target_id: Identifier
+    outcome: Literal['picked', 'skipped', 'failed', 'unknown']
+    reason: Nonempty | None = None
+
+    @model_validator(mode='after')
+    def check_reason(self):
+        if self.outcome in {'failed', 'unknown'} and self.reason is None:
+            invalid(('reason',), 'required_field', '失败或结果未知必须保留单果原因')
         return self
 
 

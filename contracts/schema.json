@@ -708,6 +708,52 @@
       "title": "ParameterDescriptor",
       "type": "object"
     },
+    "PickResult": {
+      "additionalProperties": false,
+      "properties": {
+        "extensions": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Extensions",
+          "type": "object"
+        },
+        "target_id": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Target Id",
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "picked",
+            "skipped",
+            "failed",
+            "unknown"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        }
+      },
+      "required": [
+        "target_id",
+        "outcome"
+      ],
+      "title": "PickResult",
+      "type": "object"
+    },
     "ResourceRequirement": {
       "additionalProperties": false,
       "properties": {
@@ -1015,6 +1061,13 @@
       "title": "SystemConfig",
       "type": "object"
     },
+    "TargetList": {
+      "items": {
+        "$ref": "#/$defs/StampedPose"
+      },
+      "title": "TargetList",
+      "type": "array"
+    },
     "TypeDescriptor": {
       "additionalProperties": false,
       "properties": {
@@ -1031,7 +1084,9 @@
             "integer",
             "number",
             "boolean",
-            "stamped_pose"
+            "stamped_pose",
+            "target_list",
+            "pick_result"
           ],
           "title": "Type",
           "type": "string"
