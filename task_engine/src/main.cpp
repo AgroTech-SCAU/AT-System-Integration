@@ -7,6 +7,22 @@
 namespace {
 volatile std::sig_atomic_t stopped = 0;
 void stop(int) { stopped = 1; }
+void save_state(const std::string &path, const agro_bt::Json &report) {
+  if (path.empty())
+    return;
+  const auto temporary = path + ".tmp";
+  {
+    std::ofstream stream(temporary);
+    if (!stream)
+      throw std::runtime_error("state_file_unwritable");
+    stream << report.dump(2) << '\n';
+    stream.flush();
+    if (!stream)
+      throw std::runtime_error("state_file_write_failed");
+  }
+  if (std::rename(temporary.c_str(), path.c_str()) != 0)
+    throw std::runtime_error("state_file_replace_failed");
+}
 std::string text(const std::string &path) {
   std::ifstream stream(path);
   if (!stream)
@@ -114,6 +130,7 @@ int main(int argc, char **argv) {
           std::max(max_tick, std::chrono::duration<double, std::milli>(
                                  std::chrono::steady_clock::now() - before)
                                  .count());
+      save_state(state_file, executor->report());
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
     if (state != BT::NodeStatus::SUCCESS)
@@ -124,10 +141,7 @@ int main(int argc, char **argv) {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     report = executor->report();
     report["max_tick_ms"] = max_tick;
-    if (!state_file.empty()) {
-      std::ofstream stream(state_file);
-      stream << report.dump(2) << '\n';
-    }
+    save_state(state_file, report);
     output << report.dump() << '\n';
     return state == BT::NodeStatus::SUCCESS && broker->settled() ? 0 : 1;
   } catch (const std::exception &exc) {
@@ -143,10 +157,7 @@ int main(int argc, char **argv) {
     report["error"] = {{"code", executing ? "tree_execution_failed"
                                           : "tree_validation_failed"},
                        {"reason", exc.what()}};
-    if (!state_file.empty()) {
-      std::ofstream stream(state_file);
-      stream << report.dump(2) << '\n';
-    }
+    save_state(state_file, report);
     output << report.dump() << '\n';
     return 1;
   }

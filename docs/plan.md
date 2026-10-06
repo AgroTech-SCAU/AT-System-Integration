@@ -8,7 +8,7 @@
 
 建议将本文件放入目标仓库 `docs/plan.md`，将架构蓝图放入 `docs/architecture.md`，执行时必须读取二者
 
-当前未提供框架实现仓库，本计划中的目录、接口与命令是待实现约定，不是对已有源码的描述，也不代表已经验证通过
+计划首次编写时未提供框架实现仓库，当前 P1 实现与验证已完成，原始接口约定与实际完成证据分别见第 6 节和第 9 节
 
 若目标仓库已有等价实现，读取后复用并记录对应关系，不为迎合本计划移动目录或重写实现
 
@@ -103,16 +103,16 @@ P1 至 P5 都属于目标工程，后续阶段不计入当前阶段进度，也�
 
 ## 5 当前阶段完成标准
 
-- [ ] 有效接入包能注册，非法描述与未授权适配器不能启用
-- [ ] 能力角色能绑定到兼容后端，输入、坐标系、数据有效期与参数错误能够解释
-- [ ] 系统启动进入待命，重复启动不产生第二份进程，当前阶段未满足的条件不会错误阻塞其他模块
-- [ ] C++ BehaviorTree.CPP 执行器通过统一能力入口完成模拟单果采摘与放置
-- [ ] 取消请求、后端取消接受与设备停止确认分别记录，未确认停止不会标为已取消完成
-- [ ] 接管撤销旧控制权，旧请求被最终模拟设备网关拒绝
-- [ ] 丢失结果进入 UNKNOWN，不盲目重试，不重复产生不可重复操作
-- [ ] 运行期间编辑草稿不改变任务快照，重启不自动重放运动
-- [ ] CLI 能查看任务、操作、阻塞原因与本次生效配置
-- [ ] 最小记录保存来源、任务树、配置、资产校验值、事件与目标结果
+- [x] 有效接入包能注册，非法描述与未授权适配器不能启用
+- [x] 能力角色能绑定到兼容后端，输入、坐标系、数据有效期与参数错误能够解释
+- [x] 系统启动进入待命，重复启动不产生第二份进程，当前阶段未满足的条件不会错误阻塞其他模块
+- [x] C++ BehaviorTree.CPP 执行器通过统一能力入口完成模拟单果采摘与放置
+- [x] 取消请求、后端取消接受与设备停止确认分别记录，未确认停止不会标为已取消完成
+- [x] 接管撤销旧控制权，旧请求被最终模拟设备网关拒绝
+- [x] 丢失结果进入 UNKNOWN，不盲目重试，不重复产生不可重复操作
+- [x] 运行期间编辑草稿不改变任务快照，重启不自动重放运动
+- [x] CLI 能查看任务、操作、阻塞原因与本次生效配置
+- [x] 最小记录保存来源、任务树、配置、资产校验值、事件与目标结果
 
 ## 6 目录与接口约定
 
@@ -528,7 +528,7 @@ systemd 操作用测试替身验证，不修改当前主机服务
 运行 CMake、CTest 与 test_bt_bridge.py，不开发 GUI 或真实 ROS 适配器
 ```
 
-### 步骤 6 `[ ]` 完成番茄模拟任务与阶段验收
+### 步骤 6 `[x]` 完成番茄模拟任务与阶段验收
 
 **前置条件**
 
@@ -561,15 +561,34 @@ systemd 操作用测试替身验证，不修改当前主机服务
 
 **最小验证**
 
-- [ ] 正常场景完成导航、采摘、放置和台账，运行记录完整可读取
-- [ ] 空目标正常结束，不进入无限重试
-- [ ] 坐标系不匹配、过期观测和错误资产在产生运动前被拒绝
-- [ ] 用户取消、停止未确认、人工接管分别产生预期终态或待处理状态
-- [ ] 结果丢失不重复采摘，断开观察和重启 Agent 不重放操作
-- [ ] 修改草稿后当前 task_run_id 的快照校验值不变
-- [ ] `python -m pytest tests/test_tomato_closed_loop.py -q` 全部通过
-- [ ] `python -m pytest tests/test_registry.py tests/test_execution.py tests/test_control.py tests/test_runtime_api.py tests/test_bt_bridge.py tests/test_tomato_closed_loop.py -q` 全部通过
-- [ ] 实际执行 `agroctl system start examples/tomato_picker/system.yaml`，随后通过 `agroctl task start examples/tomato_picker/tasks/harvest.xml` 和 `agroctl task status <实际 task_run_id>` 观察闭环
+- [x] 正常场景完成导航、采摘、放置和台账，运行记录完整可读取
+- [x] 空目标正常结束，不进入无限重试
+- [x] 坐标系不匹配与过期观测在依赖该数据的机械臂运动前被拒绝，错误资产在任务派发前被拒绝
+- [x] 用户取消、停止未确认、人工接管分别产生预期终态或待处理状态
+- [x] 结果丢失不重复采摘，断开观察和重启 Agent 不重放操作
+- [x] 修改草稿后当前 task_run_id 的快照校验值不变
+- [x] `python -m pytest tests/test_tomato_closed_loop.py -q` 全部通过
+- [x] `python -m pytest tests/test_registry.py tests/test_execution.py tests/test_control.py tests/test_runtime_api.py tests/test_bt_bridge.py tests/test_tomato_closed_loop.py -q` 全部通过
+- [x] 实际执行 `agroctl system start examples/tomato_picker/system.yaml`，随后通过 `agroctl task start examples/tomato_picker/tasks/harvest.xml` 和 `agroctl task status <实际 task_run_id>` 观察闭环
+
+**实际完成证据**
+
+- 新增 `examples/tomato_picker/` 的能力接入包、系统角色绑定、已验证模拟标定、任务 XML、独立布局占位和任务说明，实际树覆盖导航、有限目标检测、坐标变换、可达性、接近、夹持、撤回、采摘验证、收集位置、释放、放置验证与记账
+- 扩展 C++ ForEachTarget 与 IsTrue，候选界限与冻结策略一致，空列表返回 empty_candidates，不可达返回 skipped，正常区域完成返回 area_completed，自动恢复次数为 0，通信故障与未知结果不进入物理动作重试
+- 实现 `tasks.py` 与 `task_records.py` 的 Agent 任务会话、持久 request_id 去重、只读内容摘要快照、任务事件及单果台账，冻结 XML、系统绑定、策略参数、标定内容与校验值、源码和执行器内容摘要
+- 增加同一管理 API 的 `/tasks`、任务 status/cancel 及统一 CLI task start/status/cancel/list，system start 可核对当前配置路径，CLI 观察断开不结束 Agent 持有的任务，修改草稿不改变运行快照
+- C++ 原子写入实时树与节点报告，Agent 持续关联 node_id、operation_id、反馈、结构化原因及独立停止状态，取消先关闭派发，后追踪停止，正常确认停止后返回待命，人工接管保留新控制代次与模式
+- 采摘成功只在采摘和放置验证完成后提交，Agent 再核对步骤顺序与完成证据，目标记录保存观测、尝试次数及操作 ID，已完成目标从后续模拟候选中过滤并在 Agent 重启后恢复过滤
+- 新上下文只读审查的三个重要问题均通过 RED→GREEN 回归修复，执行器被强制终止会取消并追踪在途动作，Agent 崩溃恢复目标观测、尝试次数与未知结果，标定适用设备必须匹配 XML 实际角色绑定
+- 补充任务启动拒绝和启动期间取消的竞态验证，已接纳取消不会被后续 RUNNING 状态覆盖，校验期间系统或控制改变会再次检查，已持久化的启动拒绝保留 FAILED 与停止确认
+- 依架构模板先导航再检测，过期或错误坐标系观测阻止依赖该数据的机械臂运动，错误标定在任何任务动作前拒绝，改变此前验证入口中的笼统运动表述以明确适用阶段
+- Agent 重启不自动重放旧树或设备操作，UNKNOWN 即使停止已确认也保留待核对并阻止新任务绕过检查，P1 不增加自动恢复或人工解除未知状态的完整工作流
+- 原步骤 1 至 4 的临时环境已经重置，本次重新构建工作区外组件回归并结合仍可用的行为树验证，不将此前的 112 项结果计为本次重新执行结果
+- `PYTHONDONTWRITEBYTECODE=1 /tmp/agro-step5-venv/bin/python -m pytest /tmp/agro-step6-tests/test_registry.py /tmp/agro-step6-tests/test_execution.py /tmp/agro-step6-tests/test_control.py /tmp/agro-step6-tests/test_runtime_api.py /tmp/agro-step5-tests/test_bt_bridge.py /tmp/agro-step6-tests/test_tomato_closed_loop.py -q -p no:cacheprovider` 返回 76 passed，包含 29 项组件回归、22 项行为树桥验证和 25 项番茄闭环与任务边界验证
+- `cmake --build /tmp/agro-step5-build -j2` 成功，`ctest --test-dir /tmp/agro-step5-build --output-on-failure` 返回 7 / 7 passed，目标列表、单果数据、任务请求和策略说明的共享 Schema 导出一致，`pip check` 无依赖冲突，`git diff --check` 通过
+- `PYTHONDONTWRITEBYTECODE=1 /tmp/agro-step5-venv/bin/python /tmp/agro-step6-tests/cli_demo.py` 使用实际 local_process 管理者，通过 `agroctl system start examples/tomato_picker/system.yaml`、`task start examples/tomato_picker/tasks/harvest.xml`、`task status` 和 `system stop` 完成真实 CLI 模拟演示
+- 演示任务 ID 为 `task_4a3e5759e05648dc93d07911a91b23d7`，系统 ID 为 `system_e1978836ac214a9283743dbb59598839`，任务快照摘要为 `1926ddd804337306445faee1d829246a4db483187f8052eb3527ec6779069268`，16 个操作完成，任务 SUCCEEDED、树 SUCCESS、单果 picked、stop_confirmed=true，系统回到 STOPPED
+- 演示完整结果在 `/tmp/agro-step6-cli-demo-final/task-result.json`，概要在 `summary.json`，测试源码、构建与运行状态均在工作区外，仓库只交付源码、共享契约、案例与验收记录，不创建提交或开始 P2
 
 **Codex Prompt**
 
@@ -584,13 +603,13 @@ systemd 操作用测试替身验证，不修改当前主机服务
 
 ## 10 最终验收与交接
 
-- [ ] 六个步骤均具备真实完成证据，P1 完成标准逐项通过
-- [ ] Python、C++ 与 HTTP/JSON 使用相同状态、字段与错误语义
-- [ ] 已明确请求接受、动作完成、取消接受、停止确认与采摘结果的区别
-- [ ] 接入包仅导入不执行代码，已启用适配器身份可追溯
-- [ ] 没有未授权外部仓库修改、用户设备部署或真机动作
-- [ ] 使用契约、组件、构建和模拟证据，没有增加无关硬件实验
-- [ ] 后续 P2 可复用管理 API、节点注册数据、配置快照和运行事件，不需要重写运行核心
+- [x] 六个步骤均具备真实完成证据，P1 完成标准逐项通过
+- [x] Python、C++ 与 HTTP/JSON 使用相同状态、字段与错误语义
+- [x] 已明确请求接受、动作完成、取消接受、停止确认与采摘结果的区别
+- [x] 接入包仅导入不执行代码，已启用适配器身份可追溯
+- [x] 没有未授权外部仓库修改、用户设备部署或真机动作
+- [x] 使用契约、组件、构建和模拟证据，没有增加无关硬件实验
+- [x] 后续 P2 可复用管理 API、节点注册数据、配置快照和运行事件，不需要重写运行核心
 
 当前最需要关注的五类失效由对应步骤验证
 
@@ -615,9 +634,9 @@ systemd 操作用测试替身验证，不修改当前主机服务
 
 ## 12 当前立即执行
 
-步骤 1 至步骤 5 已完成，实际接口、样例与验证证据见第 9 节
+步骤 1 至步骤 6 已完成，P1 完成标准与最终验收通过，实际接口、样例和验证证据见第 9 节
 
-下一步为步骤 6，后续收到执行请求时将总执行 Prompt 与步骤 6 Codex Prompt 一起交给当前仓库中的 Agent，验证脚本遵守工作区外临时执行约束，本次不自动启动后续步骤
+下一阶段为 P2，后续收到执行请求时再依据当前管理 API、任务会话、注册端口与冻结快照细化 GUI 计划，本次不自动开始后续阶段，验证脚本继续遵守工作区外临时执行约束
 
 ## 13 进度统计
 
@@ -628,9 +647,9 @@ systemd 操作用测试替身验证，不修改当前主机服务
 | 3 | 模式、资源门控与操作台账 | [x] |
 | 4 | 运行管理、Agent 与 CLI | [x] |
 | 5 | 实际 BehaviorTree.CPP 执行器 | [x] |
-| 6 | 番茄模拟任务与阶段验收 | [ ] |
-| 最终验收 | P1 完成标准核对 | [ ] |
+| 6 | 番茄模拟任务与阶段验收 | [x] |
+| 最终验收 | P1 完成标准核对 | [x] |
 
-当前已完成 5 / 6，步骤 1 至步骤 5 通过，P1 最终验收仍未完成
+当前已完成 6 / 6，步骤 1 至步骤 6 通过，P1 模拟闭环与最终验收完成
 
 后续阶段只有 P1 验收通过后才依据真实接口细化，每阶段继续遵守 mini-step-plan，不提前把路线图扩成几十个未验证任务

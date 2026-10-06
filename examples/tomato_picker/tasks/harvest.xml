@@ -1,0 +1,42 @@
+<root BTCPP_format="4" main_tree_to_execute="Harvest">
+  <BehaviorTree ID="Harvest">
+    <Sequence>
+      <Capability_navigation_move_to_waypoint node_id="navigate" role="navigation_move_to_waypoint" waypoint="work_area"/>
+      <Capability_perception_detect_targets node_id="detect" role="perception_detect_targets" out_targets="{candidates}"/>
+      <ForEachTarget targets="{candidates}" target="{camera_target}" target_id="{target_id}" max_targets="8">
+        <SubTree ID="PickFruit" _autoremap="true"/>
+      </ForEachTarget>
+    </Sequence>
+  </BehaviorTree>
+  <BehaviorTree ID="PickFruit">
+    <Sequence>
+      <Capability_geometry_transform_pose node_id="transform" role="geometry_transform_pose" target="{camera_target}" param_offset_x="{calibration_offset_x}" out_target="{arm_target}"/>
+      <Capability_manipulation_check_reachability node_id="reachable" role="manipulation_check_reachability" target="{arm_target}" out_reachable="{reachable}"/>
+      <Fallback>
+        <Sequence>
+          <IsTrue value="{reachable}"/>
+          <Capability_geometry_offset_pose node_id="approach_pose" role="geometry_offset_pose" target="{arm_target}" param_dz="{approach_dz}" out_target="{approach_target}"/>
+          <Capability_manipulation_move_to_pose node_id="approach" role="manipulation_move_to_pose" target="{approach_target}"/>
+          <Capability_manipulation_move_to_pose node_id="contact" role="manipulation_move_to_pose" target="{arm_target}"/>
+          <Capability_end_effector_grip node_id="grip" role="end_effector_grip" target_id="{target_id}" param_close="true"/>
+          <Capability_geometry_offset_pose node_id="retract_pose" role="geometry_offset_pose" target="{arm_target}" param_dz="{approach_dz}" out_target="{retract_target}"/>
+          <Capability_manipulation_move_to_pose node_id="retract" role="manipulation_move_to_pose" target="{retract_target}"/>
+          <Capability_perception_verify_pick node_id="verify_pick" role="perception_verify_pick" target_id="{target_id}" out_picked="{picked}"/>
+          <IsTrue value="{picked}"/>
+          <Capability_manipulation_collection_pose node_id="collection_pose" role="manipulation_collection_pose" target_id="{target_id}" out_target="{collection_target}"/>
+          <Capability_manipulation_move_to_pose node_id="place" role="manipulation_move_to_pose" target="{collection_target}"/>
+          <Capability_end_effector_grip node_id="release" role="end_effector_grip" target_id="{target_id}" param_close="false"/>
+          <Capability_perception_verify_place node_id="verify_place" role="perception_verify_place" target_id="{target_id}" out_placed="{placed}"/>
+          <IsTrue value="{placed}"/>
+          <MakePickResult target_id="{target_id}" outcome="picked" result="{fruit_result}"/>
+          <Capability_job_record_pick node_id="record_picked" role="job_record_pick" result="{fruit_result}"/>
+        </Sequence>
+        <Sequence>
+          <Inverter><IsTrue value="{reachable}"/></Inverter>
+          <MakePickResult target_id="{target_id}" outcome="skipped" reason="unreachable" result="{skipped_result}"/>
+          <Capability_job_record_pick node_id="record_skipped" role="job_record_pick" result="{skipped_result}"/>
+        </Sequence>
+      </Fallback>
+    </Sequence>
+  </BehaviorTree>
+</root>

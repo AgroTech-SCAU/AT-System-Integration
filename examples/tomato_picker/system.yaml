@@ -1,0 +1,162 @@
+system_id: tomato_picker
+packages:
+- package.yaml
+backends:
+- instance_id: robot
+  package_id: tomato_simulator
+required_roles:
+- navigation_move_to_waypoint
+- perception_detect_tomato
+- geometry_transform_pose
+- manipulation_move_to_pose
+- end_effector_grip
+- perception_verify_pick
+- perception_detect_targets
+- manipulation_check_reachability
+- geometry_offset_pose
+- manipulation_collection_pose
+- perception_verify_place
+- job_record_pick
+roles:
+  navigation_move_to_waypoint:
+    backend_instance: robot
+    capability_id: navigation.move_to_waypoint
+    input:
+      waypoint:
+        type: string
+    output:
+      arrived:
+        type: boolean
+  perception_detect_tomato:
+    backend_instance: robot
+    capability_id: perception.detect_tomato
+    input: {}
+    output:
+      found:
+        type: boolean
+      target:
+        type: stamped_pose
+        unit: m
+        frame_id: camera
+        clock_domain: monotonic_host
+        max_age_s: 10
+  geometry_transform_pose:
+    backend_instance: robot
+    capability_id: geometry.transform_pose
+    input:
+      target:
+        type: stamped_pose
+        unit: m
+        frame_id: camera
+        clock_domain: monotonic_host
+        max_age_s: 10
+    output:
+      target:
+        type: stamped_pose
+        unit: m
+        frame_id: arm_base
+        clock_domain: monotonic_host
+        max_age_s: 10
+  manipulation_move_to_pose:
+    backend_instance: robot
+    capability_id: manipulation.move_to_pose
+    input:
+      target:
+        type: stamped_pose
+        unit: m
+        frame_id: arm_base
+        clock_domain: monotonic_host
+        max_age_s: 10
+    output:
+      reached:
+        type: boolean
+  end_effector_grip:
+    backend_instance: robot
+    capability_id: end_effector.grip
+    input:
+      target_id:
+        type: string
+    output:
+      gripped:
+        type: boolean
+  perception_verify_pick:
+    backend_instance: robot
+    capability_id: perception.verify_pick
+    input:
+      target_id:
+        type: string
+    output:
+      picked:
+        type: boolean
+  perception_detect_targets:
+    backend_instance: robot
+    capability_id: perception.detect_targets
+    input: {}
+    output:
+      targets:
+        type: target_list
+        unit: m
+        frame_id: camera
+        clock_domain: monotonic_host
+        max_age_s: 10
+  manipulation_check_reachability:
+    backend_instance: robot
+    capability_id: manipulation.check_reachability
+    input:
+      target:
+        type: stamped_pose
+        unit: m
+        frame_id: arm_base
+        clock_domain: monotonic_host
+        max_age_s: 10
+    output:
+      reachable:
+        type: boolean
+  geometry_offset_pose:
+    backend_instance: robot
+    capability_id: geometry.offset_pose
+    input:
+      target:
+        type: stamped_pose
+        unit: m
+        frame_id: arm_base
+        clock_domain: monotonic_host
+        max_age_s: 10
+    output:
+      target:
+        type: stamped_pose
+        unit: m
+        frame_id: arm_base
+        clock_domain: monotonic_host
+        max_age_s: 10
+  manipulation_collection_pose:
+    backend_instance: robot
+    capability_id: manipulation.collection_pose
+    input:
+      target_id:
+        type: string
+    output:
+      target:
+        type: stamped_pose
+        unit: m
+        frame_id: arm_base
+        clock_domain: monotonic_host
+        max_age_s: 10
+  perception_verify_place:
+    backend_instance: robot
+    capability_id: perception.verify_place
+    input:
+      target_id:
+        type: string
+    output:
+      placed:
+        type: boolean
+  job_record_pick:
+    backend_instance: robot
+    capability_id: job.record_pick
+    input:
+      result:
+        type: pick_result
+    output:
+      result:
+        type: pick_result

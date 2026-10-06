@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from .errors import ContractValidationError, field_path, fail
 from .models import ExecutionRequest, Positive
 from .registry import load_package
+from .tasks import TaskManager, TaskStart
 
 
 class ControlTake(BaseModel):
@@ -44,10 +45,11 @@ def session_secret_file(directory):
     return secret
 
 
-def create_app(runtime, *, session_secret, session_identity='local_session'):
+def create_app(runtime, *, session_secret, session_identity='local_session', task_engine=None, endpoint=None):
     if not session_secret or not session_identity:
         fail('$.session', 'invalid_session_secret', '本地会话身份与密钥不能为空')
     jobs = {}
+    tasks = TaskManager(runtime, executable=task_engine, endpoint=endpoint, session_secret=session_secret)
 
     async def authenticate(authorization: Annotated[str | None, Header()] = None):
         if authorization is None or not hmac.compare_digest(authorization.encode('utf-8'),
@@ -109,7 +111,9 @@ def create_app(runtime, *, session_secret, session_identity='local_session'):
         return {'accepted': True, 'action': action, **runtime.status()}
 
     @app.post('/system/start', status_code=202)
-    async def start():
+    async def start(body: PackagePath | None = None):
+        if body and Path(body.path).resolve() != runtime.config_path:
+            fail('$.config_ref', 'snapshot_mismatch', '启动路径与 Agent 当前配置不一致')
         return accepted_job('start')
 
     @app.post('/system/stop', status_code=202)
@@ -154,5 +158,21 @@ def create_app(runtime, *, session_secret, session_identity='local_session'):
     @app.post('/operations/{operation_id}/cancel', status_code=202)
     async def operation_cancel(operation_id: str):
         return runtime.engine.cancel(operation_id).model_dump(mode='json')
+
+    @app.post('/tasks', status_code=202)
+    async def task_start(body: TaskStart, owner: str = Depends(authenticate)):
+        return await tasks.start_task(body, owner)
+
+    @app.get('/tasks')
+    async def task_list():
+        return {'tasks': tasks.list()}
+
+    @app.get('/tasks/{task_run_id}')
+    async def task_status(task_run_id: str):
+        return tasks.status(task_run_id)
+
+    @app.post('/tasks/{task_run_id}/cancel', status_code=202)
+    async def task_cancel(task_run_id: str):
+        return tasks.cancel_task(task_run_id)
 
     return app

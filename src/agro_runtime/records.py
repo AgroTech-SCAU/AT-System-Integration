@@ -133,6 +133,17 @@ class OperationLedger:
         rows = self._execute('SELECT snapshot FROM operations WHERE snapshot IS NOT NULL ORDER BY rowid').fetchall()
         return [parse(OperationSnapshot, json.loads(row['snapshot'])) for row in rows]
 
+    def task_operations(self, task_run_id):
+        rows = self._execute('SELECT intent,snapshot FROM operations WHERE snapshot IS NOT NULL ORDER BY rowid').fetchall()
+        result = []
+        for row in rows:
+            intent = json.loads(row['intent'])
+            if intent['task_run_id'] == task_run_id:
+                result.append(dict(json.loads(row['snapshot']), node_id=intent['node_id'],
+                                   capability_id=intent['capability_id'], input=intent['input'],
+                                   parameters=intent['parameters'], request_id=intent['request_id']))
+        return result
+
     def close(self):
         if not self._closed:
             self._db.close()

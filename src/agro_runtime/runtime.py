@@ -321,12 +321,15 @@ class Runtime:
         self._lifecycle = asyncio.Lock()
         self._monitor_task = None
         self._closed = False
+        self.tasks = None
 
     def snapshot(self):
         return json.loads(self._snapshot)
 
     def _enable_adapter(self, name):
-        options = {} if name in self._loaded_backends else self.adapter_options.get(name, {})
+        options = {} if name in self._loaded_backends else dict(self.adapter_options.get(name, {}))
+        if name not in self._loaded_backends and self.tasks and self.registry.packages[self.bound.backends[name].package_id].adapter_entrypoint == 'agro_mock:create_adapter':
+            options['completed_targets'] = self.tasks.completed_targets(name)
         self.engine.enable_adapter(name, allowed_entrypoints=self.allowed_entrypoints, **options)
         self._loaded_backends.add(name)
 
@@ -404,6 +407,8 @@ class Runtime:
                 'phase': phase, 'checks': checks, 'ready': all(item['ready'] for item in checks.values())}
 
     def _authorize(self, request, resources):
+        if self.tasks:
+            self.tasks.guard(request)
         result = self.readiness(request.backend_instance, request.capability_id, control=request.control)
         for dimension, check in result['checks'].items():
             if not check['ready']:
@@ -486,7 +491,10 @@ class Runtime:
             fail('$.mode', 'invalid_mode', '整机模式未定义')
         if mode == RobotMode.AUTO and self.engine.control.mode == RobotMode.STANDBY:
             return self.engine.control.begin_task(owner, lease_s=lease_s)
-        return self.engine.control.take_control(mode, owner, lease_s=lease_s)
+        token = self.engine.control.take_control(mode, owner, lease_s=lease_s)
+        if self.tasks:
+            self.tasks.takeover()
+        return token
 
     async def submit(self, request):
         if not self.accepting:
@@ -494,6 +502,8 @@ class Runtime:
         return await self.engine.submit(request)
 
     async def stop(self):
+        if self.tasks:
+            await self.tasks.stop_all()
         async with self._lifecycle:
             if self.state == 'STOPPED':
                 unresolved = any(item.stop_state == StopState.UNCONFIRMED for item in self.records.list_operations())
@@ -552,6 +562,8 @@ class Runtime:
         result = await self.stop()
         if result['state'] == 'STOP_UNCONFIRMED':
             fail('$.system', 'stop_unconfirmed', '停止未确认，Agent 必须继续保留控制网关和诊断')
+        if self.tasks:
+            await self.tasks.close()
         await self.engine.aclose()
         self.records.close()
         self._owner.close()

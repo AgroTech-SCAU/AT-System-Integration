@@ -251,6 +251,66 @@ public:
   void onHalted() override { broker_->stop(); }
 };
 std::atomic<uint64_t> Capability::counter_{1};
+class ForEachTarget : public BT::DecoratorNode {
+  TargetList targets_;
+  size_t index_ = 0;
+  bool supplied_ = false;
+
+public:
+  ForEachTarget(const std::string &name, const BT::NodeConfig &config)
+      : BT::DecoratorNode(name, config) {}
+  static BT::PortsList providedPorts() {
+    return {BT::InputPort<TargetList>("targets"),
+            BT::OutputPort<StampedPose>("target"),
+            BT::OutputPort<std::string>("target_id"),
+            BT::InputPort<int>("max_targets", 8, "Finite candidate bound")};
+  }
+  BT::NodeStatus tick() override {
+    if (status() == BT::NodeStatus::IDLE) {
+      targets_ = input<TargetList>(*this, "targets");
+      index_ = 0;
+      supplied_ = false;
+      auto bound = input<int>(*this, "max_targets");
+      require(bound > 0 && bound <= 8 &&
+                  targets_.targets.size() <= static_cast<size_t>(bound),
+              "candidate_limit_exceeded");
+      std::set<std::string> ids;
+      for (const auto &target : targets_.targets) {
+        pose_shape(target.value);
+        require(ids.insert(target.value.at("target_id")).second,
+                "duplicate_target_id");
+      }
+    }
+    if (index_ == targets_.targets.size())
+      return BT::NodeStatus::SUCCESS;
+    setStatus(BT::NodeStatus::RUNNING);
+    if (!supplied_) {
+      require(bool(setOutput("target", targets_.targets[index_])),
+              "output_port_invalid");
+      require(bool(setOutput("target_id", targets_.targets[index_]
+                                              .value.at("target_id")
+                                              .get<std::string>())),
+              "output_port_invalid");
+      supplied_ = true;
+    }
+    auto state = child_node_->executeTick();
+    if (state == BT::NodeStatus::SUCCESS) {
+      resetChild();
+      index_++;
+      supplied_ = false;
+      return index_ == targets_.targets.size() ? BT::NodeStatus::SUCCESS
+                                               : BT::NodeStatus::RUNNING;
+    }
+    return state;
+  }
+  void halt() override {
+    targets_.targets.clear();
+    index_ = 0;
+    supplied_ = false;
+    BT::DecoratorNode::halt();
+  }
+};
+
 } // namespace
 void validate_value(const Json &spec, const Json &value) {
   std::string type = spec.at("type");
@@ -361,6 +421,14 @@ Executor::Executor(Json registry, std::shared_ptr<Broker> broker, Json control,
                                                 shared, token, task_name);
           });
     }
+  factory_.registerNodeType<ForEachTarget>("ForEachTarget");
+  factory_.registerSimpleCondition("IsTrue",
+                                   [](BT::TreeNode &node) {
+                                     return input<bool>(node, "value")
+                                                ? BT::NodeStatus::SUCCESS
+                                                : BT::NodeStatus::FAILURE;
+                                   },
+                                   {BT::InputPort<bool>("value")});
   factory_.registerSimpleCondition("HasTarget",
                                    [](BT::TreeNode &node) {
                                      auto pose =
@@ -535,12 +603,16 @@ void Executor::load_xml(const std::string &xml, const Json &initial) {
             else
               specs.emplace(entry.get(), item.value());
             if (std::string(kind) != "output") {
-              auto value = static_cast<const BT::TreeNode &>(*node)
-                               .config()
-                               .blackboard->getAnyLocked(std::string(
-                                   BT::TreeNode::stripBlackboardPointer(
-                                       mapped->second)));
-              if (value && !value->empty())
+              bool populated = false;
+              {
+                auto value = static_cast<const BT::TreeNode &>(*node)
+                                 .config()
+                                 .blackboard->getAnyLocked(std::string(
+                                     BT::TreeNode::stripBlackboardPointer(
+                                         mapped->second)));
+                populated = value && !value->empty();
+              }
+              if (populated)
                 read_port(*node, key, item.value());
             }
           }

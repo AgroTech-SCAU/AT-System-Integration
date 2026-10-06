@@ -1,5 +1,50 @@
 {
   "$defs": {
+    "AssetReference": {
+      "additionalProperties": false,
+      "properties": {
+        "extensions": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Extensions",
+          "type": "object"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "device_id": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Device Id",
+          "type": "string"
+        },
+        "source_frame": {
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
+          "title": "Source Frame",
+          "type": "string"
+        },
+        "target_frame": {
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
+          "title": "Target Frame",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "device_id",
+        "source_frame",
+        "target_frame"
+      ],
+      "title": "AssetReference",
+      "type": "object"
+    },
     "BackendInstance": {
       "additionalProperties": false,
       "properties": {
@@ -1067,6 +1112,117 @@
       },
       "title": "TargetList",
       "type": "array"
+    },
+    "TaskManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "extensions": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Extensions",
+          "type": "object"
+        },
+        "kind": {
+          "pattern": "^tomato_picker$",
+          "title": "Kind",
+          "type": "string"
+        },
+        "assets": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/AssetReference"
+            }
+          },
+          "title": "Assets",
+          "type": "object"
+        },
+        "parameters": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/ParameterDescriptor"
+            }
+          },
+          "title": "Parameters",
+          "type": "object"
+        },
+        "max_targets": {
+          "maximum": 8,
+          "minimum": 1,
+          "title": "Max Targets",
+          "type": "integer"
+        },
+        "max_recovery_attempts": {
+          "maximum": 0,
+          "minimum": 0,
+          "title": "Max Recovery Attempts",
+          "type": "integer"
+        },
+        "timeout_ms": {
+          "maximum": 60000,
+          "minimum": 1000,
+          "title": "Timeout Ms",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "assets",
+        "max_targets",
+        "max_recovery_attempts",
+        "timeout_ms"
+      ],
+      "title": "TaskManifest",
+      "type": "object"
+    },
+    "TaskStart": {
+      "additionalProperties": false,
+      "properties": {
+        "extensions": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Extensions",
+          "type": "object"
+        },
+        "task_ref": {
+          "minLength": 1,
+          "title": "Task Ref",
+          "type": "string"
+        },
+        "config_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Config Ref"
+        },
+        "request_id": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "parameters": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          },
+          "title": "Parameters",
+          "type": "object"
+        }
+      },
+      "required": [
+        "task_ref",
+        "request_id"
+      ],
+      "title": "TaskStart",
+      "type": "object"
     },
     "TypeDescriptor": {
       "additionalProperties": false,

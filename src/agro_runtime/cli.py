@@ -4,6 +4,7 @@ import asyncio
 import json
 from pathlib import Path
 from urllib.parse import quote, urlparse
+from uuid import uuid4
 
 from .errors import ContractValidationError, fail
 from .registry import load_package, read_document
@@ -22,7 +23,9 @@ def _parser():
     systems = groups.add_parser('system').add_subparsers(dest='command', required=True)
     systems.add_parser('validate').add_argument('path', type=Path)
     for command in ('start', 'status', 'stop', 'snapshot'):
-        systems.add_parser(command)
+        system_command = systems.add_parser(command)
+        if command=='start':
+            system_command.add_argument('path', nargs='?', type=Path)
     operations = groups.add_parser('operation').add_subparsers(dest='command', required=True)
     for command in ('status', 'cancel'):
         operations.add_parser(command).add_argument('identity')
@@ -33,12 +36,22 @@ def _parser():
     take = controls.add_parser('take')
     take.add_argument('mode', choices=['AUTO', 'MANUAL', 'CALIBRATION'])
     take.add_argument('--lease-s', type=float, default=30.0)
+    tasks = groups.add_parser('task').add_subparsers(dest='command', required=True)
+    task_start = tasks.add_parser('start')
+    task_start.add_argument('path', type=Path)
+    task_start.add_argument('--config', type=Path)
+    task_start.add_argument('--request-id', default=None)
+    task_start.add_argument('--parameters', type=Path)
+    for command in ('status', 'cancel'):
+        tasks.add_parser(command).add_argument('identity')
+    tasks.add_parser('list')
     agents = groups.add_parser('agent').add_subparsers(dest='command', required=True)
     serve = agents.add_parser('serve')
     serve.add_argument('--config', required=True, type=Path)
     serve.add_argument('--state-dir', required=True, type=Path)
     serve.add_argument('--host', choices=['127.0.0.1', '::1', 'localhost'], default='127.0.0.1')
     serve.add_argument('--port', type=int, default=8765)
+    serve.add_argument('--task-engine', type=Path)
     return parser
 
 
@@ -59,11 +72,25 @@ def _remote(args):
         path = '/system/' + args.command
         if args.command in ('start', 'stop'):
             method = 'POST'
+        if args.command=='start' and args.path:
+            body={'path':str(args.path.resolve())}
     elif args.group == 'package':
         path = '/packages'
         if args.command != 'list':
             path += '/' + quote(args.identity, safe='') + '/' + args.command
             method = 'POST'
+    elif args.group == 'task':
+        path = '/tasks'
+        if args.command == 'start':
+            method, body = 'POST', {'task_ref':str(args.path.resolve()),
+                'request_id':args.request_id or 'request_'+uuid4().hex,
+                'parameters':read_document(args.parameters) if args.parameters else {}}
+            if args.config:
+                body['config_ref']=str(args.config.resolve())
+        elif args.command != 'list':
+            path += '/' + quote(args.identity, safe='')
+            if args.command=='cancel':
+                method,path='POST',path+'/cancel'
     elif args.group == 'control':
         path = '/control/' + args.command
         if args.command == 'take':
@@ -92,7 +119,9 @@ def _serve(args):
     from .runtime import Runtime
 
     runtime = Runtime(args.config, args.state_dir)
-    app = create_app(runtime, session_secret=session_secret_file(args.state_dir))
+    endpoint=f'http://[{args.host}]:{args.port}' if args.host=='::1' else f'http://{args.host}:{args.port}'
+    app = create_app(runtime, session_secret=session_secret_file(args.state_dir),
+                     task_engine=args.task_engine, endpoint=endpoint)
 
     class ManagedServer(uvicorn.Server):
         """退出信号先完成停止，未确认时继续服务诊断"""

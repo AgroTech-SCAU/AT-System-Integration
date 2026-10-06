@@ -1,6 +1,6 @@
 # 接入与执行契约
 
-权威模型位于 `src/agro_runtime/models.py`，`schema.json` 的 `$defs` 包含八个共享入口模型与依赖类型，协议兼容性字段为 `agro.capabilities.v1`
+权威模型位于 `src/agro_runtime/models.py`，`schema.json` 的 `$defs` 包含十个共享入口模型与依赖类型，协议兼容性字段为 `agro.capabilities.v1`
 
 JSON Schema 描述字段结构，单位要求、范围关系、默认值合法性、角色兼容性与运行数据新鲜度还需要 Python 校验入口执行语义校验，后续跨语言接入使用这里的相同样例
 
@@ -55,3 +55,5 @@ SUCCEEDED 必须有结果，FAILED 与 UNKNOWN 必须有原因，UNKNOWN 不允�
 目标列表 `examples/targets.json` 是 StampedPose 数组，每项沿用位姿的单位、坐标系、时间域和新鲜度校验，`examples/pick.result.json` 表示单果未知结果，failed 与 unknown 必须携带 reason
 
 行为树离线注册样例为 `examples/bt.registry.json`，实际执行器说明见 `task_engine/README.md`，列表级 choices 在整个列表上比较，不传给每个位姿
+
+任务请求 TaskStart 与说明 TaskManifest 的模型位于 `src/agro_runtime/tasks.py`，共享 Schema 同时导出任务参数、标定引用和有限候选策略，Agent 冻结 XML、系统、资产和软件来源，实际任务示例见 `examples/tomato_picker/README.md`

@@ -9,7 +9,9 @@ from agro_runtime.models import (OperationError, OperationFeedback, OperationRes
 
 CAPABILITIES = {'navigation.move_to_waypoint', 'perception.detect_tomato',
                 'geometry.transform_pose', 'manipulation.move_to_pose',
-                'end_effector.grip', 'perception.verify_pick'}
+                'end_effector.grip', 'perception.verify_pick', 'perception.detect_targets',
+                'manipulation.check_reachability', 'geometry.offset_pose',
+                'manipulation.collection_pose', 'perception.verify_place', 'job.record_pick'}
 
 
 @dataclass(frozen=True)
@@ -22,15 +24,25 @@ class FaultPlan:
     lose_result: bool = False
     cancel_unconfirmed: bool = False
     reject_request: bool = False
+    target_count: int = 1
+    stale_observation: bool = False
+    wrong_frame: bool = False
+    unreachable: bool = False
+    verify_pick_false: bool = False
+    verify_place_false: bool = False
 
     def __post_init__(self):
         for name in ('startup_delay_s', 'duration_s', 'cancel_delay_s'):
             value = getattr(self, name)
             if type(value) not in (float, int) or not math.isfinite(value) or value < 0:
                 fail(f'$.faults.{name}', 'invalid_fault', '故障延迟必须是有限非负数')
-        for name in ('fail_execution', 'stale_feedback', 'lose_result', 'cancel_unconfirmed', 'reject_request'):
+        for name in ('fail_execution', 'stale_feedback', 'lose_result', 'cancel_unconfirmed', 'reject_request', 'stale_observation', 'wrong_frame',
+                     'unreachable', 'verify_pick_false', 'verify_place_false'):
             if type(getattr(self, name)) is not bool:
                 fail(f'$.faults.{name}', 'invalid_fault', '故障开关必须为布尔值')
+
+        if type(self.target_count) is not int or not 0 <= self.target_count <= 8:
+            fail('$.faults.target_count', 'invalid_fault', '候选目标数量必须为 0 至 8 的整数')
 
 
 @dataclass
@@ -39,6 +51,8 @@ class MockWorld:
     arm_pose: dict | None = None
     gripped_target: str | None = None
     effects: list[dict] = field(default_factory=list)
+    placed_targets: set[str] = field(default_factory=set)
+    recorded_targets: dict = field(default_factory=dict)
 
 
 class MockOperation:
@@ -46,7 +60,7 @@ class MockOperation:
         self.adapter = adapter
         self.request = request
         self.operation_id = operation_id
-        self.faults = adapter.faults
+        self.faults = adapter.faults_by_capability.get(request.capability_id, adapter.faults)
         self._cancel = asyncio.Event()
         self._stopped = asyncio.Event()
         self._stop_task = None
@@ -111,6 +125,32 @@ class MockOperation:
         self.adapter.gateway.validate(request, self.operation_id)
         world = self.adapter.world
         clock = self.adapter.clock
+        if cap == 'perception.detect_targets':
+            return {'targets': [{'target_id': f'tomato_{index+1}',
+                    'frame_id': 'wrong_frame' if self.faults.wrong_frame else 'camera',
+                    'timestamp': max(0, clock.now()-20) if self.faults.stale_observation else clock.now(),
+                    'clock_domain': clock.clock_domain, 'position': [0.3, 0.1, 0.2],
+                    'position_unit': 'm', 'orientation': [0, 0, 0, 1]}
+                    for index in range(self.faults.target_count) if f'tomato_{index+1}' not in world.placed_targets]}
+        if cap == 'manipulation.check_reachability':
+            return {'reachable': not self.faults.unreachable and all(abs(v)<=1 for v in request.input['target']['position'])}
+        if cap == 'geometry.offset_pose':
+            pose = dict(request.input['target'])
+            pose['position'] = list(pose['position'])
+            pose['position'][2] += request.parameters['dz']
+            return {'target': pose}
+        if cap == 'manipulation.collection_pose':
+            return {'target': {'target_id': request.input['target_id'], 'frame_id': 'arm_base',
+                    'timestamp': clock.now(), 'clock_domain': clock.clock_domain,
+                    'position': [0.1, -0.2, 0.3], 'position_unit': 'm', 'orientation': [0, 0, 0, 1]}}
+        if cap == 'perception.verify_place':
+            return {'placed': not self.faults.verify_place_false and request.input['target_id'] in world.placed_targets}
+        if cap == 'job.record_pick':
+            result = request.input['result']
+            if result['outcome']=='picked' and result['target_id'] not in world.placed_targets:
+                fail('$.input.result', 'placement_not_verified', '正常放置前不能记录采摘成功')
+            world.recorded_targets[result['target_id']] = dict(result)
+            return {'result': dict(result)}
         if cap == 'navigation.move_to_waypoint':
             world.waypoint = request.input['waypoint']
             output = {'arrived': True}
@@ -129,10 +169,12 @@ class MockOperation:
             output = {'reached': True}
         elif cap == 'end_effector.grip':
             closed = request.parameters['close']
+            if not closed and world.gripped_target == request.input['target_id'] and world.arm_pose and world.arm_pose['position'] == [0.1, -0.2, 0.3]:
+                world.placed_targets.add(request.input['target_id'])
             world.gripped_target = request.input['target_id'] if closed else None
             output = {'gripped': closed}
         else:
-            return {'picked': world.gripped_target == request.input['target_id']}
+            return {'picked': not self.faults.verify_pick_false and world.gripped_target == request.input['target_id']}
         world.effects.append({'operation_id': self.operation_id, 'request_id': request.request_id,
                               'capability_id': cap, 'target_id': request.input.get('target_id')})
         return output
@@ -162,13 +204,14 @@ class MockOperation:
 
 
 class MockAdapter:
-    def __init__(self, *, backend_instance, clock, gateway, before_effect=None, faults=None):
+    def __init__(self, *, backend_instance, clock, gateway, before_effect=None, faults=None, faults_by_capability=None, completed_targets=None):
         self.backend_instance = backend_instance
         self.clock = clock
         self.before_effect = before_effect
         self.gateway = gateway
         self.faults = faults or FaultPlan()
-        self.world = MockWorld()
+        self.faults_by_capability = faults_by_capability or {}
+        self.world = MockWorld(placed_targets=set(completed_targets or ()))
         self.accepted_requests = 0
         self.cancel_requests = 0
         self._operations = []
@@ -187,6 +230,6 @@ class MockAdapter:
         await asyncio.gather(*(operation.aclose() for operation in self._operations))
 
 
-def create_adapter(*, backend_instance, clock, gateway, before_effect=None, faults=None):
+def create_adapter(*, backend_instance, clock, gateway, before_effect=None, faults=None, faults_by_capability=None, completed_targets=None):
     return MockAdapter(backend_instance=backend_instance, clock=clock, gateway=gateway,
-                       before_effect=before_effect, faults=faults)
+                       before_effect=before_effect, faults=faults, faults_by_capability=faults_by_capability, completed_targets=completed_targets)
