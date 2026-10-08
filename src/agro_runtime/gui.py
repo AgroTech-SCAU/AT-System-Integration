@@ -13,6 +13,8 @@ import httpx
 
 from .api import gui_directory
 from .errors import fail
+from .configuration import active_config
+import json
 
 
 def _endpoint(value):
@@ -57,8 +59,8 @@ def _identity(client, session_file, expected):
 
 def open_gui(args):
     endpoint = _endpoint(args.endpoint)
-    config = args.config.resolve()
     state = args.state_dir.resolve()
+    config = active_config(args.config, state)
     session_file = (args.session_file or state / 'session.token').resolve()
     directory = gui_directory(args.ui_dir)
     if not (directory / 'index.html').is_file():
@@ -132,7 +134,9 @@ def open_gui(args):
         environment.pop('ELECTRON_RUN_AS_NODE', None)
         with (state / 'desktop.log').open('ab') as log:
             desktop_process = subprocess.Popen(
-                [str(electron), str(entry), '--url', url, '--data-dir', str(state / 'desktop')],
+                [str(electron), str(entry), '--url', url, '--data-dir', str(state / 'desktop'),
+                 '--session-file', str(session_file), '--identity', json.dumps({key:identity[key] for key in
+                     ('application','source_root','state_directory','pid')})],
                 stdin=subprocess.DEVNULL, stdout=log, stderr=log, env=environment,
                 start_new_session=True)
         # 第二次打开正常退出并聚焦已有窗口，非零退出保留桌面诊断
@@ -145,4 +149,4 @@ def open_gui(args):
             'desktop_opened': desktop_process is not None,
             'desktop_pid': desktop_process.pid if desktop_process else None,
             'session_file': str(session_file),
-            'connection': '在应用窗口选择本机会话文件或输入凭据，刷新后需重新连接'}
+            'connection': '桌面自动连接已核对的本机管理后台，连接失败时可手动核对会话'}

@@ -45,6 +45,34 @@ def _parser():
     for command in ('status', 'cancel'):
         tasks.add_parser(command).add_argument('identity')
     tasks.add_parser('list')
+    configs = groups.add_parser('config').add_subparsers(dest='command', required=True)
+    configs.add_parser('status')
+    configs.add_parser('validate').add_argument('path', type=Path)
+    configs.add_parser('diff').add_argument('identity')
+    config_apply = configs.add_parser('apply')
+    config_apply.add_argument('identity')
+    config_apply.add_argument('--revision', type=int, required=True)
+    config_apply.add_argument('--base-snapshot', required=True)
+    config_apply.add_argument('--request-id', required=True)
+    for name in ('catalog', 'asset'):
+        commands = groups.add_parser(name).add_subparsers(dest='command', required=True)
+        commands.add_parser('list')
+        commands.add_parser('import').add_argument('path', type=Path)
+        if name == 'catalog':
+            commands.add_parser('delete').add_argument('identity')
+    plans = groups.add_parser('plan').add_subparsers(dest='command', required=True)
+    plans.add_parser('list')
+    plans.add_parser('preflight').add_argument('identity')
+    plan_create = plans.add_parser('create')
+    plan_create.add_argument('--parameters', type=Path)
+    plan_create.add_argument('--asset')
+    templates = groups.add_parser('template').add_subparsers(dest='command', required=True)
+    templates.add_parser('list')
+    reports = groups.add_parser('report')
+    reports.add_argument('identity')
+    reports.set_defaults(command='report')
+    management = groups.add_parser('management').add_subparsers(dest='command', required=True)
+    management.add_parser('status').add_argument('identity')
     agents = groups.add_parser('agent').add_subparsers(dest='command', required=True)
     serve = agents.add_parser('serve')
     serve.add_argument('--config', required=True, type=Path)
@@ -78,7 +106,35 @@ def _remote(args):
     if not secret:
         fail('$.session_file', 'local_session_required', '本地会话文件为空')
     method, body = 'GET', None
-    if args.group == 'system':
+    if args.group == 'config':
+        if args.command == 'validate':
+            path, method, body = '/config/validate', 'POST', read_document(args.path)
+        elif args.command == 'diff':
+            path = '/config/drafts/' + quote(args.identity, safe='') + '/diff'
+        elif args.command == 'apply':
+            path, method, body = '/config/apply', 'POST', {'draft_id': args.identity,
+                'revision': args.revision, 'base_snapshot_id': args.base_snapshot, 'request_id': args.request_id}
+        else:
+            path = '/config/status'
+    elif args.group in ('catalog', 'asset'):
+        path = '/catalog' if args.group == 'catalog' else '/assets'
+        if args.command == 'import':
+            method, body = 'POST', {'filename': args.path.name, 'content': args.path.read_text(encoding='utf-8')}
+        elif args.command == 'delete':
+            method, path = 'DELETE', path + '/' + quote(args.identity, safe='')
+    elif args.group == 'plan':
+        path = '/plans'
+        if args.command == 'create':
+            method, body = 'POST', {'parameters': read_document(args.parameters) if args.parameters else {}, 'asset_id': args.asset}
+        elif args.command == 'preflight':
+            path += '/' + quote(args.identity, safe='') + '/preflight'
+    elif args.group == 'template':
+        path = '/templates'
+    elif args.group == 'report':
+        path = '/tasks/' + quote(args.identity, safe='') + '/report'
+    elif args.group == 'management':
+        path = '/management/jobs/' + quote(args.identity, safe='')
+    elif args.group == 'system':
         path = '/system/' + args.command
         if args.command in ('start', 'stop'):
             method = 'POST'
@@ -128,7 +184,8 @@ def _serve(args):
     from .api import create_app, session_secret_file
     from .runtime import Runtime
 
-    runtime = Runtime(args.config, args.state_dir)
+    from .configuration import active_config
+    runtime = Runtime(active_config(args.config, args.state_dir), args.state_dir)
     endpoint=f'http://[{args.host}]:{args.port}' if args.host=='::1' else f'http://{args.host}:{args.port}'
     app = create_app(runtime, session_secret=session_secret_file(args.state_dir),
                      task_engine=args.task_engine, endpoint=endpoint, ui_directory=args.ui_dir)
@@ -141,7 +198,7 @@ def _serve(args):
                 self.shutdown_task = asyncio.create_task(self.stop_before_exit())
 
         async def stop_before_exit(self):
-            result = await runtime.stop()
+            result = await app.state.runtime.stop()
             if result['state'] == 'STOPPED':
                 self.should_exit = True
             else:
@@ -162,7 +219,7 @@ def main(argv=None):
             return 0
         if args.group == 'agent':
             return _serve(args)
-        if args.command == 'validate':
+        if args.command == 'validate' and args.group in ('package', 'system'):
             if args.group == 'package':
                 package = load_package(args.path)
                 result = {'valid': True, 'package_id': package.package_id, 'enabled': False,

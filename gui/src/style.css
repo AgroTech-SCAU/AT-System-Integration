@@ -43,3 +43,7 @@ html,body,#root{height:100%;margin:0}body{min-width:320px}button,input,select{ma
 /* Electron 标题栏拖动与原生窗口操作 */
 .titlebar{-webkit-app-region:drag}.title-actions,.titlebar button{-webkit-app-region:no-drag}.window-controls{display:flex;height:100%;border-left:1px solid var(--line)}.window-controls svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.2}.window-close:hover{background:#c42b1c;color:#fff}
 body:has(.window-controls) .pending-backdrop{top:44px}body:has(.window-controls) .pending-dialog{max-height:calc(100dvh - 76px)}
+
+.parameter-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px}.backend-editor,.role-editor{border-top:1px solid var(--line);padding:18px 0}.backend-editor h3{margin-top:0}.role-editor{display:grid;grid-template-columns:minmax(200px,1fr) minmax(100px,1fr) auto;gap:16px;align-items:end}.page>.panel{margin-bottom:20px}.page>.workspace-grid{margin-bottom:20px}textarea{width:100%;padding:10px;background:var(--input);color:var(--text);border:1px solid var(--line);border-radius:6px;resize:vertical}pre{max-width:100%;max-height:480px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:12px;background:var(--bg);border-radius:6px;font-size:11px;user-select:text}summary{cursor:pointer;padding:8px 0}code{overflow-wrap:anywhere}.selectable{user-select:text}.parameter-grid small{font-size:11px}@media(max-width:840px){.role-editor{display:block}.role-editor>.field{margin-bottom:10px}}
+
+.card-body p{overflow-wrap:anywhere}

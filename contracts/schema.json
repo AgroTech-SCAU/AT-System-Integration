@@ -219,6 +219,39 @@
       "title": "CapabilityDescriptor",
       "type": "object"
     },
+    "ConfigurationApply": {
+      "additionalProperties": false,
+      "properties": {
+        "draft_id": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Draft Id",
+          "type": "string"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "base_snapshot_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Base Snapshot Id",
+          "type": "string"
+        },
+        "request_id": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Request Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "draft_id",
+        "revision",
+        "base_snapshot_id",
+        "request_id"
+      ],
+      "title": "ConfigurationApply",
+      "type": "object"
+    },
     "ControlToken": {
       "additionalProperties": false,
       "properties": {
@@ -257,6 +290,81 @@
         "clock_domain"
       ],
       "title": "ControlToken",
+      "type": "object"
+    },
+    "DescriptionUpload": {
+      "additionalProperties": false,
+      "properties": {
+        "filename": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Filename",
+          "type": "string"
+        },
+        "content": {
+          "maxLength": 2097152,
+          "title": "Content",
+          "type": "string"
+        }
+      },
+      "required": [
+        "filename",
+        "content"
+      ],
+      "title": "DescriptionUpload",
+      "type": "object"
+    },
+    "DraftCreate": {
+      "additionalProperties": false,
+      "properties": {
+        "base_snapshot_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Base Snapshot Id",
+          "type": "string"
+        },
+        "content": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content"
+        }
+      },
+      "required": [
+        "base_snapshot_id"
+      ],
+      "title": "DraftCreate",
+      "type": "object"
+    },
+    "DraftSave": {
+      "additionalProperties": false,
+      "properties": {
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "content": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Content",
+          "type": "object"
+        }
+      },
+      "required": [
+        "revision",
+        "content"
+      ],
+      "title": "DraftSave",
       "type": "object"
     },
     "ExecutionRequest": {
@@ -329,6 +437,38 @@
       "type": "object"
     },
     "JsonValue": {},
+    "LifecycleIntent": {
+      "additionalProperties": false,
+      "properties": {
+        "request_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Request Id"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        }
+      },
+      "title": "LifecycleIntent",
+      "type": "object"
+    },
     "OperationError": {
       "additionalProperties": false,
       "properties": {
@@ -799,6 +939,41 @@
       "title": "PickResult",
       "type": "object"
     },
+    "PlanCreate": {
+      "additionalProperties": false,
+      "properties": {
+        "template_id": {
+          "default": "tomato_picker",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Template Id",
+          "type": "string"
+        },
+        "parameters": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          },
+          "title": "Parameters",
+          "type": "object"
+        },
+        "asset_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Asset Id"
+        }
+      },
+      "title": "PlanCreate",
+      "type": "object"
+    },
     "ResourceRequirement": {
       "additionalProperties": false,
       "properties": {
@@ -1112,6 +1287,21 @@
       },
       "title": "TargetList",
       "type": "array"
+    },
+    "TaskIntent": {
+      "additionalProperties": false,
+      "properties": {
+        "request_id": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Request Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id"
+      ],
+      "title": "TaskIntent",
+      "type": "object"
     },
     "TaskManifest": {
       "additionalProperties": false,

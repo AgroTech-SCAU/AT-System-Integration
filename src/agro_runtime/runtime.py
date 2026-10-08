@@ -254,8 +254,12 @@ class SystemdManager:
 class Runtime:
     def __init__(self, config_path, state_directory, *, managers=None, readiness_probe=None,
                  native_validators=None, native_appliers=None, allowed_entrypoints=None, adapter_options=None,
-                 cancel_timeout_s=2.0):
+                 cancel_timeout_s=2.0, owner_lock=None):
         self.config_path = Path(config_path).resolve()
+        self.replacement_options = dict(managers=managers, readiness_probe=readiness_probe,
+            native_validators=native_validators, native_appliers=native_appliers,
+            allowed_entrypoints=allowed_entrypoints, adapter_options=adapter_options,
+            cancel_timeout_s=cancel_timeout_s)
         self.bound, self.registry = load_system(self.config_path)
         self.modules, self.order = runtime_plan(self.bound, self.registry)
         native = {}
@@ -278,7 +282,7 @@ class Runtime:
             native[name] = {'path': str(path), 'content': content}
         self.state_directory = Path(state_directory)
         self.state_directory.mkdir(parents=True, exist_ok=True)
-        self._owner = (self.state_directory / 'agent.lock').open('a')
+        self._owner = owner_lock or (self.state_directory / 'agent.lock').open('a')
         try:
             fcntl.flock(self._owner.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
@@ -298,7 +302,8 @@ class Runtime:
                 identity, _ = native_store.save(reference['content'])
                 self.native_files[name] = native_store.directory / f'{identity}.json'
         except BaseException:
-            self._owner.close()
+            if owner_lock is None:
+                self._owner.close()
             raise
         local = LocalProcessManager(state_directory=self.state_directory / 'processes',
                                     config_identity=self.snapshot_id)
@@ -316,6 +321,7 @@ class Runtime:
         self.state = 'RECOVERING' if uncertain or previous.get('state') not in (None, 'STOPPED') else 'STOPPED'
         self.system_run_id = previous.get('system_run_id')
         self.accepting = False
+        self.stop_requested = False
         self.module_status = {name: {'state': 'STOPPED', 'pid': None, 'process': False,
                                     'interface': False, 'reason': None} for name in self.modules}
         self._lifecycle = asyncio.Lock()
@@ -428,6 +434,8 @@ class Runtime:
                                       'snapshot_id': self.snapshot_id, 'state': self.state}))
             try:
                 for name in self.order:
+                    if self.stop_requested:
+                        fail('$.system','stop_requested','启动期间已接受停止请求')
                     self._apply_native(name)
                     descriptor = self.modules[name]
                     manager = self.managers[descriptor.manager]
@@ -436,6 +444,8 @@ class Runtime:
                     deadline = asyncio.get_running_loop().time() + descriptor.start_timeout_s
                     await asyncio.wait_for(manager.start(name, descriptor), descriptor.start_timeout_s)
                     while True:
+                        if self.stop_requested:
+                            fail('$.system','stop_requested','启动期间已接受停止请求')
                         remaining = deadline - asyncio.get_running_loop().time()
                         if remaining <= 0:
                             raise asyncio.TimeoutError()
@@ -453,7 +463,7 @@ class Runtime:
                                 break
                         await asyncio.sleep(min(.02, max(remaining, 0)))
                 self.state = 'READY'
-                self.accepting = True
+                self.accepting = not self.stop_requested
                 self._monitor_task = asyncio.create_task(self._monitor())
             except (OSError, ContractValidationError, asyncio.TimeoutError) as exc:
                 reason = (exc.issues[0].model_dump() if isinstance(exc, ContractValidationError) else
@@ -502,6 +512,8 @@ class Runtime:
         return await self.engine.submit(request)
 
     async def stop(self):
+        if self.state == 'BLOCKED':
+            return self.status()
         if self.tasks:
             await self.tasks.stop_all()
         async with self._lifecycle:
@@ -556,7 +568,14 @@ class Runtime:
                 self.engine.control.clear_fault()
             return self.status()
 
-    async def aclose(self):
+    async def aclose(self, *, release_owner=True):
+        if self.state == 'BLOCKED':
+            if self.tasks:
+                self.tasks.store.close()
+            self.records.close()
+            if release_owner:
+                self._owner.close()
+            return
         if self._closed:
             return
         result = await self.stop()
@@ -566,5 +585,6 @@ class Runtime:
             await self.tasks.close()
         await self.engine.aclose()
         self.records.close()
-        self._owner.close()
+        if release_owner:
+            self._owner.close()
         self._closed = True

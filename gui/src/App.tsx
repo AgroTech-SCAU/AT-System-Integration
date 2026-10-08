@@ -1,9 +1,13 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { ApiClient, ApiError } from './api'
-import { Field, Panel, PendingDialog, Segmented, StatusCard } from './components/Foundation'
+import { Field, Panel, PendingDialog, Segmented } from './components/Foundation'
 import { Icon } from './components/Icon'
 import { messages } from './i18n'
 import type { Observation, Settings, Workspace } from './types'
+import SystemBuilder from './pages/SystemBuilder'
+import TaskSetup from './pages/TaskSetup'
+import RuntimePage from './pages/Runtime'
+import Records from './pages/Records'
 
 const SETTINGS_KEY = 'agro.gui.appearance'
 function loadSettings(): Settings {
@@ -15,7 +19,7 @@ function loadSettings(): Settings {
 }
 function currentWorkspace(): Workspace {
   const path = location.pathname.split('/')[2]
-  return path === 'templates' || path === 'runtime' || path === 'settings' ? path : 'system'
+  return path === 'templates' || path === 'runtime' || path === 'settings' || path === 'records' ? path : 'system'
 }
 
 export default function App() {
@@ -52,6 +56,21 @@ export default function App() {
     return () => window.removeEventListener('popstate', back)
   }, [])
   useEffect(() => () => { active.current?.disconnect() }, [])
+  useEffect(() => {
+    let cancelled = false
+    if (window.agroDesktop) {
+      setBusy(true)
+      window.agroDesktop.connectLocal().then(async token => {
+        if (cancelled) return
+        const target = new ApiClient(token)
+        active.current = target
+        setClient(target)
+        await observe(target)
+      }).catch(() => { if (!cancelled) setError('failed') })
+        .finally(() => { if (!cancelled) setBusy(false) })
+    }
+    return () => { cancelled = true }
+  }, [])
 
   async function observe(target: ApiClient) {
     const revision = ++observationRevision.current
@@ -157,6 +176,7 @@ export default function App() {
           </nav>
           <p className="nav-caption">{text.application}</p>
           <button className="nav-item" aria-label={text.settings} aria-current={workspace === 'settings' ? 'page' : undefined} onClick={() => navigate('settings')}><Icon name="settings" /><span>{text.settings}</span></button>
+          <button className="nav-item" aria-label={text.records} aria-current={workspace === 'records' ? 'page' : undefined} onClick={() => navigate('records')}><Icon name="runtime" /><span>{text.records}</span></button>
           <div className="sidebar-spacer" />
           <div className="runtime-card"><span className={`dot ${observation ? 'live' : ''}`} />{observation ? text.connected : text.offline}<small>{location.origin}</small><small>{observation?.system.system_id || text.waiting}</small></div>
         </aside>
@@ -199,25 +219,11 @@ export default function App() {
               }} /></label><button type="submit" className="primary" disabled={busy}>{text.connect}</button></div>
             </form>
           </Panel><Panel title={text.connectionSummary} subtitle={text.localOnly} icon="runtime"><p className="summary-caption">AGENT</p><p className="summary-name">{text.waiting}</p><dl className="kv"><dt>{text.agent}</dt><dd><code>{location.origin}</code></dd><dt>{text.session}</dt><dd>{text.never}</dd></dl><p className="callout">{text.runtimeHint}</p></Panel></div>}
-          {workspace === 'templates' ? <Panel title={text.templateTitle} subtitle={text.templateHint} icon="templates">
-            <div className="canvas-placeholder"><span className="tree-icon" aria-hidden="true">◇<br />┌──┴──┐<br />◇　　◇</span><h3>{text.canvas}</h3><p>{text.canvasHint}</p></div>
-          </Panel> : <>
-            <p className="workspace-hint">{workspace === 'system' ? text.systemHint : text.runtimeHint}</p>
-            {observation ? <>
-              <div className="cards">
-                <StatusCard label={text.systemState} value={observation.system.state} tone={observation.system.state.includes('FAULT') || observation.system.state === 'STOP_UNCONFIRMED' ? 'danger' : 'neutral'} />
-                <StatusCard label={text.mode} value={observation.control.mode} tone={observation.control.mode === 'FAULT' ? 'danger' : 'neutral'} />
-                <StatusCard label={text.estop} value={observation.control.estop ? text.active : text.inactive} tone={observation.control.estop ? 'danger' : 'neutral'} />
-              </div>
-              <div className="workspace-grid"><Panel title={text.modules} icon="system"><div className="table-wrap"><table><thead><tr><th>{text.modules}</th><th>{text.process}</th><th>{text.interface}</th></tr></thead><tbody>
-                {Object.entries(observation.system.modules).map(([name, status]) => <tr key={name}><td>{name}</td><td>{status.process ? text.yes : text.no}</td><td>{status.interface ? text.yes : text.no}</td></tr>)}
-              </tbody></table></div><p className="snapshot"><span>{text.snapshot}</span><code>{observation.system.snapshot_id}</code></p></Panel>
-              {workspace === 'system' ? <Panel title={text.packages} icon="plug">{observation.packages.packages.length === 0 ? <p>{text.emptyPackages}</p> : observation.packages.packages.map(item =>
-                <div className="package-row" key={item.package_id}><div><strong>{item.package_id}</strong><p className="capabilities">{item.capabilities.map(capability => capability.capability_id).join(' · ')}</p></div><span className="badge">{item.enabled ? text.enabled : text.disabled}</span></div>)}</Panel>
-                : <Panel title={text.tasks} icon="runtime">{observation.tasks.tasks.length === 0 ? <p className="muted">{text.emptyTasks}</p> : observation.tasks.tasks.map(task =>
-                  <div className="task-row" key={task.task_run_id}><code>{task.task_run_id}</code><strong>{task.state}</strong></div>)}</Panel>}
-              </div>
-            </> : <section className="panel empty-state"><span className="empty-icon" aria-hidden="true">◎</span><p>{text.noObservation}</p></section>}
+          {client && <>
+            {workspace === 'system' && <SystemBuilder client={client} observation={observation} language={settings.language} changed={() => observe(client)} />}
+            {workspace === 'templates' && <TaskSetup client={client} observation={observation} language={settings.language} changed={() => observe(client)} />}
+            {workspace === 'runtime' && <RuntimePage client={client} observation={observation} language={settings.language} changed={() => observe(client)} />}
+            {workspace === 'records' && <Records client={client} observation={observation} language={settings.language} changed={() => observe(client)} />}
           </>}
           </>}
           </div></main>

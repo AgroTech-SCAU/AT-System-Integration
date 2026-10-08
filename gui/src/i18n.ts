@@ -1,6 +1,7 @@
 import type { Language } from './types'
 
 const zh = {
+  records: '记录与报告',
   minimizeWindow: '最小化窗口', maximizeWindow: '最大化或还原窗口', closeWindow: '关闭应用窗口',
   settings: '设置', openSettings: '打开设置', workflow: '工作流', application: '应用', settingsTitle: '让工作台适合你', settingsHint: '偏好会自动保存，不影响 Agent 持有的任务', followSystem: '跟随系统', layout: '布局', connectionSummary: '连接概览', localOnly: '本机管理', sidebarHint: '系统搭建 · 任务模板 · 运行观察',
   brand: '农业机器人系统集成', subtitle: '本机管理工作台', system: '系统搭建', templates: '模板任务', runtime: '运行调试',
@@ -9,12 +10,12 @@ const zh = {
   connected: '正在观察', offline: '未观测', lastSeen: '最后成功观测', never: '尚未连接',
   unauthorized: '会话已失效，请重新连接', failed: '连接失败，当前状态未观测', fileError: '无法读取会话文件',
   refresh: '刷新状态', pendingTitle: '正在执行', pendingDescription: '正在读取 Agent 状态', close: '关闭观察',
-  pendingHint: '关闭此窗口仅关闭等待观察，Agent 持有的任务继续运行', operationArea: '操作区',
+  pendingHint: '关闭此窗口仅关闭等待观察，后台持有的任务继续运行', operationArea: '操作区',
   futureActions: '取消任务和停止系统将在运行操作阶段开放', theme: '主题', light: '浅色', dark: '深色',
   language: '语言', compact: '紧凑布局', appearance: '外观', agent: '本机 Agent',
   packages: '已注册接入包', emptyPackages: '未注册接入包', enabled: '已启用', disabled: '未启用',
-  systemHint: '当前展示实际注册与运行配置，描述导入和草稿编辑将在后续步骤开放',
-  templateTitle: '模板任务工作区', templateHint: '模板参数和资产管理将在后续步骤开放',
+  systemHint: '导入接入包描述，编辑后端与角色绑定，校验草稿并在停止态应用',
+  templateTitle: '模板任务工作区', templateHint: '创建模板方案，绑定模拟标定资产并检查参数与摘要',
   canvas: '行为树画布将在后续阶段开放', canvasHint: '此工作区保留画布位置，当前不编辑或执行任务',
   systemState: '系统状态', mode: '整机模式', estop: '急停', active: '已触发', inactive: '未触发',
   modules: '后端模块', process: '进程存在', interface: '接口就绪', yes: '是', no: '否',
@@ -23,6 +24,7 @@ const zh = {
   noObservation: '等待本机 Agent 的新鲜状态', error: '错误', waiting: '等待连接'
 }
 const en: typeof zh = {
+  records: 'Records and reports',
   minimizeWindow: 'Minimize window', maximizeWindow: 'Maximize or restore window', closeWindow: 'Close application window',
   settings: 'Settings', openSettings: 'Open settings', workflow: 'WORKFLOW', application: 'APPLICATION', settingsTitle: 'Make the workspace yours', settingsHint: 'Preferences are saved automatically without changing Agent tasks', followSystem: 'System', layout: 'Layout', connectionSummary: 'Connection overview', localOnly: 'Local management', sidebarHint: 'System builder · Task templates · Runtime observation',
   brand: 'Agricultural system integration', subtitle: 'Local management console', system: 'System builder', templates: 'Task templates', runtime: 'Runtime',

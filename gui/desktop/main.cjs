@@ -1,5 +1,5 @@
 // Electron 窗口壳，业务与认证继续由同源 Agent API 管理
-const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, Menu, clipboard } = require('electron')
 const path = require('node:path')
 const crypto = require('node:crypto')
 const fs = require('node:fs')
@@ -67,6 +67,37 @@ if (url && dataDirectory) {
         else if (action === 'maximize') { if (win.isMaximized()) win.unmaximize(); else win.maximize() }
         else if (action === 'close') win.close()
         else throw new Error('未知窗口操作')
+      })
+      async function localSession() {
+        const file = option('--session-file')
+        if (fs.statSync(file).mode & 0o077) throw new Error('本机会话权限无效')
+        const secret = fs.readFileSync(file, 'utf8').trim()
+        const expected = JSON.parse(option('--identity'))
+        const response = await fetch(new URL('/agent/identity', url), {
+          headers: { Authorization: `Bearer ${secret}` }, redirect: 'error', signal: AbortSignal.timeout(3000)
+        })
+        if (!response.ok) throw new Error('本机后台认证失败')
+        const actual = await response.json()
+        if (!secret || Object.entries(expected).some(([key,value]) => actual[key] !== value)) {
+          throw new Error('本机后台身份发生变化')
+        }
+        return secret
+      }
+      ipcMain.handle('agro:local-session', event => { trusted(event); return localSession() })
+      ipcMain.handle('agro:report', async (event, taskId, action) => {
+        trusted(event)
+        if (!/^task_[a-z0-9_]+$/.test(taskId) || !['copy', 'export'].includes(action)) throw new Error('报告请求无效')
+        const secret = await localSession()
+        const response = await fetch(new URL(`/tasks/${taskId}/report`, url), {
+          headers: { Authorization: `Bearer ${secret}` }, redirect: 'error', signal: AbortSignal.timeout(5000)
+        })
+        if (!response.ok) throw new Error('报告读取失败')
+        const text = JSON.stringify(await response.json(), null, 2)
+        if (action === 'copy') clipboard.writeText(text)
+        else {
+          const result = await dialog.showSaveDialog(win, { defaultPath: taskId + '.report.json', filters: [{ name: 'JSON Report', extensions: ['json'] }] })
+          if (!result.canceled && result.filePath) fs.writeFileSync(result.filePath, text, { mode: 0o600 })
+        }
       })
       win.once('ready-to-show', () => win.show())
       await win.loadURL(url.href)

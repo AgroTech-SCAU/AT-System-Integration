@@ -132,8 +132,6 @@ class TaskManager:
     def completed_targets(self, backend):
         completed=set()
         for status in self.store.list():
-            if status['system_snapshot_id']!=self.runtime.snapshot_id:
-                continue
             snapshot=self.store.snapshot(status['task_run_id'])
             if snapshot['assets']['camera_to_arm']['content']['device_id']==backend:
                 completed.update(t['target_id'] for t in self.store.targets(status['task_run_id']) if t['outcome']=='picked')
@@ -184,6 +182,10 @@ class TaskManager:
             tree = ET.fromstring(xml)
         except ET.ParseError as exc:
             fail('$.task_ref', 'invalid_xml', str(exc))
+        for node in tree.iter():
+            role=node.get('role')
+            if role and role not in self.runtime.bound.roles:
+                fail('$.roles.'+role,'missing_template_role','任务模板所需角色未绑定')
         loops = list(tree.iter('ForEachTarget'))
         if len(loops)!=1 or loops[0].get('max_targets')!=str(manifest.max_targets):
             fail('$.max_targets', 'policy_tree_mismatch', 'XML 候选界限必须与冻结策略一致')
@@ -234,6 +236,9 @@ class TaskManager:
                 'assets': assets, 'parameters': parameters, 'blackboard': blackboard,
                 'system': self.runtime.snapshot(), 'software': _source_identity(self.executable)}
 
+    def preflight(self, request):
+        return self._freeze(parse(TaskStart, request))
+
     async def start_task(self, request, owner):
         request = parse(TaskStart, request)
         fingerprint = _digest(request.model_dump(mode='json'))
@@ -243,13 +248,13 @@ class TaskManager:
                 if previous['fingerprint'] != fingerprint:
                     fail('$.request_id', 'request_id_conflict', '同一任务请求标识不能对应不同载荷')
                 return self.status(previous['task_run_id'])
-            if not self.executable or not Path(self.executable).is_file() or not self.endpoint or not self.session_secret:
+            if not self.executable or not Path(self.executable).is_file() or not os.access(self.executable, os.X_OK) or not self.endpoint or not self.session_secret:
                 fail('$.task_engine', 'task_engine_unavailable', 'Agent 未配置可用的 C++ 执行器与本机会话入口')
             if not self.runtime.accepting or self.runtime.engine.control.mode != RobotMode.STANDBY:
                 fail('$.system', 'task_not_ready', '任务启动需要系统就绪且处于待命模式')
             if any(s['state'] in ACTIVE or s['state']=='UNKNOWN' or not s['stop_confirmed'] for s in self.store.list()):
                 fail('$.task', 'task_busy', '已有任务执行中、停止未确认或未知结果待核对')
-            snapshot = self._freeze(request)
+            snapshot = self.preflight(request)
             identity = 'task_' + uuid4().hex
             directory = self.directory / identity
             directory.mkdir()

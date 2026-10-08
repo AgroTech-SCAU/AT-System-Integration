@@ -5,6 +5,7 @@ from pathlib import Path
 from pydantic.json_schema import models_json_schema
 
 from agro_runtime.tasks import TaskManifest, TaskStart
+from agro_runtime.workspace_models import DescriptionUpload, DraftCreate, DraftSave, ConfigurationApply, PlanCreate, TaskIntent, LifecycleIntent
 
 from agro_runtime.models import (CapabilityDescriptor, ExecutionRequest,
                                  OperationSnapshot, PackageDescriptor,
@@ -13,7 +14,7 @@ from agro_runtime.models import (CapabilityDescriptor, ExecutionRequest,
 
 def main():
     models = [PackageDescriptor, CapabilityDescriptor, SystemConfig,
-              StampedPose, ExecutionRequest, OperationSnapshot, TargetList, PickResult, TaskManifest, TaskStart]
+              StampedPose, ExecutionRequest, OperationSnapshot, TargetList, PickResult, TaskManifest, TaskStart, DescriptionUpload, DraftCreate, DraftSave, ConfigurationApply, PlanCreate, TaskIntent, LifecycleIntent]
     _, schema = models_json_schema([(model, 'validation') for model in models],
                                   title='Agricultural capability contracts')
     schema['$schema'] = 'https://json-schema.org/draft/2020-12/schema'

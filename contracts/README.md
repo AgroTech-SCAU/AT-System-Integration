@@ -1,6 +1,6 @@
 # 接入与执行契约
 
-权威模型位于 `src/agro_runtime/models.py`，`schema.json` 的 `$defs` 包含十个共享入口模型与依赖类型，协议兼容性字段为 `agro.capabilities.v1`
+权威业务模型位于 `src/agro_runtime/models.py`，工作区请求模型位于 `src/agro_runtime/workspace_models.py`，`schema.json` 的 `$defs` 包含执行、任务与工作区管理共享入口模型及依赖类型，协议兼容性字段为 `agro.capabilities.v1`
 
 JSON Schema 描述字段结构，单位要求、范围关系、默认值合法性、角色兼容性与运行数据新鲜度还需要 Python 校验入口执行语义校验，后续跨语言接入使用这里的相同样例
 
@@ -24,7 +24,7 @@ python contracts/export_schema.py
 - 资源、坐标系和时间域支持点分隔名称，如 `arm.motion`，资源访问明确为 `shared` 或 `exclusive`
 - `required_roles` 声明当前系统所需角色，`roles` 绑定能力和后端实例，并声明预期输入输出，字段集合、类型、单位、范围、坐标系与时间域必须兼容
 - 静态参数支持 string、integer、number 和 boolean，stamped_pose、target_list 与 pick_result 只用于输入输出业务数据，数值声明单位，无量纲使用 `1`，默认值同样按类型、范围与可选值校验
-- `required` 参数缺失且没有默认值时拒绝请求，`apply_policy` 为 immediate、idle 或 restart，仅声明策略，当前步骤不执行配置应用
+- `required` 参数缺失且没有默认值时拒绝请求，`apply_policy` 为 immediate、idle 或 restart，描述策略，P2 系统配置统一在停止态应用
 - 位姿包含目标 ID、位置、xyzw 单位四元数、坐标系、时间戳与时间域，位置使用 m，描述声明 `max_age_s`，校验时调用者提供同域的 `now` 与 `clock_domain`
 - 未知字段拒绝，展示扩展放入 `extensions` 对象，扩展值不参与执行参数解释
 
