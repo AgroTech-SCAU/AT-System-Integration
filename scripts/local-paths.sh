@@ -9,7 +9,7 @@ gui_directory="${AGRO_GUI_DIST:-$installation_directory/gui}"
 engine_executable="$installation_directory/task-engine/agro-bt"
 desktop_directory="$installation_directory/desktop"
 state_directory="$installation_directory/state"
-default_configuration="$project_directory/examples/tomato_picker/system.yaml"
+default_configuration="$project_directory/examples/workspace/system.yaml"
 if [[ "$gui_directory" != /* ]]; then
     gui_directory="$project_directory/$gui_directory"
 fi

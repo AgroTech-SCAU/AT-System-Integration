@@ -245,7 +245,7 @@ def main(argv=None):
             from .gui import open_gui
             result = open_gui(args)
             print(json.dumps(result, ensure_ascii=False))
-            return 0
+            return 0 if result.get('valid') else 1
         if args.group == 'agent':
             return _serve(args)
         if args.command == 'validate' and args.group in ('package', 'system'):

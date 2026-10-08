@@ -204,14 +204,15 @@ class MockOperation:
 
 
 class MockAdapter:
-    def __init__(self, *, backend_instance, clock, gateway, before_effect=None, faults=None, faults_by_capability=None, completed_targets=None):
+    def __init__(self, *, backend_instance, clock, gateway, before_effect=None, faults=None, faults_by_capability=None, completed_targets=None, world=None):
         self.backend_instance = backend_instance
         self.clock = clock
         self.before_effect = before_effect
         self.gateway = gateway
         self.faults = faults or FaultPlan()
         self.faults_by_capability = faults_by_capability or {}
-        self.world = MockWorld(placed_targets=set(completed_targets or ()))
+        self.world = world if world is not None else MockWorld()
+        self.world.placed_targets.update(completed_targets or ())
         self.accepted_requests = 0
         self.cancel_requests = 0
         self._operations = []
@@ -230,6 +231,6 @@ class MockAdapter:
         await asyncio.gather(*(operation.aclose() for operation in self._operations))
 
 
-def create_adapter(*, backend_instance, clock, gateway, before_effect=None, faults=None, faults_by_capability=None, completed_targets=None):
+def create_adapter(*, backend_instance, clock, gateway, before_effect=None, faults=None, faults_by_capability=None, completed_targets=None, world=None):
     return MockAdapter(backend_instance=backend_instance, clock=clock, gateway=gateway,
-                       before_effect=before_effect, faults=faults, faults_by_capability=faults_by_capability, completed_targets=completed_targets)
+                       before_effect=before_effect, faults=faults, faults_by_capability=faults_by_capability, completed_targets=completed_targets, world=world)

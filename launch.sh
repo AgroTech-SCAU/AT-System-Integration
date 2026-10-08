@@ -2,10 +2,10 @@
 set -euo pipefail
 project_directory="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd -- "$project_directory"
-# endpoint 与 session-file 位于全局选项，其他选项传给 gui open
+# 在本终端前台运行 Agent 和 GUI 管理器；端口和会话参数仍为全局选项
 source "$project_directory/scripts/local-paths.sh"
 if [[ "${1:-}" == '--help' || "${1:-}" == '-h' ]]; then
-    printf '%s\n' '用法: ./launch.sh [--config PATH] [--state-dir PATH] [--task-engine PATH] [--ui-dir PATH] [--desktop-dir PATH] [--endpoint URL] [--session-file PATH] [--no-window]' '首次执行 ./install.sh，之后无需参数即可打开独立桌面窗口'
+    printf '%s\n' '用法: ./launch.sh [--config PATH] [--state-dir PATH] [--task-engine PATH] [--ui-dir PATH] [--desktop-dir PATH] [--endpoint URL] [--session-file PATH] [--no-window]' '首次执行 ./install.sh；窗口和 Agent 跟随当前终端，Ctrl+C 或关闭窗口请求安全停止；--no-window 仅启动前台 Agent'
     exit 0
 fi
 if [[ ! -x "$python_executable" ]]; then

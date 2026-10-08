@@ -1,0 +1,12 @@
+system_id: workspace_host
+packages: [package.yaml]
+backends:
+- instance_id: workspace_host
+  package_id: workspace_host
+required_roles: [workspace_health]
+roles:
+  workspace_health:
+    backend_instance: workspace_host
+    capability_id: workspace.heartbeat
+    input: {}
+    output: {ready: {type: boolean}}

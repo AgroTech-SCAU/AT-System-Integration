@@ -576,13 +576,20 @@ class TaskDocuments:
         document['trees'][subtree_id]={'tree_id':subtree_id,'root_id':editor_id,'nodes':extracted,'ports':ports}
         return {'document':document,'call_id':call_id,'ports':ports}
 
+    def _check_ownership(self, record):
+        if self.assets.robot_systems and record.get('robot_system_id') != self.assets.robot_systems.selected_id():
+            fail('$.robot_system_id','different_robot_system','此任务定义属于其他机器人系统')
+
     def create(self,xml=None,template='simulation_inspection'):
+        if template=='tomato_picker' and not self.assets.template_enabled():
+            fail('$.template', 'template_not_imported', '先在总览导入并选择番茄采摘机器人示例')
         if xml is None:xml=self.assets.template.read_text() if template=='tomato_picker' else '<root BTCPP_format="4" main_tree_to_execute="Inspection"><BehaviorTree ID="Inspection"><Sequence/></BehaviorTree></root>'
         document=self.parse_xml(xml);key='draft_'+uuid4().hex
-        return self.store.put('tree_draft',key,{'id':key,'revision':1,'layout_revision':1,'policy':template,'base_snapshot_id':self.context.snapshot_id,'document':document,'layout':LayoutDocument().model_dump(mode='json'),'parameters':{},'validation':None,'published':None})
+        return self.store.put('tree_draft',key,{'id':key,'revision':1,'layout_revision':1,'policy':template,'base_snapshot_id':self.context.snapshot_id,'document':document,'layout':LayoutDocument().model_dump(mode='json'),'parameters':{},'validation':None,'published':None,'robot_system_id':self.assets.robot_systems.selected_id() if self.assets.robot_systems else None})
 
     def save(self,key,revision,layout_revision,document,layout,parameters):
         draft=self.store.get('tree_draft',key)
+        self._check_ownership(draft)
         if draft['document']['readonly'] and digest(document)!=digest(draft['document']):fail('$.document','readonly_xml','只读导入不能覆盖执行语义，请保留原 XML')
         if revision!=draft['revision'] or layout_revision!=draft['layout_revision']:fail('$.revision','revision_conflict','树或布局已被其他页面修改，请重新加载')
         document=parse(TreeDocument,document).model_dump(mode='json');layout=parse(LayoutDocument,layout).model_dump(mode='json')
@@ -593,12 +600,14 @@ class TaskDocuments:
 
     def validate_draft(self,key):
         draft=self.store.get('tree_draft',key)
+        self._check_ownership(draft)
         validation=self.validate_tree(draft['document'],draft['policy'],draft['parameters'])
         validation['revision']=draft['revision'];draft['validation']=validation
         self.store.put('tree_draft',key,draft);return validation
 
     def publish(self,key,revision,base_snapshot_id):
         draft=self.store.get('tree_draft',key)
+        self._check_ownership(draft)
         if revision!=draft['revision']:fail('$.revision','revision_conflict','发布草稿已改变')
         if base_snapshot_id!=self.context.snapshot_id or draft['base_snapshot_id']!=base_snapshot_id:fail('$.base_snapshot_id','snapshot_conflict','系统配置已改变，请核对新草稿')
         checked=self.validate_draft(key)
@@ -613,7 +622,7 @@ class TaskDocuments:
             manifest['assets']['camera_to_arm']['path']='camera_to_arm.json'
         else:manifest={'kind':'simulation_inspection','assets':{},'parameters':draft['document']['inputs'],'max_targets':1,'max_recovery_attempts':0,'timeout_ms':30000}
         (root/'harvest.task.json').write_text(encoded(manifest));(root/'harvest.task.json').chmod(0o400)
-        definition={'id':key_definition,'draft_id':key,'revision':revision,'system_snapshot_id':self.context.snapshot_id,'model_digest':checked['model_digest'],'document':draft['document'],'layout':draft['layout'],'xml':compiled['xml'],'xml_sha256':checked['xml_sha256'],'manifest':manifest,'parameters':draft['parameters'],'node_mapping':checked['node_mapping'],'blackboard':checked['blackboard'],'task_ref':str(xml),'immutable':True}
+        definition={'id':key_definition,'draft_id':key,'revision':revision,'system_snapshot_id':self.context.snapshot_id,'model_digest':checked['model_digest'],'document':draft['document'],'layout':draft['layout'],'xml':compiled['xml'],'xml_sha256':checked['xml_sha256'],'manifest':manifest,'parameters':draft['parameters'],'node_mapping':checked['node_mapping'],'blackboard':checked['blackboard'],'task_ref':str(xml),'immutable':True,'robot_system_id':draft.get('robot_system_id')}
         definition['digest']=digest({k:v for k,v in definition.items() if k not in {'id','layout','task_ref'}})
         (root/'definition.json').write_text(encoded(definition));(root/'definition.json').chmod(0o400)
         self.store.put('tree_definition',key_definition,definition);draft['published']=key_definition;self.store.put('tree_draft',key,draft)
@@ -622,6 +631,7 @@ class TaskDocuments:
     def definition_request(self,key,request_id):
         from .tasks import TaskStart
         definition=self.store.get('tree_definition',key)
+        self._check_ownership(definition)
         if definition['system_snapshot_id']!=self.context.snapshot_id or definition['model_digest']!=self.describe_nodes()['digest']:fail('$.definition','snapshot_conflict','发布定义与当前实际系统或节点模型不一致')
         path=Path(definition['task_ref']).resolve()
         if not path.is_relative_to((self.store.root/'plans'/key).resolve()):fail('$.definition','invalid_definition_path','定义路径不在受控目录')

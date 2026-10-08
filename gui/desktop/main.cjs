@@ -111,6 +111,27 @@ if (url && dataDirectory) {
         const result = await dialog.showSaveDialog(win, { defaultPath: draftId + '.xml', filters: [{ name: 'BehaviorTree XML', extensions: ['xml'] }] })
         if (!result.canceled && result.filePath) fs.writeFileSync(result.filePath, document.xml, { mode: 0o600 })
       })
+      // 工程文件仅由文件对话框选择，渲染进程无任意文件系统访问能力
+      ipcMain.handle('agro:project-open', async event => {
+        trusted(event)
+        const picked = await dialog.showOpenDialog(win, { properties: ['openFile'],
+          filters: [{ name: '机器人系统工程', extensions: ['json'] }] })
+        if (picked.canceled || !picked.filePaths[0]) return null
+        const filepath = picked.filePaths[0]
+        if (fs.statSync(filepath).size > 6 * 1024 * 1024) throw new Error('工程文件不能超过 6 MiB')
+        return JSON.parse(fs.readFileSync(filepath, 'utf8'))
+      })
+      ipcMain.handle('agro:project-save', async (event, bundle) => {
+        trusted(event)
+        if (!bundle || bundle.format !== 'agrotech.robot-system' || bundle.format_version !== 1) throw new Error('工程格式无效')
+        const data = JSON.stringify(bundle, null, 2)
+        if (Buffer.byteLength(data) > 6 * 1024 * 1024) throw new Error('工程文件不能超过 6 MiB')
+        const result = await dialog.showSaveDialog(win, { defaultPath: 'robot-system.agrobot.json',
+          filters: [{ name: '机器人系统工程', extensions: ['json'] }] })
+        if (result.canceled || !result.filePath) return false
+        fs.writeFileSync(result.filePath, data + '\n', { mode: 0o600 })
+        return true
+      })
       win.webContents.on('will-prevent-unload', async event => {
         const result = await dialog.showMessageBox(win,{type:'question',buttons:['继续编辑','放弃修改并关闭'],defaultId:0,cancelId:0,message:'树草稿尚未保存'})
         if(result.response===1) { event.preventDefault(); win.destroy() }

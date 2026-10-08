@@ -12,15 +12,22 @@ from .registry import read_document, _values
 
 
 class AssetService:
-    def __init__(self,context,store):
-        self.context=context;self.store=store
+    def __init__(self,context,store,robot_systems=None):
+        self.context=context;self.store=store;self.robot_systems=robot_systems
         self.example=Path(__file__).resolve().parents[2]/'examples/tomato_picker'
         self.template=self.example/'tasks/harvest.xml'
         fixture=self.example/'assets/camera_to_arm.json'
         raw=fixture.read_bytes()
         self.builtin=self.import_asset('camera_to_arm.json',raw.decode())
 
+    def template_enabled(self):
+        return (self.robot_systems is None or
+                (self.robot_systems.active() and
+                 (self.robot_systems.selected() or {}).get('example_id') == 'tomato_picker'))
+
     def templates(self):
+        if not self.template_enabled():
+            return []
         manifest=parse(TaskManifest,read_document(self.template.with_suffix('.task.json')))
         return [{'id':'tomato_picker','title':'番茄采摘模拟模板','manifest':manifest.model_dump(mode='json'),
                  'layout':read_document(self.template.with_suffix('.layout.json')),'xml':self.template.read_text(),
@@ -49,7 +56,7 @@ class AssetService:
             'verification_source':'builtin_simulation_fixture'})
 
     def create_plan(self,parameters,asset_id,template_id='tomato_picker'):
-        if template_id!='tomato_picker':
+        if template_id!='tomato_picker' or not self.template_enabled():
             fail('$.template_id','unknown_template','模板不存在')
         manifest=parse(TaskManifest,read_document(self.template.with_suffix('.task.json')))
         effective=_values(parameters,manifest.parameters,'$.parameters',parameters=True)
@@ -67,10 +74,13 @@ class AssetService:
         (root/'harvest.task.json').write_text(encoded(content));(root/'harvest.task.json').chmod(0o400)
         return self.store.put('plan',key,{'id':key,'template_id':template_id,'parameters':effective,
             'asset_id':asset['id'],'asset_sha256':asset['sha256'],'task_ref':str(xml),
-            'system_snapshot_id':self.context.snapshot_id,'immutable':True})
+            'system_snapshot_id':self.context.snapshot_id,'robot_system_id':self.robot_systems.selected_id() if self.robot_systems else None,'immutable':True})
 
     def request(self,key,request_id):
         plan=self.store.get('plan',key)
+        if (plan.get('robot_system_id') != (self.robot_systems.selected_id() if self.robot_systems else None)
+                or not self.template_enabled()):
+            fail('$.template_id','different_robot_system','任务方案不属于当前机器人系统')
         if plan['system_snapshot_id']!=self.context.snapshot_id:
             fail('$.system_snapshot_id','snapshot_conflict','方案基于旧系统，请在当前配置创建新方案')
         path=Path(plan['task_ref']).resolve()

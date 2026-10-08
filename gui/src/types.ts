@@ -31,12 +31,12 @@ export interface Observation {
   control: { mode: string; estop: boolean }
   tasks: { tasks: TaskSummary[] }
 }
-export type Workspace = 'system' | 'templates' | 'runtime' | 'settings' | 'records' | 'editor'
+export type Workspace = 'overview' | 'system' | 'templates' | 'runtime' | 'settings' | 'records' | 'editor'
 export type Language = 'zh' | 'en'
 export interface Settings { theme: 'system' | 'dark' | 'light'; language: Language; compact: boolean }
 
 declare global {
   interface Window {
-    agroDesktop?: { connectLocal(): Promise<string>; copyReport(taskId: string): Promise<void>; exportReport(taskId: string): Promise<void>; exportTreeXml(draftId: string): Promise<void>; minimize(): Promise<void>; maximize(): Promise<void>; close(): Promise<void> }
+    agroDesktop?: { connectLocal(): Promise<string>; openRobotProject(): Promise<unknown|null>; saveRobotProject(bundle: unknown): Promise<boolean>; copyReport(taskId: string): Promise<void>; exportReport(taskId: string): Promise<void>; exportTreeXml(draftId: string): Promise<void>; minimize(): Promise<void>; maximize(): Promise<void>; close(): Promise<void> }
   }
 }

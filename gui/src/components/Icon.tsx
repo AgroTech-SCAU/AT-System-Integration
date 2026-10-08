@@ -1,5 +1,6 @@
 // 图标路径改编自 SerialArm-Core launcher，授权说明见 gui/THIRD_PARTY_NOTICES.md
 const paths = {
+  overview: 'M3 3h8v8H3zM13 3h8v8h-8zM3 13h8v8H3zM13 13h8v8h-8z',
   system: 'M5 21v-4h14v4M8 17l-3-5 4-3 4 3-2 5M9 9l3-5 6 3-5 5M18 7l2-3M2 21h20',
   templates: 'M4 5h16v14H4zM8 9h8M8 13h5M6 3v4M18 3v4',
   runtime: 'M10 3h4v4h-4zM5 8h14v12H5zM9 12h6M9 16h3',

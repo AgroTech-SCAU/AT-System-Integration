@@ -21,6 +21,7 @@ from .registry import load_package
 from .tasks import TaskManager, TaskStart
 from .configuration import ActiveContext, ConfigurationService, WorkspaceStore
 from .management import ManagementJobs
+from .robot_systems import RobotSystems
 from .assets import AssetService
 from .diagnostics import Diagnostics
 from uuid import uuid4
@@ -89,7 +90,8 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     tasks = CurrentTasks()
     management = ManagementJobs(store)
     jobs = management.workers
-    assets = AssetService(runtime,store)
+    robot_systems = RobotSystems(runtime,store,configuration)
+    assets = AssetService(runtime,store,robot_systems)
     diagnostics = Diagnostics(runtime)
     from .task_documents import TaskDocuments
     from .tree_models import TreeCreate,TreeSave,TreePublish,TreeExtract,TreeValidate
@@ -122,6 +124,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     app.state.runtime = runtime
     app.state.configuration = configuration
     app.state.assets = assets
+    app.state.robot_systems = robot_systems
     app.state.management = management
     app.state.diagnostics = diagnostics
     app.state.documents = documents
@@ -171,6 +174,51 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     @api.delete('/catalog/{package_id}')
     async def delete_description(package_id: str):
         return configuration.delete_package(package_id)
+
+    class RobotSystemCreate(BaseModel):
+        name: str = Field(min_length=1, max_length=60)
+        example_id: str | None = None
+
+    class RobotSystemActivate(BaseModel):
+        request_id: str
+
+    class RobotSystemSave(BaseModel):
+        revision: int
+        content: dict
+
+    class RobotSystemImport(BaseModel):
+        bundle: dict
+
+    @api.post('/robot-systems/import')
+    async def import_robot_system(body: RobotSystemImport):
+        return robot_systems.import_bundle(body.bundle)
+
+    @api.get('/robot-systems/{system_id}/export')
+    async def export_robot_system(system_id: str):
+        return robot_systems.export_bundle(system_id)
+
+    @api.get('/robot-systems')
+    async def list_robot_systems():
+        return robot_systems.listing()
+
+    @api.post('/robot-systems')
+    async def create_robot_system(body: RobotSystemCreate):
+        return robot_systems.create(body.name, body.example_id)
+
+    @api.post('/robot-systems/{system_id}/select-blank')
+    async def select_blank_robot_system(system_id: str):
+        return robot_systems.choose_blank(system_id)
+
+    @api.post('/robot-systems/{system_id}/activate', status_code=202)
+    async def activate_robot_system(system_id: str, body: RobotSystemActivate):
+        async def work(phase):
+            return await robot_systems.activate(system_id, phase)
+        job=management.accept('robot_system_activate',body.request_id,{'id': system_id},work)
+        return {'accepted': True, 'management_job_id': job['id']}
+
+    @api.put('/robot-systems/{system_id}/configuration')
+    async def save_robot_configuration(system_id: str, body: RobotSystemSave):
+        return robot_systems.set_configuration(system_id,body.revision,body.content)
 
     @api.get('/config/drafts')
     async def drafts():
@@ -272,7 +320,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     @api.get('/plans')
     async def plan_list():
-        return {'plans':store.list('plan')}
+        return {'plans':[item for item in store.list('plan') if item.get('robot_system_id') == robot_systems.selected_id() and robot_systems.active()]}
 
     @api.post('/plans')
     async def plan_create(body: PlanCreate):
@@ -371,7 +419,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     @api.get('/trees/drafts')
     async def tree_drafts():
-        return {'drafts':store.list('tree_draft')}
+        return {'drafts':[item for item in store.list('tree_draft') if item.get('robot_system_id') == robot_systems.selected_id() and robot_systems.active()]}
 
     @api.post('/trees/drafts')
     async def tree_create(body: TreeCreate):
@@ -404,7 +452,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     @api.get('/trees/definitions')
     async def definitions():
-        return {'definitions':store.list('tree_definition')}
+        return {'definitions':[item for item in store.list('tree_definition') if item.get('robot_system_id') == robot_systems.selected_id() and robot_systems.active()]}
 
     @api.get('/trees/definitions/{key}')
     async def definition_get(key: str):

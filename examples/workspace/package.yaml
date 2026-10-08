@@ -1,0 +1,17 @@
+package_id: workspace_host
+source: workspace:examples/workspace
+platforms: [linux_x86_64, linux_arm64]
+contract: agro.capabilities.v1
+adapter_entrypoint: agro_mock:create_adapter
+runtime:
+  manager: local_process
+  target: workspace_host
+  health_check: mock_status
+capabilities:
+- capability_id: workspace.heartbeat
+  description: 仅供本机工作区初始化，不作为机器人能力
+  input: {}
+  output: {ready: {type: boolean}}
+  timeout_s: 5
+  cancellation: supported
+  retry_policy: never

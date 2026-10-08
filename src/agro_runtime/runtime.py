@@ -167,7 +167,7 @@ class LocalProcessManager:
         self._forget(name)
         self._claim(name)
         argv = descriptor.argv
-        mock_worker = not argv and descriptor.manager == 'local_process' and descriptor.target == 'tomato_simulator'
+        mock_worker = not argv and descriptor.manager == 'local_process' and descriptor.target in {'tomato_simulator', 'tomato_simulator.vision', 'tomato_simulator.navigation', 'tomato_simulator.arm', 'tomato_simulator.control'}
         if not argv:
             if not mock_worker:
                 fail(f'$.modules.{name}.argv', 'module_command_missing', '本地模块必须声明 argv')
