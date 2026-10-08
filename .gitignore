@@ -4,3 +4,9 @@ __pycache__/
 .venv/
 .vscode/
 docs/other/
+
+.agents/
+.codex/
+node_modules/
+gui/dist/
+.install/

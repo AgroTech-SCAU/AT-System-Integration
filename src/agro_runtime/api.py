@@ -1,15 +1,18 @@
 """本地会话管理 API，接受与完成保持独立"""
 import asyncio
 import hmac
+import hashlib
 import os
 import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Literal
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from .errors import ContractValidationError, field_path, fail
@@ -45,7 +48,29 @@ def session_secret_file(directory):
     return secret
 
 
-def create_app(runtime, *, session_secret, session_identity='local_session', task_engine=None, endpoint=None):
+def gui_directory(directory=None):
+    return Path(directory or os.environ.get('AGRO_GUI_DIST', '/tmp/agro-gui-dist')).resolve()
+
+
+class GuiFiles(StaticFiles):
+    """静态文件独立于管理认证，页面刷新回到同一入口"""
+    async def get_response(self, path, scope):
+        try:
+            response = await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code != 404 or Path(path).suffix or path.startswith('assets/') or '..' in path.split('/'):
+                raise
+            response = await super().get_response('index.html', scope)
+        response.headers['Cache-Control'] = 'no-store' if path == 'index.html' or not Path(path).suffix else 'no-cache'
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['Content-Security-Policy'] = (
+            "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; "
+            "object-src 'none'; base-uri 'self'; frame-ancestors 'none'")
+        return response
+
+
+def create_app(runtime, *, session_secret, session_identity='local_session', task_engine=None, endpoint=None,
+               ui_directory=None):
     if not session_secret or not session_identity:
         fail('$.session', 'invalid_session_secret', '本地会话身份与密钥不能为空')
     jobs = {}
@@ -65,9 +90,21 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
                 await task
         await runtime.aclose()
 
-    app = FastAPI(title='Agro runtime management', dependencies=[Depends(authenticate)],
+    app = FastAPI(title='Agro runtime management',
                   lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.runtime = runtime
+    api = APIRouter(dependencies=[Depends(authenticate)])
+    identity = {'application': 'AT-System-Integration',
+                'source_root': str(Path(__file__).resolve().parents[2]),
+                'config_path': str(runtime.config_path),
+                'config_sha256': hashlib.sha256(runtime.config_path.read_bytes()).hexdigest(),
+                'state_directory': str(runtime.state_directory.resolve()),
+                'snapshot_id': runtime.snapshot_id, 'pid': os.getpid()}
+
+    @api.get('/agent/identity')
+    async def agent_identity():
+        return identity
+
 
     @app.exception_handler(ContractValidationError)
     async def contract_error(request, exc):
@@ -79,22 +116,22 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
             {'path': field_path(error['loc']), 'code': error['type'], 'reason': error['msg']}
             for error in exc.errors()]})
 
-    @app.get('/packages')
+    @api.get('/packages')
     async def packages():
         return {'packages': [dict(package.model_dump(mode='json'), enabled=runtime.registry.is_enabled(name))
                              for name, package in runtime.registry.packages.items()]}
 
-    @app.post('/packages/validate')
+    @api.post('/packages/validate')
     async def validate_package(body: PackagePath):
         package = load_package(body.path)
         return {'valid': True, 'package_id': package.package_id, 'enabled': False,
                 'capabilities': [cap.capability_id for cap in package.capabilities]}
 
-    @app.post('/packages/{package_id}/enable')
+    @api.post('/packages/{package_id}/enable')
     async def enable_package(package_id: str):
         return {'package_id': package_id, 'enabled': runtime.enable_package(package_id)}
 
-    @app.post('/packages/{package_id}/disable')
+    @api.post('/packages/{package_id}/disable')
     async def disable_package(package_id: str):
         runtime.registry.disable(package_id)
         return {'package_id': package_id, 'enabled': False}
@@ -110,69 +147,77 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
             jobs[action] = asyncio.create_task(getattr(runtime, action)())
         return {'accepted': True, 'action': action, **runtime.status()}
 
-    @app.post('/system/start', status_code=202)
+    @api.post('/system/start', status_code=202)
     async def start(body: PackagePath | None = None):
         if body and Path(body.path).resolve() != runtime.config_path:
             fail('$.config_ref', 'snapshot_mismatch', '启动路径与 Agent 当前配置不一致')
         return accepted_job('start')
 
-    @app.post('/system/stop', status_code=202)
+    @api.post('/system/stop', status_code=202)
     async def stop():
         # HTTP 接受停止立即关闭派发入口，后台再处理取消与停止确认
         return accepted_job('stop')
 
-    @app.get('/system/status')
+    @api.get('/system/status')
     async def status():
         return runtime.status()
 
-    @app.get('/system/snapshot')
+    @api.get('/system/snapshot')
     async def snapshot():
         return runtime.snapshot()
 
-    @app.post('/system/readiness')
+    @api.post('/system/readiness')
     async def readiness(body: ExecutionRequest, phase: str = 'dispatch'):
         return runtime.readiness(body.backend_instance, body.capability_id, phase=phase, control=body.control)
 
-    @app.post('/control/take')
+    @api.post('/control/take')
     async def take(body: ControlTake, owner: str = Depends(authenticate)):
         return runtime.take_control(body.mode, owner, lease_s=body.lease_s).model_dump(mode='json')
 
-    @app.get('/control/status')
+    @api.get('/control/status')
     async def control_status():
         return {'mode': runtime.engine.control.mode.value, 'estop': runtime.engine.control.estop,
                 'clock_domain': runtime.engine.clock.clock_domain, 'timestamp': runtime.engine.clock.now()}
 
-    @app.post('/operations', status_code=202)
+    @api.post('/operations', status_code=202)
     async def submit(body: ExecutionRequest):
         operation_id = await runtime.submit(body)
         return runtime.engine.get_operation(operation_id).model_dump(mode='json')
 
-    @app.get('/operations')
+    @api.get('/operations')
     async def operations():
         return {'operations': [item.model_dump(mode='json') for item in runtime.records.list_operations()]}
 
-    @app.get('/operations/{operation_id}')
+    @api.get('/operations/{operation_id}')
     async def operation_status(operation_id: str):
         return runtime.engine.get_operation(operation_id).model_dump(mode='json')
 
-    @app.post('/operations/{operation_id}/cancel', status_code=202)
+    @api.post('/operations/{operation_id}/cancel', status_code=202)
     async def operation_cancel(operation_id: str):
         return runtime.engine.cancel(operation_id).model_dump(mode='json')
 
-    @app.post('/tasks', status_code=202)
+    @api.post('/tasks', status_code=202)
     async def task_start(body: TaskStart, owner: str = Depends(authenticate)):
         return await tasks.start_task(body, owner)
 
-    @app.get('/tasks')
+    @api.get('/tasks')
     async def task_list():
         return {'tasks': tasks.list()}
 
-    @app.get('/tasks/{task_run_id}')
+    @api.get('/tasks/{task_run_id}')
     async def task_status(task_run_id: str):
         return tasks.status(task_run_id)
 
-    @app.post('/tasks/{task_run_id}/cancel', status_code=202)
+    @api.post('/tasks/{task_run_id}/cancel', status_code=202)
     async def task_cancel(task_run_id: str):
         return tasks.cancel_task(task_run_id)
 
+    app.include_router(api)
+    directory = gui_directory(ui_directory)
+    if (directory / 'index.html').is_file():
+        app.mount('/ui', GuiFiles(directory=directory, html=True), name='gui')
+    else:
+        @app.get('/ui/{path:path}', response_class=HTMLResponse, status_code=503)
+        async def missing_gui(path: str):
+            return '<h1>GUI 资源未构建</h1><pre>npm --prefix gui ci\nnpm --prefix gui run build</pre>'
     return app

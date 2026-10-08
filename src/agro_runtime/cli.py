@@ -52,6 +52,16 @@ def _parser():
     serve.add_argument('--host', choices=['127.0.0.1', '::1', 'localhost'], default='127.0.0.1')
     serve.add_argument('--port', type=int, default=8765)
     serve.add_argument('--task-engine', type=Path)
+    serve.add_argument('--ui-dir', type=Path)
+    gui = groups.add_parser('gui').add_subparsers(dest='command', required=True)
+    open_gui = gui.add_parser('open')
+    open_gui.add_argument('--config', required=True, type=Path)
+    open_gui.add_argument('--state-dir', required=True, type=Path)
+    open_gui.add_argument('--task-engine', type=Path)
+    open_gui.add_argument('--ui-dir', type=Path)
+    open_gui.add_argument('--desktop-dir', type=Path)
+    open_gui.add_argument('--no-window', '--no-browser', dest='no_window', action='store_true',
+                          help='只核对 Agent，不打开桌面窗口')
     return parser
 
 
@@ -121,7 +131,7 @@ def _serve(args):
     runtime = Runtime(args.config, args.state_dir)
     endpoint=f'http://[{args.host}]:{args.port}' if args.host=='::1' else f'http://{args.host}:{args.port}'
     app = create_app(runtime, session_secret=session_secret_file(args.state_dir),
-                     task_engine=args.task_engine, endpoint=endpoint)
+                     task_engine=args.task_engine, endpoint=endpoint, ui_directory=args.ui_dir)
 
     class ManagedServer(uvicorn.Server):
         """退出信号先完成停止，未确认时继续服务诊断"""
@@ -145,6 +155,11 @@ def _serve(args):
 def main(argv=None):
     args = _parser().parse_args(argv)
     try:
+        if args.group == 'gui':
+            from .gui import open_gui
+            result = open_gui(args)
+            print(json.dumps(result, ensure_ascii=False))
+            return 0
         if args.group == 'agent':
             return _serve(args)
         if args.command == 'validate':

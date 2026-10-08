@@ -58,6 +58,19 @@
 >
 > 完整流程与常见问题：[`CONTRIBUTING.md`](.github/CONTRIBUTING.md)
 
+## 本机安装与 GUI
+
+首次安装与打开
+
+```bash
+./install.sh
+./launch.sh
+```
+
+默认安装到仓库内 `.install/`，之后直接执行 `./launch.sh`，无需激活环境或传入配置路径，默认在 Electron 独立窗口打开番茄模拟工作区，系统模块和任务不会自动运行
+
+依赖要求、自定义安装位置和认证连接方式见 [GUI 使用说明](gui/README.md)
+
 ## 1. 项目简介
 
 说明：

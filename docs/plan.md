@@ -6,9 +6,9 @@
 
 依据上传的 `AT-System-Integration.zip` 中 `docs/architecture.md`、`docs/plan.md` 与实际源码，按 KR-Skills/mini-step-plan 的 Full 模板组织六个实施步骤
 
-建议本文件作为当前 `docs/plan.md`，替换前将原 P1 计划原样保存为 `docs/archive/plan-p1.md`，只归档一次并保留所有完成记录
+本文件作为当前 `docs/plan.md`，原 P1 计划已从 Git 提交 `5632ea9` 原样归档至 `docs/archive/plan-p1.md`，只归档一次并保留所有完成记录
 
-本次仅生成计划，不修改上传仓库，不将计划中的新增接口写成已实现接口
+本文件作为当前 P2 执行计划，只有完成验证的步骤才标记完成，待新增接口不视为已经实现
 
 ## 2 本次明确不做
 
@@ -72,7 +72,7 @@ P3 至 P5 保持原架构路线，不因本计划细化而进入当前进度统�
 
 ## 4 完成标准
 
-- [ ] GUI 可启动和连接本机 Agent，主题、语言和布局设置独立于机器人配置
+- [x] GUI 以 Electron 独立窗口启动和连接本机 Agent，主题、语言和布局设置独立于机器人配置
 - [ ] 不手改 YAML 即可导入受支持描述、添加后端、绑定能力角色、校验和保存系统配置
 - [ ] 导入描述不会加载代码，启用适配器仍受 Agent 允许列表限制
 - [ ] 明确展示草稿、已保存、待应用和实际生效状态，修改后可查看字段差异
@@ -87,7 +87,7 @@ P3 至 P5 保持原架构路线，不因本计划细化而进入当前进度统�
 
 ## 5 最低成本验证路径
 
-本阶段使用服务组件验证、前端组件验证、构建和一次实际浏览器模拟闭环，不安排真机实验
+本阶段使用服务组件验证、前端组件验证、构建和一次实际 Electron 桌面模拟闭环，不安排真机实验
 
 所有验证脚本、截图、浏览器报告、Python 虚拟环境与 C++ 构建放在工作区外临时目录，不新增或保留仓库 `tests/`、测试专用页面或故障注入控件
 
@@ -97,7 +97,7 @@ P3 至 P5 保持原架构路线，不因本计划细化而进入当前进度统�
 
 1. 服务端针对本步行为运行临时 pytest 或等价验证
 2. 前端执行 `npm --prefix gui run typecheck` 与 `npm --prefix gui run build`
-3. 临时浏览器脚本验证真实 Agent API 与界面操作
+3. 临时桌面自动化脚本验证真实 Agent API 与界面操作
 4. 最后复用同一次闭环核对任务快照、目标结果、取消语义与记录页面
 
 涉及 Python/C++ 共享契约时检查 Schema 导出一致，只有修改 C++ 时才重新构建与运行相关 CTest，不为纯布局重复完整 P1 验收
@@ -106,19 +106,19 @@ P3 至 P5 保持原架构路线，不因本计划细化而进入当前进度统�
 
 ### 6.1 GUI 与本机启动
 
-本包没有 SerialArm-Core GUI 源码，本计划不声称组件已经可以直接提取
+GUI 以 [SerialArm-Core](https://github.com/Kaede-Rei/SerialArm-Core) 的 `apps/launcher/desktop/` 与 `apps/launcher/renderer/` 为桌面与界面模板，已核对本机源码、深浅主题截图、工作台布局与设置交互
 
-当前默认 GUI 使用 React、TypeScript、Vite 与普通 CSS，维护 `gui/`，已有 SerialArm GUI 参考可用时只在步骤 1 内核对主题、导航和交互组件，适配不符则保留本选择，不为复用扩散外部仓库改造
+当前 GUI 使用 React、TypeScript、Vite 与普通 CSS，维护 `gui/`，沿用 SerialArm 的主题变量、紧凑标题栏、分组侧栏、卡片表单与独立设置页，工作区内容适配当前 Agent，不修改参考仓库
 
-通过 FastAPI 在 `/ui/` 提供构建后的页面，保留原管理接口路径，静态页与本机管理 API 同源，开发模式仅配置本机代理
+正式入口使用 Electron 独立桌面窗口，FastAPI 在 `/ui/` 提供窗口内部的构建资源，保留原管理接口路径，界面与本机管理 API 同源，开发模式仅配置本机代理
 
-增加 `agroctl gui open` 与 Linux `launch.sh`，已有 Agent 时打开页面，不再启动第二个 Agent，未运行时使用明确的配置、状态目录与任务引擎参数启动
+增加 `agroctl gui open` 与 Linux `launch.sh`，已有 Agent 时打开独立桌面窗口，不再启动第二个 Agent，未运行时使用明确的配置、状态目录与任务引擎参数启动
 
 生产启动使用已构建资源，不在每次打开 GUI 时自动安装依赖、联网下载或重新构建，缺失资源时显示可执行的构建说明
 
 浏览器无权直接读取 Agent 文件系统路径，提供选择本机会话文件或输入会话凭据的连接入口，凭据只驻留内存，不进入 URL、日志、localStorage 或报告
 
-主题、语言与面板布局可保存在浏览器设置中，机器人配置与认证凭据不使用该通道
+主题、语言与面板布局可保存在桌面设置中，机器人配置与认证凭据不使用该通道
 
 ### 6.2 待新增接口
 
@@ -182,14 +182,15 @@ UNKNOWN、停止未确认和资源隔离不允许通过换配置或换台账目�
 
 ## 8 实施步骤
 
-### 步骤 1 `[ ]` 建立 GUI 入口与统一界面基础
+### 步骤 1 `[x]` 建立 GUI 入口与统一界面基础
 
 **目标与修改范围**
 
-创建 `gui/package.json`、TypeScript/Vite 配置与 `gui/src/`，增量修改 `api.py`、`cli.py` 并新增 `launch.sh`，提供可连接当前 Agent 的本机 GUI
+创建 `gui/package.json`、TypeScript/Vite 配置与 `gui/src/`，增量修改 `api.py`、`cli.py` 并新增 Electron 主进程、受限 preload 与 `launch.sh`，提供可连接当前 Agent 的独立桌面 GUI
 
 **必做**
 
+- Electron 无边框独立窗口、原生窗口操作与单实例聚焦，零参数 `./launch.sh` 打开，不调用浏览器
 - 系统搭建、模板任务、运行调试三个工作区，其中任务画布显示后续阶段占位说明
 - 构建共享 ApiClient、主题、语言、状态卡片、表单基础和 PendingDialog
 - 服务端静态路由不继承整个页面的 Bearer 依赖，管理 API 继续认证，不能为页面方便关闭 P1 认证
@@ -204,11 +205,12 @@ UNKNOWN、停止未确认和资源隔离不允许通过换配置或换台账目�
 
 **最小验证**
 
-- [ ] 连接已有 Agent 不新增进程，身份或配置不匹配时不误连
-- [ ] 会话凭据不进入地址、持久存储、控制台或报告
-- [ ] system 状态与 CLI 一致，断线显示未观测，不能把旧绿色状态当作当前可用
-- [ ] 深浅主题、语言设置和窄屏布局可用，PendingDialog 的操作按钮不被遮挡
-- [ ] 前端类型检查与构建通过，临时浏览器脚本验证会话与路由
+- [x] 仓库内安装 Electron，零参数打开独立窗口，重复打开聚焦已有窗口，关闭窗口保留 Agent
+- [x] 连接已有 Agent 不新增进程，身份或配置不匹配时不误连
+- [x] 会话凭据不进入地址、持久存储、控制台或报告
+- [x] system 状态与 CLI 一致，断线显示未观测，不能把旧绿色状态当作当前可用
+- [x] 深浅主题、语言设置和窄屏布局可用，PendingDialog 的操作按钮不被遮挡
+- [x] 前端类型检查与构建通过，临时浏览器脚本验证会话与路由
 
 **Codex Prompt**
 
@@ -218,6 +220,147 @@ UNKNOWN、停止未确认和资源隔离不允许通过换配置或换台账目�
 新增 agroctl gui open 与 launch.sh，连接已有 Agent，缺少构建或执行器时给出明确原因
 先以 P1 只读接口展示真实状态，等待组件支持模糊背景、转圈与始终可访问的操作区
 验证启动幂等、凭据不持久化、断线和布局，再报告实际命令
+```
+
+**完成记录**
+
+- 新增 `gui/` React、TypeScript、Vite 与普通 CSS 工程，三个工作区仅展示现有管理 API 的真实只读状态，任务画布保留后续阶段说明
+- 共享 ApiClient、主题与语言设置、状态卡片、表单基础和 PendingDialog，401 清理内存会话，断线移除旧状态并显示最后成功观测时间
+- FastAPI 在 `/ui/` 提供无 Bearer 依赖的同源静态资源，现有管理路由继续统一认证，新增受保护的 `/agent/identity` 用于启动握手
+- 新增 `agroctl gui open`、`launch.sh` 和 Agent `--ui-dir`，核对项目来源、配置摘要与状态目录，已有 Agent 复用 PID，空闲端口才启动 Agent
+- 原 P1 完成计划原样归档，GUI 使用方法见 `gui/README.md`，构建默认输出至 `/tmp/agro-gui-dist`
+- 独立代码审查发现观察请求乱序风险，临时浏览器验证先复现旧成功覆盖较新失败，再通过请求代次拒绝过期结果，当前会话的 401 始终清理认证状态
+
+实际验证命令与结果
+
+```bash
+/tmp/agro-p2-1-venv/bin/pytest /tmp/agro-p2-1-verification/test_gui.py -q
+# 26 passed
+npm --prefix gui run typecheck
+# PASS
+npm --prefix gui run build
+# PASS，产物 /tmp/agro-gui-dist
+/tmp/agro-p2-1-venv/bin/python /tmp/agro-p2-1-verification/launch_checks.py
+# PASS，已有 Agent 复用、配置不匹配、错误服务、缺少执行器与构建、自动启动及再次复用
+/tmp/agro-p2-1-venv/bin/python /tmp/agro-p2-1-verification/browser_full.py
+# PASS，真实 Agent 的 7 组会话、状态、断线与布局场景
+/tmp/agro-p2-1-venv/bin/python /tmp/agro-p2-1-verification/observation_order.py
+# PASS，旧成功响应不能覆盖较新的断线状态
+/tmp/agro-p2-1-venv/bin/python /tmp/agro-p2-1-verification/pending_checks.py
+# PASS，错误、玻璃模糊、窄屏取消/停止/关闭、焦点约束与 Escape
+bash -n launch.sh
+git diff --check
+# PASS
+```
+
+验证边界与后续事项
+
+- Python 虚拟环境、验证脚本、组件页面、截图和报告均位于 `/tmp/agro-p2-1-*`，仓库未交付测试源码或运行密钥
+- 浏览器使用实际 P1 Agent 与实际 CLI 状态，断线和 401 故障只由临时浏览器脚本注入，生产页面没有故障控件
+- 自动启动验证只核对 Agent 握手，临时使用 `/usr/bin/true` 满足可执行路径条件，不调用执行器、不启动模块或任务，使用者需指定实际 `agro-bt`
+- 使用自定义资源目录的已有 Agent 时，启动入口也需传入相同 `--ui-dir`
+- 当前弹窗操作区使用按钮，未来加入选择器或多行输入时需扩展焦点约束范围
+- 本步未修改 C++ 或共享契约，未重跑 P1 全量验收或 GUI 采摘闭环，任务与停止操作按后续步骤实施
+
+**入口易用性补充**
+
+- 按用户补充要求新增 `install.sh`，检查工具依赖，创建独立 Python 环境并安装当前包、构建 GUI 和真实 C++ 执行器，不自动 sudo、不启动 Agent 或任务
+- 新增 `scripts/local-paths.sh` 统一默认路径，安装产物位于用户数据目录的项目专属目录，安装信息保存在 `installation.json`
+- `./launch.sh` 和新增的 `./launch` 均支持无参数打开默认番茄模拟工作区，不再要求激活 Python 环境或传入配置、状态目录和执行器路径
+- 原高级参数继续覆盖默认值，原 Agent 身份核对与会话认证保持生效，GUI 配置编辑仍按步骤 2 和步骤 3 实施
+- README 与 GUI 使用说明已更新，安装目录可通过 `AGRO_INSTALL_DIR` 显式覆盖
+
+```bash
+AGRO_INSTALL_DIR=/tmp/agro-local-install npm_config_cache=/tmp/agro-install-npm-cache PIP_CACHE_DIR=/tmp/agro-install-pip-cache PYTHONDONTWRITEBYTECODE=1 ./install.sh
+# PASS，Python 安装、前端类型检查与构建、实际 agro-bt 构建完成
+# 同一安装命令重复执行通过，日志 /tmp/agro-p2-1-verification/install-repeat.log
+PYTHONDONTWRITEBYTECODE=1 /tmp/agro-p2-1-venv/bin/pytest /tmp/agro-p2-1-verification/test_install_launch.py -q
+# 5 passed
+PYTHONDONTWRITEBYTECODE=1 /tmp/agro-p2-1-venv/bin/python /tmp/agro-p2-1-verification/installed_launch.py
+# PASS，零参数入口、launch 别名、任意工作目录、独立解释器、PID 复用、实际浏览器认证、未启动模块或任务
+/tmp/agro-local-install/task-engine/agro-bt --xml task_engine/examples/bridge.xml --registry contracts/examples/bt.registry.json --validate-only --models /tmp/agro-p2-1-verification/installed-node-models.xml
+# valid true
+bash -n install.sh launch.sh launch scripts/local-paths.sh
+git diff --check
+# PASS
+```
+
+独立审查未发现阻塞问题，安装和浏览器证据只保留在 `/tmp`，没有向默认用户数据目录执行安装或交付测试源码
+
+按用户最新要求，安装默认位置已改为仓库内 `.install/`，该目录整体忽略 Git 提交，`./launch.sh` 无参数读取其中的环境、GUI、执行器和状态目录，验证脚本与报告仍留在 `/tmp`
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 /tmp/agro-p2-1-venv/bin/pytest /tmp/agro-p2-1-verification/test_install_launch.py -q
+# 6 passed，包含仓库内默认路径和既有启动行为
+bash -n install.sh launch.sh launch scripts/local-paths.sh
+git check-ignore .install/venv/bin/python .install/gui/index.html .install/state/session.token
+# PASS
+```
+
+**SerialArm-Core 模板修正与重新验收**
+
+- 参考本机 SerialArm-Core 提交 `ce19cb5a26df19e6676048ffa29379c48d55177f` 的 renderer 源码及深浅主题截图，采用琥珀色主题、44px 标题栏、224px 桌面侧栏、分组导航、状态栏和卡片工作台
+- 保留 React、TypeScript 与当前同源 API，新增独立设置页与系统跟随主题，未引入 Electron 窗口控制或机械臂业务桥接
+- 模板授权保存在 `gui/THIRD_PARTY_NOTICES.md`，构建时同步携带授权文件
+- 临时浏览器脚本先复现设置页 401 无法返回连接入口的问题，修复后验证清理内存凭据并返回系统连接页
+- `.install/gui` 已重新构建，实际零参数 `./launch.sh` 打开修正界面，重复启动复用 PID，浏览器认证后观测真实 Agent 状态
+- 独立审查未发现 Critical 或 Important 问题，验证源码、截图与报告均保留在 `/tmp`，仓库不交付测试源码
+
+本轮实际验证命令与结果
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 /tmp/agro-p2-1-venv/bin/pytest /tmp/agro-p2-1-verification/test_gui.py /tmp/agro-p2-1-verification/test_install_launch.py -q
+# 32 passed
+npm --prefix gui run typecheck
+npm --prefix gui run build
+AGRO_GUI_DIST="$PWD/.install/gui" npm --prefix gui run build
+# PASS，临时构建与实际安装资源均更新
+/tmp/agro-p2-1-venv/bin/python /tmp/agro-p2-1-verification/template_visual.py
+/tmp/agro-p2-1-venv/bin/python /tmp/agro-p2-1-verification/theme_system.py
+/tmp/agro-p2-1-venv/bin/python /tmp/agro-p2-1-verification/default_install_gui.py
+# PASS，参考主题和布局、系统主题跟随、320px 英文导航、实际 .install 零参数启动与 PID 复用
+/tmp/agro-p2-1-venv/bin/python /tmp/agro-p2-1-verification/browser_full.py
+/tmp/agro-p2-1-venv/bin/python /tmp/agro-p2-1-verification/observation_order.py
+/tmp/agro-p2-1-venv/bin/python /tmp/agro-p2-1-verification/settings_auth.py
+/tmp/agro-p2-1-venv/bin/python /tmp/agro-p2-1-verification/pending_checks.py
+# PASS，7 组浏览器场景、观察乱序、设置页 401、弹窗操作与焦点约束
+```
+
+**Electron 桌面入口修正与重新验收（2026-10-08）**
+
+以上页面版与样式对齐记录保留为历史，正式入口现已改为 Electron 独立桌面窗口，当前入口为 `./launch.sh`，没有 `launch` 别名
+
+- 新增 `gui/desktop/` 主进程、preload 与安装脚本，采用参考仓库的无边框窗口、可拖动标题栏、最小化、最大化/还原和关闭按钮
+- 锁定 Electron `44.7.0`，显式下载运行时并安装至 `.install/desktop/`，Node.js 最低版本更新为 22.12，生产启动只读取已安装资源，缺失桌面环境时提示重新安装
+- `agroctl gui open` 核对 Agent 后启动独立窗口，默认不调用浏览器，新增 `--desktop-dir` 和诊断选项 `--no-window`，旧 `--no-browser` 作为诊断兼容别名
+- 保留管理 API 认证与内存会话，主进程仅允许本机入口和同源资源，preload 只暴露三个固定窗口操作，启用 contextIsolation 与 sandbox，关闭 Node 集成并拒绝外部导航、弹出窗口和权限请求
+- 同一状态目录与 Agent 入口复用桌面实例并聚焦，窗口偏好和缓存保存在状态目录的 `desktop/`，窗口关闭不终止 Agent
+- 独立审查未发现 Critical 或 Important，发现等待弹窗遮住窗口按钮后，临时真实 Electron 脚本先复现失败，再修正 inert 与覆盖范围并验证通过
+- `.install/` 已完整安装并重复安装通过，真实零参数启动、窗口认证、深浅主题、401 返回连接页、刷新重新认证和关闭后 Agent 存活均验证通过
+- 本轮验证脚本、临时环境与截图只保留在 `/tmp/agro-desktop-verification`，不向仓库交付测试源码，不扩展 P2-2 功能
+
+本轮实际验证命令与结果
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 ./install.sh
+# PASS，Python、GUI、Electron 44.7.0 与实际 agro-bt 安装完成，重复执行同样通过
+npm --prefix gui run typecheck
+AGRO_GUI_DIST="$PWD/.install/gui" npm --prefix gui run build
+# PASS
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src /tmp/agro-desktop-verification/venv/bin/python -m pytest /tmp/agro-desktop-verification/test_desktop.py -q
+# 9 passed，桌面安装前置检查、参数兼容与入口边界
+/tmp/agro-desktop-verification/venv/bin/python /tmp/agro-desktop-verification/launcher_checks.py
+/tmp/agro-desktop-verification/venv/bin/python /tmp/agro-desktop-verification/default_launch.py
+# PASS，真实 Agent PID 复用、管理 API 认证、未启动模块/任务、实际零参数 Electron 进程
+node /tmp/agro-desktop-verification/electron_pending.cjs
+node /tmp/agro-desktop-verification/electron-smoke.cjs
+# PASS，等待期间窗口操作、隔离、认证、主题、401、刷新、窗口按钮、单实例聚焦、外部导航/弹窗拒绝、关闭保留 Agent
+bash -n install.sh launch.sh scripts/local-paths.sh
+node --check gui/desktop/main.cjs
+node --check gui/desktop/preload.cjs
+node --check gui/desktop/install.cjs
+git diff --check
+# PASS
 ```
 
 ### 步骤 2 `[ ]` 实现接入包导入与系统搭建表单
@@ -286,6 +429,7 @@ UNKNOWN、停止未确认和资源隔离不允许通过换配置或换台账目�
 - 在同一部署状态目录保留操作、任务和目标历史，不通过换目录实现配置切换
 - 生效指针仅在新上下文完整创建后发布，失败时恢复可验证旧配置或进入阻塞故障态，报告实际结果
 - 配置应用不自动启动系统或任务，也不自动扩大 allowed_entrypoints
+- 配置应用成功后持久化默认工作区的活动配置引用，无参数 launch 的重连与重启沿用实际应用配置，不退回初始模拟配置或换状态目录绕过阻塞状态
 - 每项显示 apply_policy，P2 对系统配置采用停止态应用，不假装支持已有后端热更新
 - 修正或明确保护 completed_targets 的跨快照连续性，同一设备与模拟场景沿用台账，无法证明身份连续的变更拒绝应用，不开放重置按钮
 - 增加 CLI config validate/diff/apply/status，共享相同服务与 job
@@ -476,7 +620,7 @@ UNKNOWN、停止未确认和资源隔离不允许通过换配置或换台账目�
 
 ## 10 Later Optional
 
-- Electron 或 Tauri 桌面打包
+- 桌面应用跨平台发布包与自动更新
 - 大型资产缩略图、点云与机械臂模型专用视图
 - WebSocket 全量事件推送与复杂高频监控
 - 在线插件市场和自动下载后端
@@ -486,7 +630,7 @@ P3 行为树编辑、P4 真机接入和 P5 远程部署不是可选工程，继�
 
 ## 11 当前立即执行
 
-总执行 Prompt 加步骤 1 Codex Prompt，先完成可连接现有 Agent 的 GUI 入口和共享等待组件
+P2-1 已按 Electron 独立桌面入口重新验收，下一步使用总执行 Prompt 加步骤 2 Codex Prompt 实施静态描述导入与系统草稿，需按用户下一次指令进入该步骤
 
 不要先迁移外部仓库 GUI，也不要因尚未开放任务画布而提前进入 P3
 
@@ -495,7 +639,7 @@ P3 行为树编辑、P4 真机接入和 P5 远程部署不是可选工程，继�
 | 阶段或步骤 | 任务 | 状态 |
 |---|---|---|
 | P1 基线 | 运行核心与模拟闭环 | 已完成，不重复计算 |
-| P2-1 | GUI 入口与界面基础 | [ ] |
+| P2-1 | GUI 入口与界面基础 | [x] |
 | P2-2 | 描述导入与系统搭建 | [ ] |
 | P2-3 | 配置应用与操作追踪 | [ ] |
 | P2-4 | 模板参数与标定资产 | [ ] |
@@ -503,4 +647,4 @@ P3 行为树编辑、P4 真机接入和 P5 远程部署不是可选工程，继�
 | P2-6 | 诊断、记录与报告 | [ ] |
 | 最终验收 | P2 GUI 模拟闭环 | [ ] |
 
-P2 当前 0 / 6，计划生成不算实现完成
+P2 当前 1 / 6，P2-1 已完成 Electron 独立桌面入口与实际安装启动验证
