@@ -91,6 +91,10 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     jobs = management.workers
     assets = AssetService(runtime,store)
     diagnostics = Diagnostics(runtime)
+    from .task_documents import TaskDocuments
+    from .tree_models import TreeCreate,TreeSave,TreePublish,TreeExtract,TreeValidate
+    documents = TaskDocuments(runtime,store,assets)
+    runtime.tasks.documents = documents
 
     async def authenticate(authorization: Annotated[str | None, Header()] = None):
         if authorization is None or not hmac.compare_digest(authorization.encode('utf-8'),
@@ -120,6 +124,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     app.state.assets = assets
     app.state.management = management
     app.state.diagnostics = diagnostics
+    app.state.documents = documents
     api = APIRouter(dependencies=[Depends(authenticate)])
     identity = {'application': 'AT-System-Integration',
                 'source_root': str(Path(__file__).resolve().parents[2]),
@@ -355,6 +360,60 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     @api.post('/tasks/{task_run_id}/cancel', status_code=202)
     async def task_cancel(task_run_id: str):
         return tasks.cancel_task(task_run_id)
+
+    @api.post('/trees/validate')
+    async def tree_preview(body: TreeValidate):
+        return documents.validate_tree(body.document.model_dump(mode='json'),body.policy,body.parameters,engine=False)
+
+    @api.get('/trees/models')
+    async def tree_models():
+        return documents.describe_nodes()
+
+    @api.get('/trees/drafts')
+    async def tree_drafts():
+        return {'drafts':store.list('tree_draft')}
+
+    @api.post('/trees/drafts')
+    async def tree_create(body: TreeCreate):
+        return documents.create(body.xml,body.template)
+
+    @api.get('/trees/drafts/{key}')
+    async def tree_get(key: str):
+        return store.get('tree_draft',key)
+
+    @api.put('/trees/drafts/{key}')
+    async def tree_save(key: str,body: TreeSave):
+        return documents.save(key,body.revision,body.layout_revision,body.document.model_dump(mode='json'),body.layout.model_dump(mode='json'),body.parameters)
+
+    @api.post('/trees/extract')
+    async def tree_extract(body: TreeExtract):
+        return documents.extract_subtree(body.document.model_dump(mode='json'),body.tree_id,body.editor_id,body.subtree_id,{k:v.model_dump(mode='json') for k,v in body.ports.items()} if body.ports is not None else None)
+
+    @api.get('/trees/drafts/{key}/xml')
+    async def tree_xml(key: str):
+        return documents.serialize_xml(store.get('tree_draft',key)['document'])
+
+    @api.post('/trees/drafts/{key}/validate')
+    async def tree_validate(key: str):
+        return documents.validate_draft(key)
+
+    @api.post('/trees/drafts/{key}/publish')
+    async def tree_publish(key: str,body: TreePublish):
+        async with runtime.transition:
+            return documents.publish(key,body.revision,body.base_snapshot_id)
+
+    @api.get('/trees/definitions')
+    async def definitions():
+        return {'definitions':store.list('tree_definition')}
+
+    @api.get('/trees/definitions/{key}')
+    async def definition_get(key: str):
+        return store.get('tree_definition',key)
+
+    @api.post('/trees/definitions/{key}/start',status_code=202)
+    async def definition_start(key: str,body: TaskIntent,owner: str = Depends(authenticate)):
+        async with runtime.transition:
+            return await tasks.start_task(documents.definition_request(key,body.request_id),owner)
 
     app.include_router(api)
     directory = gui_directory(ui_directory)

@@ -314,6 +314,71 @@
       "title": "DescriptionUpload",
       "type": "object"
     },
+    "Diagnostic": {
+      "additionalProperties": false,
+      "properties": {
+        "severity": {
+          "default": "error",
+          "enum": [
+            "error",
+            "warning"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "tree_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tree Id"
+        },
+        "editor_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Editor Id"
+        },
+        "port": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Port"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "reason"
+      ],
+      "title": "Diagnostic",
+      "type": "object"
+    },
     "DraftCreate": {
       "additionalProperties": false,
       "properties": {
@@ -437,6 +502,62 @@
       "type": "object"
     },
     "JsonValue": {},
+    "LayoutDocument": {
+      "additionalProperties": false,
+      "properties": {
+        "revision": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "positions": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "title": "Positions",
+          "type": "object"
+        },
+        "labels": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "type": "string"
+            }
+          },
+          "title": "Labels",
+          "type": "object"
+        },
+        "collapsed": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "title": "Collapsed",
+          "type": "array"
+        },
+        "zoom": {
+          "default": 1,
+          "maximum": 3,
+          "minimum": 0.2,
+          "title": "Zoom",
+          "type": "number"
+        }
+      },
+      "title": "LayoutDocument",
+      "type": "object"
+    },
     "LifecycleIntent": {
       "additionalProperties": false,
       "properties": {
@@ -974,6 +1095,48 @@
       "title": "PlanCreate",
       "type": "object"
     },
+    "PortBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "typed_literal",
+            "blackboard_reference"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/JsonValue",
+          "default": null
+        },
+        "key": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Key"
+        },
+        "type": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Type",
+          "type": "object"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "PortBinding",
+      "type": "object"
+    },
     "ResourceRequirement": {
       "additionalProperties": false,
       "properties": {
@@ -1222,6 +1385,28 @@
       "title": "StopState",
       "type": "string"
     },
+    "SubtreePort": {
+      "additionalProperties": false,
+      "properties": {
+        "direction": {
+          "enum": [
+            "INPUT",
+            "OUTPUT"
+          ],
+          "title": "Direction",
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/TypeDescriptor"
+        }
+      },
+      "required": [
+        "direction",
+        "type"
+      ],
+      "title": "SubtreePort",
+      "type": "object"
+    },
     "SystemConfig": {
       "additionalProperties": false,
       "properties": {
@@ -1314,7 +1499,7 @@
           "type": "object"
         },
         "kind": {
-          "pattern": "^tomato_picker$",
+          "pattern": "^(tomato_picker|simulation_inspection)$",
           "title": "Kind",
           "type": "string"
         },
@@ -1412,6 +1597,316 @@
         "request_id"
       ],
       "title": "TaskStart",
+      "type": "object"
+    },
+    "TreeCreate": {
+      "additionalProperties": false,
+      "properties": {
+        "xml": {
+          "anyOf": [
+            {
+              "maxLength": 1048576,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Xml"
+        },
+        "template": {
+          "default": "simulation_inspection",
+          "enum": [
+            "tomato_picker",
+            "simulation_inspection"
+          ],
+          "title": "Template",
+          "type": "string"
+        }
+      },
+      "title": "TreeCreate",
+      "type": "object"
+    },
+    "TreeDefinition": {
+      "additionalProperties": false,
+      "properties": {
+        "tree_id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$",
+          "title": "Tree Id",
+          "type": "string"
+        },
+        "root_id": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Root Id",
+          "type": "string"
+        },
+        "nodes": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/TreeNode"
+            }
+          },
+          "title": "Nodes",
+          "type": "object"
+        },
+        "ports": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/SubtreePort"
+            }
+          },
+          "title": "Ports",
+          "type": "object"
+        }
+      },
+      "required": [
+        "tree_id",
+        "root_id",
+        "nodes"
+      ],
+      "title": "TreeDefinition",
+      "type": "object"
+    },
+    "TreeDocument": {
+      "additionalProperties": false,
+      "properties": {
+        "main_tree_id": {
+          "title": "Main Tree Id",
+          "type": "string"
+        },
+        "trees": {
+          "additionalProperties": {
+            "$ref": "#/$defs/TreeDefinition"
+          },
+          "title": "Trees",
+          "type": "object"
+        },
+        "revision": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "inputs": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/ParameterDescriptor"
+            }
+          },
+          "title": "Inputs",
+          "type": "object"
+        },
+        "model_digest": {
+          "title": "Model Digest",
+          "type": "string"
+        },
+        "readonly": {
+          "default": false,
+          "title": "Readonly",
+          "type": "boolean"
+        },
+        "original_xml": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Original Xml"
+        },
+        "unsupported": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Unsupported",
+          "type": "array"
+        }
+      },
+      "required": [
+        "main_tree_id",
+        "trees",
+        "model_digest"
+      ],
+      "title": "TreeDocument",
+      "type": "object"
+    },
+    "TreeExtract": {
+      "additionalProperties": false,
+      "properties": {
+        "document": {
+          "$ref": "#/$defs/TreeDocument"
+        },
+        "tree_id": {
+          "title": "Tree Id",
+          "type": "string"
+        },
+        "editor_id": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Editor Id",
+          "type": "string"
+        },
+        "subtree_id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$",
+          "title": "Subtree Id",
+          "type": "string"
+        },
+        "ports": {
+          "anyOf": [
+            {
+              "patternProperties": {
+                "^[a-z][a-z0-9_]*$": {
+                  "$ref": "#/$defs/SubtreePort"
+                }
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ports"
+        }
+      },
+      "required": [
+        "document",
+        "tree_id",
+        "editor_id",
+        "subtree_id"
+      ],
+      "title": "TreeExtract",
+      "type": "object"
+    },
+    "TreeNode": {
+      "additionalProperties": false,
+      "properties": {
+        "editor_id": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Editor Id",
+          "type": "string"
+        },
+        "registration_id": {
+          "title": "Registration Id",
+          "type": "string"
+        },
+        "children": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "title": "Children",
+          "type": "array"
+        },
+        "ports": {
+          "additionalProperties": {
+            "$ref": "#/$defs/PortBinding"
+          },
+          "title": "Ports",
+          "type": "object"
+        },
+        "attributes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Attributes",
+          "type": "object"
+        }
+      },
+      "required": [
+        "editor_id",
+        "registration_id"
+      ],
+      "title": "TreeNode",
+      "type": "object"
+    },
+    "TreePublish": {
+      "additionalProperties": false,
+      "properties": {
+        "revision": {
+          "title": "Revision",
+          "type": "integer"
+        },
+        "base_snapshot_id": {
+          "title": "Base Snapshot Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "revision",
+        "base_snapshot_id"
+      ],
+      "title": "TreePublish",
+      "type": "object"
+    },
+    "TreeSave": {
+      "additionalProperties": false,
+      "properties": {
+        "revision": {
+          "title": "Revision",
+          "type": "integer"
+        },
+        "layout_revision": {
+          "title": "Layout Revision",
+          "type": "integer"
+        },
+        "document": {
+          "$ref": "#/$defs/TreeDocument"
+        },
+        "layout": {
+          "$ref": "#/$defs/LayoutDocument"
+        },
+        "parameters": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          },
+          "title": "Parameters",
+          "type": "object"
+        }
+      },
+      "required": [
+        "revision",
+        "layout_revision",
+        "document",
+        "layout"
+      ],
+      "title": "TreeSave",
+      "type": "object"
+    },
+    "TreeValidate": {
+      "additionalProperties": false,
+      "properties": {
+        "document": {
+          "$ref": "#/$defs/TreeDocument"
+        },
+        "policy": {
+          "default": "simulation_inspection",
+          "enum": [
+            "simulation_inspection",
+            "tomato_picker"
+          ],
+          "title": "Policy",
+          "type": "string"
+        },
+        "parameters": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          },
+          "title": "Parameters",
+          "type": "object"
+        }
+      },
+      "required": [
+        "document"
+      ],
+      "title": "TreeValidate",
       "type": "object"
     },
     "TypeDescriptor": {

@@ -1,6 +1,7 @@
 import type { Language } from './types'
 
 const zh = {
+  editor: '任务设计', editorHint: '编辑控制结构与数据绑定，校验后发布固定定义，运行观察始终使用原任务快照',
   records: '记录与报告',
   minimizeWindow: '最小化窗口', maximizeWindow: '最大化或还原窗口', closeWindow: '关闭应用窗口',
   settings: '设置', openSettings: '打开设置', workflow: '工作流', application: '应用', settingsTitle: '让工作台适合你', settingsHint: '偏好会自动保存，不影响 Agent 持有的任务', followSystem: '跟随系统', layout: '布局', connectionSummary: '连接概览', localOnly: '本机管理', sidebarHint: '系统搭建 · 任务模板 · 运行观察',
@@ -24,6 +25,7 @@ const zh = {
   noObservation: '等待本机 Agent 的新鲜状态', error: '错误', waiting: '等待连接'
 }
 const en: typeof zh = {
+  editor: 'Task design', editorHint: 'Edit control flow and data bindings, validate and publish a frozen definition, then observe the original task snapshot',
   records: 'Records and reports',
   minimizeWindow: 'Minimize window', maximizeWindow: 'Maximize or restore window', closeWindow: 'Close application window',
   settings: 'Settings', openSettings: 'Open settings', workflow: 'WORKFLOW', application: 'APPLICATION', settingsTitle: 'Make the workspace yours', settingsHint: 'Preferences are saved automatically without changing Agent tasks', followSystem: 'System', layout: 'Layout', connectionSummary: 'Connection overview', localOnly: 'Local management', sidebarHint: 'System builder · Task templates · Runtime observation',

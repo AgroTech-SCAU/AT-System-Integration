@@ -57,3 +57,7 @@ SUCCEEDED 必须有结果，FAILED 与 UNKNOWN 必须有原因，UNKNOWN 不允�
 行为树离线注册样例为 `examples/bt.registry.json`，实际执行器说明见 `task_engine/README.md`，列表级 choices 在整个列表上比较，不传给每个位姿
 
 任务请求 TaskStart 与说明 TaskManifest 的模型位于 `src/agro_runtime/tasks.py`，共享 Schema 同时导出任务参数、标定引用和有限候选策略，Agent 冻结 XML、系统、资产和软件来源，实际任务示例见 `examples/tomato_picker/README.md`
+
+行为树编辑契约位于 `src/agro_runtime/tree_models.py`，共享 Schema 导出 TreeDocument、TreeDefinition、TreeNode、PortBinding、LayoutDocument、Diagnostic 及草稿、提取、校验与发布请求，子树端口复用 TypeDescriptor，任务输入复用 ParameterDescriptor
+
+编辑文档只用于转换与校验，标准 BehaviorTree.CPP XML 仍为执行定义，布局与显示名独立保存，发布冻结模型摘要、系统绑定、XML、清单、资产与真实实例映射，直接 API 和 CLI 不能绕过服务端策略或更改已发布参数

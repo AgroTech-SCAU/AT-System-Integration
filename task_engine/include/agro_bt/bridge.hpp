@@ -87,15 +87,20 @@ class Executor {
   BT::BehaviorTreeFactory factory_;
   std::unique_ptr<BT::Tree> tree_;
   BT::NodeStatus status_ = BT::NodeStatus::IDLE;
+  bool instance_ids_;
+  uint64_t event_sequence_ = 0;
+  Json events_ = Json::array();
+  std::vector<BT::TreeNode::StatusChangeSubscriber> subscriptions_;
 
 public:
   Executor(Json registry, std::shared_ptr<Broker>, Json control,
-           std::string task_id);
+           std::string task_id, bool instance_ids = false);
   void load_xml(const std::string &, const Json &blackboard = Json::object());
   BT::NodeStatus tick();
   void halt();
   Json report() const;
   std::string models() const;
+  Json describe() const;
 };
 } // namespace agro_bt
 namespace BT {

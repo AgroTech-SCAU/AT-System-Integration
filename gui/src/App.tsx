@@ -8,6 +8,7 @@ import SystemBuilder from './pages/SystemBuilder'
 import TaskSetup from './pages/TaskSetup'
 import RuntimePage from './pages/Runtime'
 import Records from './pages/Records'
+import TaskEditor from './pages/TaskEditor'
 
 const SETTINGS_KEY = 'agro.gui.appearance'
 function loadSettings(): Settings {
@@ -19,7 +20,7 @@ function loadSettings(): Settings {
 }
 function currentWorkspace(): Workspace {
   const path = location.pathname.split('/')[2]
-  return path === 'templates' || path === 'runtime' || path === 'settings' || path === 'records' ? path : 'system'
+  return path === 'templates' || path === 'runtime' || path === 'settings' || path === 'records' || path === 'editor' ? path : 'system'
 }
 
 export default function App() {
@@ -51,10 +52,13 @@ export default function App() {
     return () => preferred.removeEventListener('change', applyTheme)
   }, [settings, text.brand])
   useEffect(() => {
-    const back = () => setWorkspace(currentWorkspace())
+    const back = () => {
+      if (!window.dispatchEvent(new Event('agro:navigate', { cancelable: true }))) { history.pushState({}, '', `/ui/${workspace}`); return }
+      setWorkspace(currentWorkspace())
+    }
     window.addEventListener('popstate', back)
     return () => window.removeEventListener('popstate', back)
-  }, [])
+  }, [workspace])
   useEffect(() => () => { active.current?.disconnect() }, [])
   useEffect(() => {
     let cancelled = false
@@ -137,6 +141,7 @@ export default function App() {
     setPending(false)
   }
   function disconnect() {
+    if(!window.dispatchEvent(new Event('agro:navigate',{cancelable:true})))return
     active.current?.disconnect()
     active.current = null
     fileRead.current++
@@ -145,9 +150,11 @@ export default function App() {
     setPending(false)
     setBusy(false)
     setError(null)
-    navigate('system')
+    history.pushState(null, '', '/ui/system')
+    setWorkspace('system')
   }
   function navigate(next: Workspace) {
+    if(!window.dispatchEvent(new Event('agro:navigate',{cancelable:true})))return
     history.pushState(null, '', `/ui/${next}`)
     setWorkspace(next)
   }
@@ -170,8 +177,8 @@ export default function App() {
           <div className="hero"><p className="eyebrow">AGROTECH · WORKSPACE</p><h1>AgroTech</h1><p>{text.sidebarHint}</p></div>
           <p className="nav-caption">{text.workflow}</p>
           <nav aria-label={text.workflow}>
-            {(['system', 'templates', 'runtime'] as const).map((item, index) => <button className="nav-item" key={item} aria-current={workspace === item ? 'page' : undefined} onClick={() => navigate(item)}>
-              <Icon name={item} /><span>{text[item]}</span><small aria-hidden="true">0{index + 1}</small>
+            {(['system', 'templates', 'editor', 'runtime'] as const).map((item, index) => <button className="nav-item" key={item} aria-current={workspace === item ? 'page' : undefined} onClick={() => navigate(item)}>
+              <Icon name={item==='editor'?'templates':item} /><span>{text[item]}</span><small aria-hidden="true">0{index + 1}</small>
             </button>)}
           </nav>
           <p className="nav-caption">{text.application}</p>
@@ -183,7 +190,7 @@ export default function App() {
         <section className="content-wrap">
           <div className="top-status"><span className="breadcrumb">{text.subtitle} / {text[workspace]}</span><span className="pill">{text.localOnly}</span><span className="pill"><span className={`dot ${observation ? 'live' : ''}`} />{observation ? text.connected : text.offline}</span></div>
           <main className="content"><div className="page">
-          <div className="page-heading"><div><p className="eyebrow">AGROTECH · WORKSPACE</p><h1>{workspace === 'settings' ? text.settingsTitle : text[workspace]}</h1><p className="page-description">{workspace === 'settings' ? text.settingsHint : text[workspace === 'system' ? 'systemHint' : workspace === 'templates' ? 'templateHint' : 'runtimeHint']}</p></div>
+          <div className="page-heading"><div><p className="eyebrow">AGROTECH · WORKSPACE</p><h1>{workspace === 'settings' ? text.settingsTitle : text[workspace]}</h1><p className="page-description">{workspace === 'settings' ? text.settingsHint : text[workspace === 'system' ? 'systemHint' : workspace === 'templates' ? 'templateHint' : workspace === 'editor' ? 'editorHint' : 'runtimeHint']}</p></div>
             {client && <div className="buttons"><button disabled={busy} onClick={refresh}><Icon name="refresh" />{text.refresh}</button><button onClick={disconnect}>{text.disconnect}</button></div>}
           </div>
           {workspace === 'settings' ? <>
@@ -221,7 +228,8 @@ export default function App() {
           </Panel><Panel title={text.connectionSummary} subtitle={text.localOnly} icon="runtime"><p className="summary-caption">AGENT</p><p className="summary-name">{text.waiting}</p><dl className="kv"><dt>{text.agent}</dt><dd><code>{location.origin}</code></dd><dt>{text.session}</dt><dd>{text.never}</dd></dl><p className="callout">{text.runtimeHint}</p></Panel></div>}
           {client && <>
             {workspace === 'system' && <SystemBuilder client={client} observation={observation} language={settings.language} changed={() => observe(client)} />}
-            {workspace === 'templates' && <TaskSetup client={client} observation={observation} language={settings.language} changed={() => observe(client)} />}
+            {workspace === 'templates' && <TaskSetup client={client} observation={observation} language={settings.language} changed={() => observe(client)} onOpenEditor={() => navigate('editor')} />}
+            {workspace === 'editor' && <TaskEditor client={client} observation={observation} language={settings.language} changed={() => observe(client)} />}
             {workspace === 'runtime' && <RuntimePage client={client} observation={observation} language={settings.language} changed={() => observe(client)} />}
             {workspace === 'records' && <Records client={client} observation={observation} language={settings.language} changed={() => observe(client)} />}
           </>}

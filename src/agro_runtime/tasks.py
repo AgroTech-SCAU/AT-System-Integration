@@ -38,7 +38,7 @@ class AssetReference(ContractModel):
 
 
 class TaskManifest(ContractModel):
-    kind: StrictStr = Field(pattern=r'^tomato_picker$')
+    kind: StrictStr = Field(pattern=r'^(tomato_picker|simulation_inspection)$')
     assets: dict[Identifier, AssetReference]
     parameters: dict[Identifier, ParameterDescriptor] = Field(default_factory=dict)
     max_targets: StrictInt = Field(ge=1, le=8)
@@ -64,8 +64,10 @@ def _source_identity(executable):
 
 
 class TaskManager:
-    def __init__(self, runtime, *, executable=None, endpoint=None, session_secret=None):
+    def __init__(self, runtime, *, executable=None, endpoint=None, session_secret=None, documents=None):
         self.runtime = runtime
+        self.documents = documents
+        self._stage_maps = {}
         self.executable = str(executable or shutil.which('agro-bt') or '')
         self.endpoint = endpoint
         self.session_secret = session_secret
@@ -98,7 +100,7 @@ class TaskManager:
             related=[o for o in operations if o['input'].get('target_id')==pose['target_id'] or o['input'].get('target',{}).get('target_id')==pose['target_id']]
             self.store.target(identity, {'target_id':pose['target_id'], 'outcome':'unknown',
                 'reason':status['error']['reason'], 'observation':pose,
-                'attempts':sum(o['node_id']=='grip' for o in related),
+                'attempts':sum(self._stage(identity,o['node_id'])=='grip' for o in related),
                 'operation_ids':[o['operation_id'] for o in related]})
         targets=self.store.targets(identity)
         status['business_result']={'outcome':'unknown','candidate_count':len(candidates),
@@ -115,6 +117,12 @@ class TaskManager:
                 except ProcessLookupError:
                     pass
 
+    def _stage(self,identity,node_id):
+        if identity not in self._stage_maps:
+            definition=self.store.snapshot(identity).get('definition')
+            self._stage_maps[identity]={n.get('operation_node_id'):n.get('stage') for n in definition['node_mapping']} if definition else self.store.snapshot(identity).get('stage_mapping',{})
+        return self._stage_maps[identity].get(node_id,node_id)
+
     def _operations(self, identity):
         return self.runtime.records.task_operations(identity)
 
@@ -124,6 +132,10 @@ class TaskManager:
         status['targets'] = self.store.targets(identity)
         status['events'] = self.store.events(identity)
         status['snapshot'] = self.store.snapshot(identity)
+        if status['snapshot'].get('definition'):
+            for target in status['targets']:
+                related=[o for o in status['operations'] if o['input'].get('target_id')==target['target_id'] or o['input'].get('target',{}).get('target_id')==target['target_id']]
+                target['attempts']=sum(self._stage(identity,o['node_id'])=='grip' for o in related)
         return status
 
     def list(self):
@@ -133,7 +145,7 @@ class TaskManager:
         completed=set()
         for status in self.store.list():
             snapshot=self.store.snapshot(status['task_run_id'])
-            if snapshot['assets']['camera_to_arm']['content']['device_id']==backend:
+            if snapshot.get('assets',{}).get('camera_to_arm',{}).get('content',{}).get('device_id')==backend:
                 completed.update(t['target_id'] for t in self.store.targets(status['task_run_id']) if t['outcome']=='picked')
         return completed
 
@@ -146,6 +158,17 @@ class TaskManager:
             raise
         if status['state'] != 'RUNNING':
             fail('$.task_run_id', 'task_dispatch_stopped', '任务不再接受新操作')
+        definition=self.store.snapshot(request.task_run_id).get('definition')
+        if definition:
+            mapping=next((n for n in definition['node_mapping'] if n.get('operation_node_id')==request.node_id),None)
+            if not mapping:
+                fail('$.node_id','unpublished_node','操作节点不属于冻结发布定义')
+            node=next((t['nodes'][mapping['editor_id']] for t in definition['document']['trees'].values() if mapping['editor_id'] in t['nodes']),None)
+            registration='Capability_'+request.capability_id.replace('.','_')
+            role=self.runtime.bound.roles.get(node['attributes'].get('role')) if node else None
+            expected_backend=node['attributes'].get('backend_instance') or (role.backend_instance if role else None) if node else None
+            if not node or node['registration_id']!=registration or request.backend_instance!=expected_backend:
+                fail('$.node_id','published_node_mismatch','操作能力与冻结节点绑定不符')
         if request.capability_id == 'job.record_pick':
             self._check_result(request.task_run_id, request.input['result'])
 
@@ -156,7 +179,12 @@ class TaskManager:
             target = op['input'].get('target_id') or op['input'].get('target', {}).get('target_id')
             if target == result.target_id and op['state'] == 'SUCCEEDED':
                 matching.append(op)
-        by_node = {op['node_id']: op for op in matching}
+        definition=self.store.snapshot(identity).get('definition')
+        stage_map={n.get('operation_node_id'):n.get('stage') for n in definition['node_mapping']} if definition else self.store.snapshot(identity).get('stage_mapping',{})
+        by_node = {stage_map.get(op['node_id'],op['node_id']): op for op in matching}
+        expected={'transform':'geometry.transform_pose','reachable':'manipulation.check_reachability','approach':'manipulation.move_to_pose','contact':'manipulation.move_to_pose','grip':'end_effector.grip','retract':'manipulation.move_to_pose','verify_pick':'perception.verify_pick','collection_pose':'manipulation.collection_pose','place':'manipulation.move_to_pose','release':'end_effector.grip','verify_place':'perception.verify_place'}
+        if any(stage in by_node and by_node[stage]['capability_id']!=capability for stage,capability in expected.items()):
+            fail('$.result','stage_capability_mismatch','阶段证据必须来自实际对应能力')
         if result.outcome == 'picked':
             stages = ('transform', 'reachable', 'approach', 'contact', 'grip', 'retract',
                       'verify_pick', 'collection_pose', 'place', 'release', 'verify_place')
@@ -186,10 +214,24 @@ class TaskManager:
             role=node.get('role')
             if role and role not in self.runtime.bound.roles:
                 fail('$.roles.'+role,'missing_template_role','任务模板所需角色未绑定')
+        definition=self.documents.frozen_definition(path) if self.documents else None
+        inspection=manifest.kind=='simulation_inspection'
+        stage_mapping={}
+        if self.documents and not definition and not inspection:
+            document=self.documents.parse_xml(xml)
+            checked=self.documents.validate_tree(document,'tomato_picker',request.parameters,engine=False)
+            if not checked['valid']:
+                fail('$.task_ref','tree_policy_invalid',json.dumps(checked['diagnostics'],ensure_ascii=False))
+            for tree_document in document['trees'].values():
+                for node in tree_document['nodes'].values():
+                    stage=checked['stage_by_editor'].get(node['editor_id'])
+                    if stage and node['attributes'].get('node_id'):stage_mapping[node['attributes']['node_id']]=stage
+        if inspection and not definition:
+            fail('$.task_ref','published_inspection_required','查询任务必须通过统一服务校验并发布')
         loops = list(tree.iter('ForEachTarget'))
-        if len(loops)!=1 or loops[0].get('max_targets')!=str(manifest.max_targets):
+        if not inspection and (len(loops)!=1 or loops[0].get('max_targets')!=str(manifest.max_targets)):
             fail('$.max_targets', 'policy_tree_mismatch', 'XML 候选界限必须与冻结策略一致')
-        if any(node.tag in ('RetryUntilSuccessful', 'Repeat', 'KeepRunningUntilFailure') for node in tree.iter()):
+        if not inspection and any(node.tag in ('RetryUntilSuccessful', 'Repeat', 'KeepRunningUntilFailure') for node in tree.iter()):
             fail('$.task_ref', 'unsafe_retry_policy', '当前模板不允许自动恢复或重复执行物理动作')
         if request.config_ref:
             bound, registry = load_system(request.config_ref)
@@ -199,6 +241,8 @@ class TaskManager:
             if candidate['system'] != current['system'] or candidate['packages'] != current['packages']:
                 fail('$.config_ref', 'snapshot_mismatch', '配置草稿与 Agent 当前冻结系统不一致')
         parameters = _values(request.parameters, manifest.parameters, '$.parameters', parameters=True)
+        if definition and parameters!=_values(definition['parameters'], manifest.parameters, '$.definition.parameters', parameters=True):
+            fail('$.parameters','published_parameters_mismatch','启动参数必须与不可变发布定义一致')
         assets = {}
         for name, reference in manifest.assets.items():
             asset_path = (path.parent / reference.path).resolve()
@@ -218,6 +262,8 @@ class TaskManager:
                 backend=node.get('backend_instance') or (role.backend_instance if role else None)
                 if backend!=reference.device_id:
                     fail(f'$.assets.{name}', 'asset_device_mismatch', '标定设备与实际观测、变换或机械臂角色绑定不匹配')
+            if self.documents and value!=self.documents.assets.builtin['metadata']:
+                fail(f'$.assets.{name}','asset_verification_unsupported','仅接受内置模拟标定的已知验证证据')
             if value.get('verified') is not True or not value.get('source') or not value.get('verification'):
                 fail(f'$.assets.{name}', 'asset_unverified', '资产缺少来源与验证记录')
             translation = value.get('translation_m')
@@ -226,15 +272,17 @@ class TaskManager:
             if reference.source_frame != 'camera' or reference.target_frame != 'arm_base':
                 fail(f'$.assets.{name}', 'asset_frame_mismatch', '当前模板需要 camera 至 arm_base 的标定')
             assets[name] = {'sha256': reference.sha256, 'content': value}
-        if set(assets) != {'camera_to_arm'}:
+        if not inspection and set(assets) != {'camera_to_arm'}:
             fail('$.assets', 'calibration_required', '模板必须提供相机至机械臂标定')
         blackboard = {k: {'type': manifest.parameters[k].type, 'unit': manifest.parameters[k].unit, 'value': v}
                       for k, v in parameters.items()}
-        blackboard['calibration_offset_x'] = {'type': 'number', 'unit': 'm',
-            'value': assets['camera_to_arm']['content']['translation_m'][0]}
+        if not inspection:
+            blackboard['calibration_offset_x'] = {'type': 'number', 'unit': 'm',
+                'value': assets['camera_to_arm']['content']['translation_m'][0]}
         return {'task_ref': str(path), 'xml': xml, 'manifest': manifest.model_dump(mode='json'),
                 'assets': assets, 'parameters': parameters, 'blackboard': blackboard,
-                'system': self.runtime.snapshot(), 'software': _source_identity(self.executable)}
+                'system': self.runtime.snapshot(), 'software': _source_identity(self.executable),
+                **({'definition':definition} if definition else {'stage_mapping':stage_mapping})}
 
     def preflight(self, request):
         return self._freeze(parse(TaskStart, request))
@@ -268,7 +316,7 @@ class TaskManager:
             for path in (registry_path, blackboard_path):
                 path.chmod(0o400)
             validation = await asyncio.create_subprocess_exec(self.executable, '--validate-only',
-                '--xml', str(xml_path), '--registry', str(registry_path), '--blackboard', str(blackboard_path),
+                *(['--instance-ids'] if snapshot.get('definition') else []), '--xml', str(xml_path), '--registry', str(registry_path), '--blackboard', str(blackboard_path),
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
             try:
                 stdout, stderr = await asyncio.wait_for(validation.communicate(), 5)
@@ -299,7 +347,7 @@ class TaskManager:
                 log = (directory / 'executor.log').open('wb')
                 try:
                     process = await asyncio.create_subprocess_exec(self.executable,
-                        '--xml', str(xml_path), '--blackboard', str(blackboard_path), '--registry', str(registry_path),
+                        *(['--instance-ids'] if snapshot.get('definition') else []), '--xml', str(xml_path), '--blackboard', str(blackboard_path), '--registry', str(registry_path),
                         '--endpoint', self.endpoint, '--session-file', str(session_path), '--control-file', str(token_path),
                         '--task-run-id', identity, '--state-file', str(directory / 'state.json'),
                         '--timeout-ms', str(snapshot['manifest']['timeout_ms']),
@@ -377,7 +425,7 @@ class TaskManager:
                 observation = next((p for o in operations if o['capability_id']=='perception.detect_targets' and o['result']
                                     for p in o['result']['output'].get('targets', []) if p['target_id']==target_id), None)
                 self.store.target(identity, {**result, 'observation': observation,
-                    'attempts': sum(o['node_id']=='grip' for o in related),
+                    'attempts': sum(self._stage(identity,o['node_id'])=='grip' for o in related),
                     'operation_ids': [o['operation_id'] for o in related] + [op['operation_id']]})
         return signature
 
@@ -399,7 +447,7 @@ class TaskManager:
                     if report and report != last_report:
                         last_report = report
                         status = self.store.status(identity)
-                        status.update(tree_state=report.get('tree_state', 'IDLE'), nodes=report.get('nodes', []))
+                        status.update(tree_state=report.get('tree_state', 'IDLE'), nodes=report.get('nodes', []), node_events=report.get('node_events',[]),event_sequence=report.get('event_sequence',0))
                         self.store.save(identity, status)
                         self.store.event(identity, {'type': 'tree_changed', 'report': report})
                 await asyncio.sleep(.02)
@@ -423,7 +471,7 @@ class TaskManager:
             unknown = abnormal or any(o['state']=='UNKNOWN' for o in operations) or any(o['snapshot']['state']=='UNKNOWN' for o in report.get('operations', []))
             stopped = all(o['stop_state']!='UNCONFIRMED' and o['state'] not in ('ACCEPTED','RUNNING','CANCELING') for o in operations)
             stopped = stopped and (abnormal or report.get('stop_confirmed', False))
-            status.update(tree_state=report.get('tree_state', 'IDLE'), nodes=report.get('nodes', []), stop_confirmed=stopped)
+            status.update(tree_state=report.get('tree_state', 'IDLE'), nodes=report.get('nodes', []), node_events=report.get('node_events',[]),event_sequence=report.get('event_sequence',0),stop_confirmed=stopped)
             if unknown or not stopped:
                 status['state'] = 'UNKNOWN'
                 status['error'] = next((o['error'] for o in operations if o['state']=='UNKNOWN'), None) or report.get('error') or status['error'] or {'code':'task_outcome_unknown','reason':'任务或设备结果需要核对'}
@@ -436,9 +484,10 @@ class TaskManager:
                 status['error'] = report.get('error') or next((o['error'] for o in reversed(operations) if o['error']), None) or {'code':'tree_failed','reason':'行为树业务条件未满足'}
             targets = self.store.targets(identity)
             candidates = next((o['result']['output']['targets'] for o in operations if o['capability_id']=='perception.detect_targets' and o['state']=='SUCCEEDED'), [])
-            if status['state']=='SUCCEEDED' and len(targets)!=len(candidates):
+            inspection=self.store.snapshot(identity)['manifest']['kind']=='simulation_inspection'
+            if status['state']=='SUCCEEDED' and not inspection and len(targets)!=len(candidates):
                 status.update(state='FAILED', error={'code':'target_results_incomplete','reason':'任务缺少候选目标的确认结果'})
-            status['business_result'] = {'outcome': ('empty_candidates' if not candidates else 'area_completed') if status['state']=='SUCCEEDED' else status['state'].lower(),
+            status['business_result'] = {'outcome': ('inspected' if inspection else 'empty_candidates' if not candidates else 'area_completed') if status['state']=='SUCCEEDED' else status['state'].lower(),
                 'candidate_count':len(candidates), 'picked_count':sum(t['outcome']=='picked' for t in targets),
                 'skipped_count':sum(t['outcome']=='skipped' for t in targets)}
             if status['state']!='SUCCEEDED':
@@ -449,7 +498,7 @@ class TaskManager:
                     related=[o for o in operations if o['input'].get('target_id')==pose['target_id'] or o['input'].get('target',{}).get('target_id')==pose['target_id']]
                     self.store.target(identity, {'target_id':pose['target_id'], 'outcome':'unknown' if unknown else 'failed',
                         'reason':status['error']['reason'] if status['error'] else '任务中止', 'observation':pose,
-                        'attempts':sum(o['node_id']=='grip' for o in related), 'operation_ids':[o['operation_id'] for o in related]})
+                        'attempts':sum(self._stage(identity,o['node_id'])=='grip' for o in related), 'operation_ids':[o['operation_id'] for o in related]})
             self.store.save(identity, status)
             self.store.event(identity, {'type':'task_finished','state':status['state'],'business_result':status['business_result']})
             if stopped and self.runtime.engine.control.mode == RobotMode.AUTO and self.runtime.engine.control._epoch == epoch:

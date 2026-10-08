@@ -146,12 +146,17 @@ class Capability : public BT::StatefulActionNode {
 public:
   Capability(const std::string &name, const BT::NodeConfig &config, Json cap,
              Json system, std::shared_ptr<Broker> broker, Json control,
-             std::string task)
+             std::string task, bool instance_ids)
       : BT::StatefulActionNode(name, config), cap_(std::move(cap)),
         control_(std::move(control)), task_id_(std::move(task)),
         broker_(std::move(broker)) {
     node_id_ = input<std::string>(*this, "node_id");
     require(is_identifier(node_id_), "invalid_node_id");
+    if (instance_ids) {
+      node_id_ = "instance_";
+      for (char c : config.path)
+        node_id_ += (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ? c : '_';
+    }
     auto role = config.input_ports.find("role"),
          backend = config.input_ports.find("backend_instance");
     require((role != config.input_ports.end()) !=
@@ -381,9 +386,9 @@ void validate_value(const Json &spec, const Json &value) {
   }
 }
 Executor::Executor(Json registry, std::shared_ptr<Broker> broker, Json control,
-                   std::string task)
+                   std::string task, bool instance_ids)
     : registry_(std::move(registry)), control_(std::move(control)),
-      task_id_(std::move(task)), broker_(std::move(broker)) {
+      task_id_(std::move(task)), broker_(std::move(broker)), instance_ids_(instance_ids) {
   require(is_identifier(task_id_), "invalid_task_run_id");
   for (auto package = registry_.at("packages").begin();
        package != registry_.at("packages").end(); ++package)
@@ -416,9 +421,9 @@ Executor::Executor(Json registry, std::shared_ptr<Broker> broker, Json control,
                                ports,
                                {}},
           [cap, system, shared, token,
-           task_name](const std::string &name, const BT::NodeConfig &config) {
+           task_name, instance_ids](const std::string &name, const BT::NodeConfig &config) {
             return std::make_unique<Capability>(name, config, cap, system,
-                                                shared, token, task_name);
+                                                shared, token, task_name, instance_ids);
           });
     }
   factory_.registerNodeType<ForEachTarget>("ForEachTarget");
@@ -560,6 +565,18 @@ void Executor::load_xml(const std::string &xml, const Json &initial) {
                   "unbound_input:" + key);
         }
       }
+  subscriptions_.clear();
+  for (const auto &subtree : tree_->subtrees)
+    for (const auto &node : subtree->nodes) {
+      auto ptr = node.get();
+      subscriptions_.push_back(ptr->subscribeToStatusChange(
+          [this, ptr](BT::TimePoint, const BT::TreeNode &, BT::NodeStatus previous, BT::NodeStatus current) {
+            events_.push_back({{"sequence", ++event_sequence_}, {"editor_id", ptr->name()},
+              {"path", ptr->fullPath()}, {"uid", ptr->UID()},
+              {"previous", BT::toStr(previous)}, {"state", BT::toStr(current)}});
+            if (events_.size() > 512) events_.erase(events_.begin());
+          }));
+    }
   std::set<std::string> ids;
   std::map<const void *, Json> specs;
   for (const auto &subtree : tree_->subtrees)
@@ -639,17 +656,56 @@ Json Executor::report() const {
   if (tree_)
     for (const auto &subtree : tree_->subtrees)
       for (const auto &node : subtree->nodes)
-        nodes.push_back({{"name", node->name()},
-                         {"path", node->fullPath()},
-                         {"state", BT::toStr(node->status())}});
+        {
+          Json item = {{"name", node->name()}, {"path", node->fullPath()},
+            {"uid", node->UID()}, {"state", BT::toStr(node->status())}};
+          if (auto *cap = dynamic_cast<Capability *>(node.get()))
+            item["operation_node_id"] = cap->node_id();
+          nodes.push_back(item);
+        }
   return {{"task_run_id", task_id_},
           {"tree_state", BT::toStr(status_)},
           {"dispatch_stopped", broker_->dispatch_stopped()},
           {"stop_confirmed", broker_->settled()},
           {"nodes", nodes},
+          {"event_sequence", event_sequence_}, {"node_events", events_},
           {"operations", broker_->report()}};
 }
 std::string Executor::models() const {
   return BT::writeTreeNodesModelXML(factory_);
 }
 } // namespace agro_bt
+
+namespace agro_bt {
+Json Executor::describe() const {
+  Json nodes = Json::object();
+  const std::set<std::string> editable = {"Sequence", "Fallback", "Parallel", "Inverter",
+    "RetryUntilSuccessful", "Repeat", "ReactiveSequence", "ReactiveFallback",
+    "ForEachTarget", "IsTrue", "HasTarget", "PickSucceeded", "TargetsFromPose",
+    "SelectTarget", "MakePickResult", "SubTree"};
+  for (const auto &entry : factory_.manifests()) {
+    const auto &model = entry.second;
+    Json ports = Json::object();
+    for (const auto &item : model.ports) {
+      const auto &p = item.second;
+      std::string type = "unsupported";
+      if (p.type() == typeid(std::string)) type = "string";
+      else if (p.type() == typeid(bool)) type = "boolean";
+      else if (p.type() == typeid(int) || p.type() == typeid(IntegerQuantity)) type = "integer";
+      else if (p.type() == typeid(Quantity)) type = "number";
+      else if (p.type() == typeid(StampedPose)) type = "stamped_pose";
+      else if (p.type() == typeid(TargetList)) type = "target_list";
+      else if (p.type() == typeid(PickResult)) type = "pick_result";
+      ports[item.first] = {{"direction", BT::toStr(p.direction())}, {"type", type},
+        {"required", p.defaultValue().empty()}, {"default_xml", p.defaultValueString()},
+        {"quantity", p.type() == typeid(Quantity) || p.type() == typeid(IntegerQuantity)}};
+    }
+    int minimum = model.type == BT::NodeType::CONTROL || model.type == BT::NodeType::DECORATOR ? 1 : 0;
+    int maximum = model.type == BT::NodeType::CONTROL ? -1 : minimum;
+    nodes[entry.first] = {{"registration_id", entry.first}, {"category", BT::toStr(model.type)},
+      {"minimum_children", minimum}, {"maximum_children", maximum}, {"ports", ports},
+      {"editable", editable.count(entry.first) != 0 || entry.first.rfind("Capability_", 0) == 0}};
+  }
+  return {{"nodes", nodes}};
+}
+}

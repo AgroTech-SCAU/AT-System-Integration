@@ -73,6 +73,20 @@ def _parser():
     reports.set_defaults(command='report')
     management = groups.add_parser('management').add_subparsers(dest='command', required=True)
     management.add_parser('status').add_argument('identity')
+    trees = groups.add_parser('tree').add_subparsers(dest='command', required=True)
+    for command in ('models','list','definitions'):
+        trees.add_parser(command)
+    tree_new=trees.add_parser('new')
+    tree_new.add_argument('--template',choices=['simulation_inspection','tomato_picker'],default='simulation_inspection')
+    tree_import=trees.add_parser('import')
+    tree_import.add_argument('path',type=Path)
+    tree_import.add_argument('--template',choices=['simulation_inspection','tomato_picker'],default='simulation_inspection')
+    for command in ('validate','xml'):
+        trees.add_parser(command).add_argument('identity')
+    tree_save=trees.add_parser('save');tree_save.add_argument('identity');tree_save.add_argument('path',type=Path)
+    tree_extract=trees.add_parser('extract');tree_extract.add_argument('path',type=Path)
+    tree_publish=trees.add_parser('publish');tree_publish.add_argument('identity');tree_publish.add_argument('--revision',type=int,required=True);tree_publish.add_argument('--base-snapshot',required=True)
+    tree_start=trees.add_parser('start');tree_start.add_argument('identity');tree_start.add_argument('--request-id',required=True)
     agents = groups.add_parser('agent').add_subparsers(dest='command', required=True)
     serve = agents.add_parser('serve')
     serve.add_argument('--config', required=True, type=Path)
@@ -106,7 +120,22 @@ def _remote(args):
     if not secret:
         fail('$.session_file', 'local_session_required', '本地会话文件为空')
     method, body = 'GET', None
-    if args.group == 'config':
+    if args.group == 'tree':
+        command=args.command
+        if command in ('models','definitions'):
+            path='/trees/'+command
+        elif command=='list':path='/trees/drafts'
+        elif command in ('new','import'):
+            method,path,body='POST','/trees/drafts',{'template':args.template}
+            if command=='import':body['xml']=args.path.read_text(encoding='utf-8')
+        elif command=='extract':method,path,body='POST','/trees/extract',read_document(args.path)
+        elif command=='save':method,path,body='PUT','/trees/drafts/'+quote(args.identity,safe=''),read_document(args.path)
+        elif command=='start':method,path,body='POST','/trees/definitions/'+quote(args.identity,safe='')+'/start',{'request_id':args.request_id}
+        else:
+            path='/trees/drafts/'+quote(args.identity,safe='')+'/'+command
+            if command=='validate':method='POST'
+            elif command=='publish':method,body='POST',{'revision':args.revision,'base_snapshot_id':args.base_snapshot}
+    elif args.group == 'config':
         if args.command == 'validate':
             path, method, body = '/config/validate', 'POST', read_document(args.path)
         elif args.command == 'diff':

@@ -228,7 +228,7 @@ class ConfigurationService:
                     fail('$.backends','device_continuity_required','已有目标台账，无法证明设备与场景连续的变更不能应用')
             old_path=old.config_path
             options=getattr(old,'replacement_options',{})
-            task_options={'executable':old.tasks.executable,'endpoint':old.tasks.endpoint,'session_secret':old.tasks.session_secret}
+            task_options={'executable':old.tasks.executable,'endpoint':old.tasks.endpoint,'session_secret':old.tasks.session_secret,'documents':getattr(old.tasks,'documents',None)}
             from .tasks import TaskManager
             candidate=None
             phase('releasing_old')

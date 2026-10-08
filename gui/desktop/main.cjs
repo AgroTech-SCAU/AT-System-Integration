@@ -99,7 +99,23 @@ if (url && dataDirectory) {
           if (!result.canceled && result.filePath) fs.writeFileSync(result.filePath, text, { mode: 0o600 })
         }
       })
-      win.once('ready-to-show', () => win.show())
+      ipcMain.handle('agro:tree-xml', async (event, draftId) => {
+        trusted(event)
+        if (!/^draft_[a-z0-9_]+$/.test(draftId)) throw new Error('树导出请求无效')
+        const secret = await localSession()
+        const response = await fetch(new URL(`/trees/drafts/${draftId}/xml`, url), {
+          headers: { Authorization: `Bearer ${secret}` }, redirect: 'error', signal: AbortSignal.timeout(5000)
+        })
+        if (!response.ok) throw new Error('XML 导出校验失败')
+        const document = await response.json()
+        const result = await dialog.showSaveDialog(win, { defaultPath: draftId + '.xml', filters: [{ name: 'BehaviorTree XML', extensions: ['xml'] }] })
+        if (!result.canceled && result.filePath) fs.writeFileSync(result.filePath, document.xml, { mode: 0o600 })
+      })
+      win.webContents.on('will-prevent-unload', async event => {
+        const result = await dialog.showMessageBox(win,{type:'question',buttons:['继续编辑','放弃修改并关闭'],defaultId:0,cancelId:0,message:'树草稿尚未保存'})
+        if(result.response===1) { event.preventDefault(); win.destroy() }
+      })
+      win.once('ready-to-show' , () => win.show())
       await win.loadURL(url.href)
     }).catch(error => {
       console.error(error.message)

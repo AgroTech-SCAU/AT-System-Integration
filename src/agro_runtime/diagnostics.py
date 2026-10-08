@@ -16,7 +16,7 @@ class Diagnostics:
         if isinstance(value,dict):
             return {k:self.clean(v) for k,v in value.items() if k not in hidden and
                 not any(s in k.lower() for s in ('token','secret','password','authorization','api_key','apikey','passwd')) and
-                not (k=='path' and isinstance(v,str) and not v.startswith('$'))}
+                not (k=='path' and isinstance(v,str) and (v.startswith('/') or re.match(r'^[A-Za-z]:[\\/]',v)))}
         if isinstance(value,list):
             return [self.clean(v) for v in value]
         if isinstance(value,str):

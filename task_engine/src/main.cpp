@@ -42,7 +42,7 @@ int main(int argc, char **argv) {
   bool executing = false;
   try {
     std::map<std::string, std::string> options;
-    bool validate = false;
+    bool validate = false, describe = false, instance_ids = false;
     for (int i = 1; i < argc; i++) {
       std::string key = argv[i];
       if (key == "--help") {
@@ -53,6 +53,8 @@ int main(int argc, char **argv) {
                   "--blackboard path --models path]\n";
         return 0;
       }
+      if (key == "--describe-nodes") { describe = true; validate = true; continue; }
+      if (key == "--instance-ids") { instance_ids = true; continue; }
       if (key == "--validate-only") {
         validate = true;
         continue;
@@ -89,7 +91,8 @@ int main(int argc, char **argv) {
                                                     "validation_only"));
     executor = std::make_unique<Executor>(
         registry, broker, control,
-        options.count("--task-run-id") ? options["--task-run-id"] : "task_bt");
+        options.count("--task-run-id") ? options["--task-run-id"] : "task_bt", instance_ids);
+    if (describe) { output << executor->describe().dump() << '\n'; return 0; }
     executor->load_xml(text(options.at("--xml")),
                        options.count("--blackboard")
                            ? read_json(options["--blackboard"])
@@ -99,7 +102,9 @@ int main(int argc, char **argv) {
       stream << executor->models();
     }
     if (validate) {
-      output << Json{{"valid", true}}.dump() << '\n';
+      auto checked = executor->report();
+      checked["valid"] = true;
+      output << checked.dump() << '\n';
       return 0;
     }
     executing = true;

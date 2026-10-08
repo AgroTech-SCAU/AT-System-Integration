@@ -117,3 +117,39 @@ npm --prefix gui run dev
 ```
 
 开发服务器只监听 `127.0.0.1`，访问其 `/ui/` 页面，管理查询代理至 `http://127.0.0.1:8765`，仍需 Agent 的会话凭据
+
+## 行为树任务设计
+
+打开「任务设计」，选择「新建查询树」或「从番茄模板创建」，也可导入支持范围内的 XML，内置模板始终保留
+
+左侧节点库来自实际 C++ 注册信息，中间画布显示控制结构与子节点执行序号，右侧编辑角色、常量、单位和 Blackboard 变量，选中节点后显示相关数据绑定
+
+拖动只调整布局，执行顺序通过上移、下移或 Alt 加方向键调整，控制父节点选择用于重挂，复制片段生成新标识并重写片段内部输出引用，撤销和重做同时恢复结构与绑定
+
+选择完整片段后预览子树端口，核对跨边界输入输出，再确认提取，子树定义可独立编辑，调用节点使用显式端口映射，重复调用具有独立实例路径
+
+保存后点击「校验树」，通过后「发布定义」，发布不会启动系统，在「运行调试」启动系统后可「开始发布任务」，已经发布的定义可以重新选择，未发布的修改不会进入旧定义
+
+「导出 XML」通过桌面保存对话框保存实际编译结果，布局、显示标签和折叠状态独立保存，不支持的 XML 保留原内容并只读，包含脚本、全局引用、混合自动重映射或未支持的子树默认值时禁止覆盖和发布
+
+任务输入和子树端口可在声明 JSON 面板编辑，任务输入沿用标量 ParameterDescriptor，子树端口使用共享 TypeDescriptor 契约，数值声明单位，位姿端口声明坐标系、时间域和有效期，默认参数保持缺省语义，输出只能绑定变量
+
+「查看运行树」读取原 task_run_id 的冻结定义，子树调用实例选择器区分重复调用，点击节点查看实际操作、输入、反馈、错误和状态事件，halt 后区分当前 IDLE 与上次实际状态，草稿编辑不会改变运行快照
+
+断线时保留任务 ID 和陈旧提示，恢复后继续查询原任务，节点 halt 或树 IDLE 不代表设备已经停止，UNKNOWN 和停止未确认持续保留在运行视图与报告中
+
+当前新建任务使用 simulation_inspection 策略，只开放已知模拟只读能力，番茄任务保留原有有限目标、标定、动作顺序、采摘放置验证与台账策略，支持布局、绑定表单和保留原执行语义的子树复用，不开放任意物理动作重排、自动恢复或真机执行
+
+GUI 与 CLI 使用相同校验、发布与启动服务
+
+```bash
+.install/venv/bin/agroctl --endpoint http://127.0.0.1:8765 --session-file .install/state/session.token tree models
+.install/venv/bin/agroctl --endpoint http://127.0.0.1:8765 --session-file .install/state/session.token tree new
+.install/venv/bin/agroctl --endpoint http://127.0.0.1:8765 --session-file .install/state/session.token tree import /tmp/inspection.xml
+.install/venv/bin/agroctl --endpoint http://127.0.0.1:8765 --session-file .install/state/session.token tree validate DRAFT_ID
+.install/venv/bin/agroctl --endpoint http://127.0.0.1:8765 --session-file .install/state/session.token tree publish DRAFT_ID --revision REVISION --base-snapshot SNAPSHOT_ID
+.install/venv/bin/agroctl --endpoint http://127.0.0.1:8765 --session-file .install/state/session.token tree definitions
+.install/venv/bin/agroctl --endpoint http://127.0.0.1:8765 --session-file .install/state/session.token tree start DEFINITION_ID --request-id REQUEST_ID
+```
+
+保存命令 `tree save DRAFT_ID /tmp/save.json` 接受 revision、layout_revision、document、layout 和 parameters，提取命令 `tree extract /tmp/extract.json` 先返回端口提案，携带确认后的 ports 再提交才提取

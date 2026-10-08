@@ -58,3 +58,17 @@ halt 立即停止后续派发并移交取消追踪，停止超时独立为 2000 
 测试源码只在工作区外临时目录，CMake 的 `AGRO_CPP_TEST_SOURCE` 和 `AGRO_CPP_TEST_REGISTRY` 用于挂接临时验证，不随仓库交付测试文件
 
 任务模板扩展 ForEachTarget 与 IsTrue，前者在最多 8 个互异目标上执行子树，空列表成功结束，子树失败立即中止，实时节点与操作报告通过原子替换状态文件交给 Agent
+
+## 编辑模型与实例观察
+
+`--describe-nodes` 搭配 `--registry` 导出实际工厂注册的 JSON 节点模型，包含端口方向、类型、缺省值、子节点数量及当前允许编辑的节点，描述与静态校验不调用能力或获取控制权
+
+```bash
+.install/task-engine/agro-bt --registry contracts/examples/bt.registry.json --describe-nodes
+```
+
+发布服务使用 `--validate-only --instance-ids` 对标准 XML 和初始 Blackboard 做实际加载校验，返回真实节点路径、UID 与能力操作标识，执行同样使用 `--instance-ids`，通过调用路径区分同一子树的不同实例
+
+默认执行保留原 node_id 语义，启用实例标识时能力操作标识由实际调用路径生成，用户标签不作为可信业务阶段，阶段映射由服务端验证结构后生成并冻结
+
+执行报告包含单调递增 event_sequence 和最近 512 条 node_events，每条记录实际节点路径、前后状态与编辑标识，完整节点状态与事件共同用于重连观察，设备停止继续使用独立 stop_confirmed
