@@ -10,7 +10,7 @@ export default function SystemBuilder({ client, observation, language, changed, 
     const [instance, setInstance] = useState('backend'), [packageId, setPackageId] = useState(''), [roleName, setRoleName] = useState('')
     const op = useOperation(language)
     async function load() { const [a, b] = await Promise.all([client.request<Json>('/catalog'), client.request<Json>('/config/drafts')]); setCatalog(a.packages); setDrafts(b.drafts.filter((item: Json) => item.content?.system_id === robotSystem.content.system_id)) }
-    useEffect(() => { let active = true; Promise.all([client.request<Json>('/catalog'), client.request<Json>('/config/drafts'), client.request<Json>('/config/status')]).then(([a, b, current]) => { if (!active) return; setCatalog(a.packages); setDrafts(b.drafts.filter((item: Json) => item.content?.system_id === robotSystem.content.system_id)); setContent(structuredClone(robotSystem.content)); setDraft(null) }).catch(e => { if (active) op.setError(e) }); return () => { active = false } }, [client])
+    useEffect(() => { let active = true; Promise.all([client.request<Json>('/catalog'), client.request<Json>('/config/drafts')]).then(([a, b]) => { if (!active) return; const existing=b.drafts.filter((item: Json) => item.content?.system_id === robotSystem.content.system_id);setCatalog(a.packages); setDrafts(existing);const last=existing.at(-1);setContent(structuredClone(last?.content||robotSystem.content));setDraft(last||null) }).catch(e => { if (active) op.setError(e) }); return () => { active = false } }, [client,robotSystem.id])
     const select = (next: Json) => { setDraft(next); setContent(structuredClone(next.content)); setRuntimeText({}); setDiff(null) }
     const update = (next: Json) => { setContent(next); setRuntimeText(previous => { const next = { ...previous }; delete next.raw; return next }); setDiff(null) }
     async function create() { const status = await client.request<Json>('/config/status'); const next = await client.request<Json>('/config/drafts', 'POST', { base_snapshot_id: status.snapshot_id, content: robotSystem.content }); select(next); await load(); guideCompleted('config:draft-created') }
@@ -34,6 +34,29 @@ export default function SystemBuilder({ client, observation, language, changed, 
         { id: 'other', name: '其他系统', description: '用户自定义能力与设备', prefix: [] },
     ]
     const roleGroup = (capability: string) => groups.find(group => group.prefix.some(prefix => capability.startsWith(prefix)))?.id || 'other'
+    async function importPackage(file: File) {
+        if (file.size > 2097152) throw new Error('接入描述不能超过 2 MiB')
+        const entry = await client.request<Json>('/catalog', 'POST', { filename: file.name, content: await file.text() })
+        await load()
+        setPackageId(entry.id)
+    }
+    function addBackend() {
+        if (!content || !draft) return
+        const name = instance.trim()
+        const entry = catalog.find(p => p.id === packageId)
+        if (!/^[a-z][a-z0-9_]*$/.test(name)) { op.setError({ errors: [{ path: '$.instance_id', code: 'invalid_id', reason: '实例名仅使用小写字母、数字和下划线，并以字母开头' }] }); return }
+        if (backends.some(b => b.instance_id === name)) { op.setError({ errors: [{ path: '$.instance_id', code: 'duplicate_id', reason: '已存在同名后端，请修改实例名' }] }); return }
+        if (!entry) return
+        const nextBackends = [...backends, { instance_id: name, package_id: packageId, config: {} }]
+        // A safe, explicit default role for every declared capability. Users may rename/remove it.
+        const extraRoles: Json = {}
+        for (const cap of entry.description.capabilities as Json[]) {
+            const role = `${name}_${String(cap.capability_id).replace(/[^a-z0-9_]/g, '_')}`
+            if (!roles[role]) extraRoles[role] = { backend_instance: name, capability_id: cap.capability_id, input: cap.input, output: cap.output, parameters: {} }
+        }
+        update({ ...content, backends: nextBackends, packages: packages(nextBackends), roles: { ...roles, ...extraRoles }, required_roles: Array.from(new Set([...requiredRoles, ...Object.keys(extraRoles)])) })
+        setInstance('backend_' + (nextBackends.length + 1))
+    }
     function bindRole(role: string, instanceId: string) {
         const binding = roles[role], backend = backends.find(b => b.instance_id === instanceId)
         const cap = catalog.find(p => p.id === backend?.package_id)?.description.capabilities.find((c: Json) => c.capability_id === binding?.capability_id)
@@ -67,9 +90,11 @@ export default function SystemBuilder({ client, observation, language, changed, 
                 </section>
             })}
         </div>
-        <div data-guide="system-start-config"><Panel title="保存系统配置" subtitle="修改后保存并校验；停止系统后应用" icon="system">
-            <div className="buttons"><button data-guide="system-create-draft" className="primary" disabled={op.busy} onClick={() => void op.run('新建配置', create)}>{draft ? '重新创建配置' : '开始配置'}</button>{backends.length === 1 && backends[0]?.package_id === 'tomato_simulator' && <button disabled={op.busy || !draft} onClick={splitMock}>将统一模拟后端拆为四类系统</button>}</div>
-            <p className="muted">{draft ? `正在编辑 ${content?.system_id || '机器人'} 的配置，修改后请保存并校验` : '点击“开始配置”或选择已有草稿'}</p>
+        <div data-guide="system-start-config"><Panel title="接入新的功能后端" subtitle="先导入能力描述，再选择后端实例，最后保存应用" icon="system">
+            <div className="integration-steps"><span className={draft?'complete':''}>1. {draft?'编辑已就绪':'开始编辑'}</span><span className={backends.length?'complete':''}>2. 添加后端</span><span className={robotSystem.configured?'complete':''}>3. 保存并应用</span></div>
+            <div className="buttons"><button data-guide="system-create-draft" className="primary" disabled={op.busy} onClick={() => {if(draft&&!window.confirm('新建配置将从已应用工程恢复，不会保留当前未保存的修改，确认继续？'))return;void op.run('开始系统配置', create)}}>{draft ? '从当前系统新建配置' : '开始配置'}</button><label className="file-button">导入接入描述<input type="file" accept=".yaml,.yml,.json" aria-label="导入接入描述" disabled={op.busy} onChange={e=>{const file=e.target.files?.[0];e.target.value='';if(file)void op.run('检查接入描述',async()=>importPackage(file))}}/></label>{backends.length === 1 && backends[0]?.package_id === 'tomato_simulator' && <button disabled={op.busy || !draft} onClick={splitMock}>拆分示例模拟后端</button>}</div>
+            <p className="muted">{draft ? '当前正在编辑配置草稿；修改不会立即作用到设备，保存并应用后才生效' : '从当前系统开始编辑；也可以先导入 package.yaml 再添加实例'}</p>
+            <p className="muted">接入描述声明能力与参数，导入文件不会自动安装 ROS 驱动、加载未知代码或启动真实硬件；真机仍需实现并部署对应适配器</p>
             {backends.length === 1 && backends[0]?.package_id === 'tomato_simulator' && <p className="callout">可拆分为视觉、导航、机械臂、电控四个模拟实例；拆分后请保存、校验并应用</p>}
             {draft && <div className="buttons"><a href="#system-config" className="file-button">编辑系统参数 ↓</a></div>}
         </Panel></div>
@@ -93,11 +118,10 @@ export default function SystemBuilder({ client, observation, language, changed, 
                         <Parameters specs={entry?.description.config || {}} value={backend.config || {}} onChange={config => update({ ...content, backends: backends.map((b: Json, i: number) => i === index ? { ...b, config } : b) })} />
                         <p className="muted">进程管理者 {backend.runtime?.manager || entry?.description.runtime.manager} · 目标 {backend.runtime?.target || entry?.description.runtime.target}</p>
                         <details><summary>运行描述（应用后才生效）</summary><Field label="运行描述 JSON"><textarea rows={5} value={runtimeText[String(index)] ?? JSON.stringify(backend.runtime || entry?.description.runtime, null, 2)} onChange={e => setRuntimeText({ ...runtimeText, [index]: e.target.value })} onBlur={e => { try { const runtime = JSON.parse(e.target.value); update({ ...content, backends: backends.map((b: Json, i: number) => i === index ? { ...b, runtime } : b) }) } catch { op.setError({ errors: [{ path: `$.backends[${index}].runtime`, code: 'invalid_json', reason: '运行描述不是合法 JSON' }] }) } }} /></Field></details>
-                        <button disabled={op.busy} onClick={() => { const nextBackends = backends.filter((_: Json, i: number) => i !== index); setRuntimeText({}); update({ ...content, backends: nextBackends, packages: packages(nextBackends) }) }}>删除后端实例</button>
+                        <button disabled={op.busy} onClick={() => { const nextBackends = backends.filter((_: Json, i: number) => i !== index);const nextRoles=Object.fromEntries(Object.entries(roles).filter(([,b]:[string,any])=>b.backend_instance!==backend.instance_id));setRuntimeText({}); update({ ...content, backends: nextBackends, packages: packages(nextBackends), roles: nextRoles, required_roles: requiredRoles.filter(name=>name in nextRoles) }) }}>删除后端及其绑定</button>
                     </div>
                 })}
-                <div data-guide="system-backend-editor" className="parameter-grid"><Field label="新实例标识"><input value={instance} onChange={e => setInstance(e.target.value)} /></Field><Field label="接入包"><select value={packageId} onChange={e => setPackageId(e.target.value)}><option value="">选择目录描述</option>{catalog.map(p => <option key={p.id}>{p.id}</option>)}</select></Field></div>
-                <button data-guide="system-add-backend" disabled={!packageId || op.busy} onClick={() => { const nextBackends = [...backends, { instance_id: instance, package_id: packageId, config: {} }]; update({ ...content, backends: nextBackends, packages: packages(nextBackends) }) }}>添加后端实例</button>
+                <div className="integration-add" data-guide="system-backend-editor"><h3>添加后端</h3><div className="parameter-grid"><Field label="实例名称"><input value={instance} onChange={e => setInstance(e.target.value)} placeholder="例如 camera_front" /></Field><Field label="接入包"><select value={packageId} onChange={e => setPackageId(e.target.value)}><option value="">选择已有接入描述</option>{catalog.map(p => <option key={p.id} value={p.id}>{p.id} · {p.description.capabilities.length} 项能力</option>)}</select></Field></div><p className="muted">能力角色将根据所选接入描述自动生成，后续仍可在高级设置中调整</p><button data-guide="system-add-backend" className="primary" disabled={!packageId || op.busy} onClick={addBackend}>添加后端与能力</button></div>
                 <details data-guide="system-advanced-roles" className="system-advanced"><summary>高级：完整角色绑定与参数</summary><h3>角色绑定</h3>
                     {Object.entries(roles).map(([role, binding]: [string, any]) => <div className="role-editor" key={role}><Field label={role}><select value={`${binding.backend_instance}|${binding.capability_id}`} onChange={e => { const [backend_instance, capability_id] = e.target.value.split('|'); const backend = backends.find((b: Json) => b.instance_id === backend_instance); const cap = catalog.find(p => p.id === backend?.package_id)?.description.capabilities.find((c: Json) => c.capability_id === capability_id); update({ ...content, roles: { ...content.roles, [role]: { backend_instance, capability_id, input: cap.input, output: cap.output, parameters: {} } } }) }}>
                         <option value={`${binding.backend_instance}|${binding.capability_id}`}>{binding.backend_instance} · {binding.capability_id}</option>{backends.flatMap((b: Json) => { const entry = catalog.find(p => p.id === b.package_id); return (entry?.description.capabilities || []).filter((c: Json) => c.capability_id !== binding.capability_id || b.instance_id !== binding.backend_instance).map((c: Json) => <option key={b.instance_id + c.capability_id} value={`${b.instance_id}|${c.capability_id}`} disabled={JSON.stringify(c.input) !== JSON.stringify(binding.input) || JSON.stringify(c.output) !== JSON.stringify(binding.output)}>{b.instance_id} · {c.capability_id}</option>) })}

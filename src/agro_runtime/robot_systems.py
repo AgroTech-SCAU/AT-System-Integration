@@ -539,6 +539,15 @@ class RobotSystems:
         )
         return self.listing()
 
+    def deselect(self):
+        """Close the selected workspace, never bypassing physical stop confirmation."""
+        self.require_stopped()
+        with self.store.db:
+            self.store.db.execute(
+                "DELETE FROM documents WHERE kind='robot_selection' AND id='current'"
+            )
+        return self.listing()
+
     def set_configuration(self, key, revision, content):
         record = self.store.get("robot_system", key)
         if record["revision"] != revision:

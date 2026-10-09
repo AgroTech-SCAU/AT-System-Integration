@@ -15,7 +15,7 @@ import { courseSteps, courseTitle, guideCompleted, type CourseId, type GuideSess
 
 const SETTINGS_KEY = 'agro.gui.appearance'
 const GUIDE_PROMPT_KEY = 'agro.gui.guide.autoPrompt'
-function guidePromptEnabled(){ try{return localStorage.getItem(GUIDE_PROMPT_KEY)!=='off'}catch{return true} }
+function guidePromptEnabled(){ try{return localStorage.getItem(GUIDE_PROMPT_KEY)==='on'}catch{return false} }
 function loadSettings(): Settings {
   const defaults: Settings = { theme: 'system', language: 'zh', compact: false }
   try {
@@ -204,6 +204,7 @@ export default function App() {
   }
   const selectedRobot=robotDirectory?.systems.find(item=>item.id===robotDirectory.selected_id)
   const canUseRobot=Boolean(selectedRobot&&robotDirectory?.active)
+  const canEditRobot=Boolean(selectedRobot)
   function startGuide(course: CourseId, afterCreation = false) {
     setGuideDialog(null)
     const session: GuideSession = { course, fromCreation: afterCreation, index: 0 }
@@ -308,14 +309,14 @@ export default function App() {
             <span className="endpoint">{selectedRobot?.name || "机器人系统工作台"}</span>
           </div>
           {error && <p className="error" role="alert">{text[error]}</p>}
-          {workspace === 'overview' && <><RobotLibrary client={client} directory={robotDirectory} onRefresh={refreshProjects} onReconnect={reconnectLocal} onNavigate={navigate} onCreated={robotCreated}/>{client&&canUseRobot&&observation&&<Overview observation={observation} language={settings.language} navigate={navigate} robotName={selectedRobot?.name||''}/>}</> }
+           {workspace === 'overview' && <><RobotLibrary client={client} directory={robotDirectory} onRefresh={refreshProjects} onReconnect={reconnectLocal} onNavigate={navigate} onCreated={robotCreated}/>{client&&canUseRobot&&observation&&<Overview observation={observation} language={settings.language} navigate={navigate} robotName={selectedRobot?.name||''}/>}</> }
           {client && <>
             {workspace === 'system' && selectedRobot && <SystemBuilder key={selectedRobot.id} client={client} observation={canUseRobot?observation:null} language={settings.language} changed={refreshProjects} robotSystem={selectedRobot} />}
-            {workspace === 'editor' && canUseRobot && <TaskWorkspace client={client} observation={observation} language={settings.language} changed={() => observe(client)} robotExampleId={selectedRobot?.example_id} />}
-            {workspace === 'runtime' && canUseRobot && <RuntimePage client={client} observation={observation} language={settings.language} changed={() => observe(client)} />}
+             {workspace === 'editor' && canEditRobot && <><div className="workspace-context"><span>当前工程 <strong>{selectedRobot?.name}</strong></span>{!canUseRobot && <span className="workspace-context-notice">离线编辑：可以设计任务，配置应用后才能发布与执行</span>}<button onClick={()=>navigate('system')}>系统接入 →</button></div><TaskWorkspace key={selectedRobot?.id} client={client} observation={canUseRobot?observation:null} language={settings.language} changed={() => observe(client)} robotExampleId={selectedRobot?.example_id} configured={canUseRobot} onNavigate={navigate} /></>}
+             {workspace === 'runtime' && canUseRobot && <RuntimePage client={client} observation={observation} language={settings.language} changed={() => observe(client)} onNavigate={navigate} />}
             {workspace === 'records' && canUseRobot && <Records client={client} observation={observation} language={settings.language} changed={() => observe(client)} />}
           </>}
-          {workspace!=='overview' && (!client||!selectedRobot||(!canUseRobot&&workspace!=='system')) && <div className="library-empty-workspace"><Icon name="system"/><h2>{!selectedRobot?'请先选择机器人系统':'当前系统尚未应用'}</h2><p>{!client?'请到总览选择机器人系统':'请到总览选择并加载机器人系统'}</p><button className="primary" onClick={()=>navigate('overview')}>返回总览 →</button></div>}
+           {workspace!=='overview' && (!client||!selectedRobot||(!canUseRobot&&workspace!=='system'&&workspace!=='editor')) && <div className="library-empty-workspace"><Icon name="system"/><h2>{!selectedRobot?'请先选择机器人系统':'当前系统尚未应用'}</h2><p>{!client?'请到总览选择机器人系统':'请先在系统搭建中应用配置，运行操作才能启用'}</p><div className="buttons"><button className="primary" onClick={()=>navigate(selectedRobot?'system':'overview')}>{selectedRobot?'前往系统搭建':'返回总览'} →</button>{selectedRobot&&<button onClick={()=>navigate('editor')}>先设计任务</button>}</div></div>}
           </>}
           </div></main>
         </section>

@@ -185,3 +185,39 @@ body:has(.window-controls) .pending-backdrop{top:44px}body:has(.window-controls)
 .task-input-title{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px}
 .task-input-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:12px}
 .task-input-fields input,.task-input-fields select{min-width:0;width:100%}
+
+/* Workspace UI: one layout system instead of per-page last-minute column overrides. */
+.page{max-width:min(100%,1480px)}
+.project-continue,.runtime-dashboard,.editor-intro{display:flex;align-items:center;justify-content:space-between;gap:18px;min-width:0;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px 24px;margin-bottom:18px}
+.project-continue h3,.runtime-dashboard h2{font-size:20px;margin:7px 0 4px}
+.project-continue p,.runtime-dashboard p,.editor-intro p{color:var(--muted);line-height:1.6;font-size:12px;margin:6px 0 0}
+.project-continue-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;align-items:center;max-width:530px}
+.workspace-context{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:12px 16px;margin-bottom:16px;background:var(--subtle);border:1px solid var(--line);border-radius:11px;font-size:12px}
+.workspace-context button{margin-left:auto}.workspace-context-notice{color:var(--accent);font-size:11px}
+.integration-steps,.editor-stage{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 18px}
+.integration-steps span,.editor-stage span{border:1px solid var(--line);background:var(--subtle);border-radius:100px;padding:6px 11px;color:var(--muted);font-size:11px}
+.integration-steps span.complete{border-color:var(--green);color:var(--green)}
+.integration-add{background:var(--subtle);border:1px solid var(--line);border-radius:12px;padding:18px;margin:16px 0 10px;min-width:0}
+.integration-add h3{margin:0 0 15px}.integration-add p{line-height:1.6}
+.editor-intro{background:var(--subtle)}.editor-intro strong{font-size:16px}
+.task-start-empty{margin:14px 0;padding:20px;background:var(--subtle);border-radius:12px;border:1px dashed var(--line)}.task-start-empty p{font-size:12px;color:var(--muted);line-height:1.7}
+.task-workspace-switch{display:flex;align-items:center;flex-wrap:wrap;gap:8px}.task-workspace-switch .task-run-shortcut{margin-left:auto}
+.node-palette{display:grid;grid-template-columns:repeat(auto-fit,minmax(105px,1fr));gap:7px;max-height:290px;overflow-y:auto;padding:4px 1px 5px;align-content:start}
+.node-palette button{min-width:0;min-height:54px;display:flex;flex-direction:column;align-items:flex-start;gap:3px;text-align:left;padding:9px 10px;border-radius:9px;cursor:grab}
+.node-palette button:active{cursor:grabbing}.node-palette button.picked{border-color:var(--accent);background:var(--tint)}.node-palette button span{max-width:100%;overflow-wrap:anywhere;font-size:11px}.node-palette button small{color:var(--dim);font-size:10px}
+.tree-editor-grid{display:grid;grid-template-columns:minmax(220px,270px) minmax(0,1fr);gap:16px;align-items:start}
+.tree-editor-grid>div{min-width:0}.tree-editor-grid>div:last-child{grid-column:1/-1}
+.tree-editor-grid .panel{min-width:0}.tree-canvas{min-width:0;overscroll-behavior:contain}
+.tree-port{overflow-wrap:anywhere}.tree-port .field{min-width:0}
+.runtime-dashboard .runtime-state{display:block;text-align:right;font-weight:650;margin-bottom:10px;color:var(--accent)}
+.readiness-heading{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center}.readiness-heading p{margin:0}
+.readiness-ok{color:var(--green)}.readiness-issue{color:var(--accent);overflow-wrap:anywhere}
+@media(min-width:1520px){.tree-editor-grid{grid-template-columns:minmax(210px,255px) minmax(420px,1fr) minmax(285px,340px)}.tree-editor-grid>div:last-child{grid-column:auto}.tree-canvas{min-height:450px}}
+@media(max-width:1250px){.library-columns-three{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.library-columns-three .library-pane:last-child{grid-column:1/-1}}
+@media(max-width:920px){.library-columns-three{grid-template-columns:minmax(0,1fr)}.library-columns-three .library-pane:last-child{grid-column:auto}.project-continue,.runtime-dashboard,.editor-intro{align-items:flex-start;flex-direction:column}.project-continue-actions{justify-content:flex-start;max-width:100%}}
+@media(max-width:760px){.tree-editor-grid{display:flex;flex-direction:column}.tree-editor-grid>div{width:100%}.node-palette{grid-template-columns:repeat(auto-fit,minmax(125px,1fr))}.task-workspace-switch .task-run-shortcut{margin-left:0}}
+@media(max-width:520px){.project-continue,.runtime-dashboard,.editor-intro{padding:15px}.project-continue-actions button{flex:1}.workspace-context button{margin-left:0}.runtime-dashboard .runtime-state{text-align:left}}
+/* Guide mode must not force a fixed-width editor underneath the help rail. */
+body.guide-rail-active .tree-editor-grid{grid-template-columns:minmax(190px,240px) minmax(0,1fr)}
+body.guide-rail-active .tree-editor-grid>div:last-child{grid-column:1/-1}
+@media(max-width:950px){body.guide-rail-active .tree-editor-grid{display:flex;flex-direction:column}}

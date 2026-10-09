@@ -38,6 +38,9 @@ export default function RobotLibrary({ client, directory, onRefresh, onReconnect
     const locked = busy || !client
     async function enter(system: RobotSystem) {
         if (!client) return
+        if (system.id === directory?.selected_id && (directory?.active || !system.configured)) {
+            onNavigate('system'); return
+        }
         setBusy(true); setMessage(''); setPhase('')
         try {
             if (!system.configured) { await client.request(`/robot-systems/${system.id}/select-blank`, 'POST', {}) }
@@ -110,6 +113,11 @@ export default function RobotLibrary({ client, directory, onRefresh, onReconnect
         if (!client || !deleting || busy || deleteName !== deleting.name) return
         setBusy(true); setMessage('')
         try {
+            // After an explicit name confirmation, release the selected workspace first.
+            // Server-side deselection AND deletion both require confirmed STOPPED state.
+            if (deleting.id === directory?.selected_id) {
+                await client.request('/robot-systems/deselect', 'POST', {})
+            }
             await client.request(`/robot-systems/${deleting.id}`, 'DELETE')
             const removed = deleting.name
             setDeleting(null); setDeleteName('')
@@ -118,9 +126,20 @@ export default function RobotLibrary({ client, directory, onRefresh, onReconnect
         } catch (error) { setMessage('删除失败：' + problem(error)) }
         finally { setBusy(false) }
     }
+    async function closeCurrent() {
+        if (!client || busy) return
+        setBusy(true); setMessage('')
+        try {
+            await client.request('/robot-systems/deselect', 'POST', {})
+            await onRefresh()
+            setMessage('工作区已关闭，可以重新选择其他机器人系统')
+        } catch (error) { setMessage('关闭失败：' + problem(error)) }
+        finally { setBusy(false) }
+    }
     return <>
         <div className="library-heading" data-guide="guide-selected-robot"><div><span className="eyebrow">ROBOT SYSTEMS</span><h2>机器人系统</h2><p>创建、导入或打开机器人系统</p></div>{selected && <span className="library-current">当前：{selected.name}</span>}</div>
         {!client && <div className="library-connection-note"><Icon name="plug" /><span>{window.agroDesktop ? '本机服务连接失败，请重试' : '浏览器调试需要在设置中连接会话'}</span>{window.agroDesktop && <button className="primary" onClick={() => void onReconnect()} disabled={busy}>重新连接</button>}</div>}
+        {selected && <div className="project-continue"><div><span className="eyebrow">CURRENT WORKSPACE</span><h3>{selected.name}</h3><p>{directory?.active ? '系统配置已应用，可以编辑任务或进入运行调试' : '未应用系统配置：可以先设计任务，再逐步接入后端'}</p></div><div className="project-continue-actions"><button className="primary" onClick={()=>onNavigate('system')}>系统接入 →</button><button onClick={()=>onNavigate('editor')}>设计任务 →</button>{directory?.active&&<button onClick={()=>onNavigate('runtime')}>运行调试 →</button>}<button disabled={locked || directory?.running_state !== 'STOPPED'} title="仅在系统与所有操作确认停止后关闭" onClick={()=>void closeCurrent()}>关闭工作区</button></div></div>}
         {selected && !directory?.active && <div className="library-connection-note"><Icon name="system" /><span>已选择「{selected.name}」，{selected.configured ? '配置尚未应用' : '请继续搭建并应用系统配置'}；</span><button className="primary" disabled={!client} onClick={() => onNavigate('system')}>系统搭建 →</button></div>}
         <div className="library-columns library-columns-three">
             <section className="library-pane"><div className="library-pane-header"><span className="library-icon">＋</span><div><h3>新建系统</h3><p>从空白或内置示例创建</p></div></div>
@@ -139,7 +158,7 @@ export default function RobotLibrary({ client, directory, onRefresh, onReconnect
                 <p className="muted">导入后请检查系统配置与任务，再启动设备</p>
             </section>
             <section className="library-pane"><div className="library-pane-header"><span className="library-icon"><Icon name="system" /></span><div><h3>选择已有系统</h3><p>打开、导出或删除已保存系统</p></div></div>
-                {directory?.systems.length ? <div className="robot-library-list">{directory.systems.map(system => <div key={system.id} className={'saved-robot ' + (system.id === directory.selected_id ? 'selected' : '')}><span className="robot-avatar"><Icon name="system" /></span><div className="saved-robot-main"><strong>{system.name}</strong><small>{system.example_id === 'tomato_picker' ? '来自番茄示例' : '自建或导入'} · {system.configured ? '已配置' : '待搭建'}</small></div><div className="saved-robot-actions"><button disabled={locked} onClick={() => void enter(system)}>{system.id === directory.selected_id && directory.active ? '使用中' : '选择'}</button><button disabled={locked} onClick={() => void exportProject(system)}>导出</button><button className="danger-quiet" title={directory.running_state !== "STOPPED" ? "请先停止机器人系统" : system.id === directory.selected_id && directory.active ? "请先选择其他机器人系统" : "删除此系统"} disabled={locked || directory.running_state !== "STOPPED" || (system.id === directory.selected_id && directory.active)} onClick={() => { setMessage(''); setDeleting(system); setDeleteName('') }}>删除</button></div></div>)}</div> : <div className="robot-library-empty"><Icon name="system" /><strong>还没有已保存系统</strong><p>可以从左侧创建空白系统，也可以导入工程文件</p></div>}
+                {directory?.systems.length ? <div className="robot-library-list">{directory.systems.map(system => <div key={system.id} className={'saved-robot ' + (system.id === directory.selected_id ? 'selected' : '')}><span className="robot-avatar"><Icon name="system" /></span><div className="saved-robot-main"><strong>{system.name}</strong><small>{system.example_id === 'tomato_picker' ? '来自番茄示例' : '自建或导入'} · {system.configured ? '已配置' : '待搭建'}</small></div><div className="saved-robot-actions"><button disabled={locked} onClick={() => void enter(system)}>{system.id === directory.selected_id ? '继续' : '选择'}</button><button disabled={locked} onClick={() => void exportProject(system)}>导出</button><button className="danger-quiet" title={directory.running_state !== 'STOPPED' ? '请先停止机器人系统及任务' : '删除前需输入机器人名称确认'} disabled={locked || directory.running_state !== 'STOPPED'} onClick={() => { setMessage(''); setDeleting(system); setDeleteName('') }}>删除</button></div></div>)}</div> : <div className="robot-library-empty"><Icon name="system" /><strong>还没有已保存系统</strong><p>可以从左侧创建空白系统，也可以导入工程文件</p></div>}
                 <p className="muted">请先停止当前任务和设备，再切换系统</p>
             </section>
         </div>
@@ -148,7 +167,7 @@ export default function RobotLibrary({ client, directory, onRefresh, onReconnect
             <section role="alertdialog" aria-modal="true" aria-labelledby="robot-delete-title" className="robot-delete-dialog">
                 <h3 id="robot-delete-title">删除机器人系统</h3>
                 <p>将删除「{deleting.name}」及其未发布的任务草稿和任务方案</p>
-                <p>运行记录和已发布的任务定义会保留，删除后无法恢复该系统</p>
+                <p>运行记录和已发布的任务定义会保留，删除后无法恢复该系统；当前系统将先解除选择，操作只允许在确认停止后执行</p>
                 <label className="field"><span>输入系统名称以确认删除</span><input autoFocus value={deleteName} onChange={event => setDeleteName(event.target.value)} placeholder={deleting.name} disabled={busy} /></label>
                 {message.startsWith('删除失败') && <p className="error" role="alert">{message}</p>}
                 <div className="robot-delete-actions"><button disabled={busy} onClick={() => { setDeleting(null); setDeleteName(''); setMessage('') }}>取消</button><button className="danger-button" disabled={busy || deleteName !== deleting.name} onClick={() => void removeProject()}>{busy ? '删除中…' : '确认删除'}</button></div>

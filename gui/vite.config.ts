@@ -15,7 +15,7 @@ export default defineConfig({
   }],
   server: {
     host: '127.0.0.1',
-    proxy: Object.fromEntries(['/agent', '/system', '/packages', '/control', '/tasks', '/catalog', '/schemas', '/config', '/management', '/assets', '/templates', '/plans', '/diagnostics', '/trees'].map(path =>
+    proxy: Object.fromEntries(['/agent', '/robot-systems', '/system', '/packages', '/control', '/tasks', '/catalog', '/schemas', '/config', '/management', '/assets', '/templates', '/plans', '/diagnostics', '/trees'].map(path =>
       [path, { target: 'http://127.0.0.1:8765', changeOrigin: false }]))
   }
 })

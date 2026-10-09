@@ -82,8 +82,20 @@ class TaskDocuments:
 
     def describe_nodes(self):
         executable=self.context.tasks.executable
-        if not executable or not Path(executable).is_file():
-            fail('$.task_engine','task_engine_unavailable','实际执行器不可用，请重新安装')
+        if not executable or not Path(executable).is_file() or not os.access(executable,os.X_OK):
+            # Editing a *logic-only draft* must not require an installed C++ runner.
+            # Never advertise capability nodes, and never use this catalog to execute.
+            control={'Sequence','Fallback','ReactiveSequence','ReactiveFallback'}
+            decorators={'Inverter'}
+            actions={'AlwaysSuccess','AlwaysFailure'}
+            nodes={name:{'registration_id':name,
+                         'category':'CONTROL' if name in control else 'DECORATOR' if name in decorators else 'ACTION',
+                         'minimum_children':1 if name in control|decorators else 0,
+                         'maximum_children':-1 if name in control else 1 if name in decorators else 0,
+                         'ports':{},'editable':True}
+                   for name in sorted(control|decorators|actions)}
+            return {'nodes':nodes,'digest':digest(nodes),'system_snapshot_id':self.context.snapshot_id,
+                    'offline_only':True}
         key=(self.context.snapshot_id,hashlib.sha256(Path(executable).read_bytes()).hexdigest())
         if self._model_key==key:return copy.deepcopy(self._models)
         models=self.engine(describe=True)
@@ -614,6 +626,26 @@ class TaskDocuments:
         if semantic_changed:document['revision']=draft['document']['revision']+1
         layout['revision']=draft['layout_revision']+1
         return self.store.put('tree_draft',key,{**draft,'revision':revision+1,'layout_revision':layout_revision+1,'document':document,'layout':layout,'parameters':parameters,'validation':None if semantic_changed else draft['validation']})
+
+    def rebase_draft(self,key):
+        """Explicitly revalidate a draft against the currently active node catalog."""
+        draft=self.store.get('tree_draft',key)
+        self._check_ownership(draft)
+        if not self.assets.robot_systems or not self.assets.robot_systems.active():
+            fail('$.system','configuration_not_active','系统配置尚未应用，不能将离线草稿发布到当前系统')
+        models=self.describe_nodes()
+        if models.get('offline_only'):
+            fail('$.task_engine','task_engine_unavailable','需要先安装并检查行为树执行器')
+        document=copy.deepcopy(draft['document'])
+        if document['readonly']:
+            fail('$.document','readonly_xml','不支持的 XML 不能自动迁移')
+        document['model_digest']=models['digest']
+        validation=self.validate_tree(document,draft['policy'],draft['parameters'],engine=False)
+        if not validation['valid']:
+            fail('$.document','rebase_validation_failed','新节点模型与原任务不兼容：'+encoded(validation['diagnostics'])[:1800])
+        draft={**draft,'document':document,'base_snapshot_id':self.context.snapshot_id,
+               'revision':draft['revision']+1,'validation':None,'published':None}
+        return self.store.put('tree_draft',key,draft)
 
     def validate_draft(self,key):
         draft=self.store.get('tree_draft',key)

@@ -201,6 +201,12 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     async def list_robot_systems():
         return robot_systems.listing()
 
+    @api.post('/robot-systems/deselect')
+    async def deselect_robot_system():
+        if any(not worker.done() for worker in jobs.values()):
+            fail('$.management', 'management_busy', '仍有管理操作正在执行，无法关闭工作区')
+        return robot_systems.deselect()
+
     @api.post('/robot-systems')
     async def create_robot_system(body: RobotSystemCreate):
         return robot_systems.create(body.name, body.example_id)
@@ -421,11 +427,17 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     @api.get('/trees/models')
     async def tree_models():
-        return documents.describe_nodes()
+        models = documents.describe_nodes()
+        # A blank workspace may have a previous robot's effective runtime snapshot.
+        # Its offline editor must not advertise those backends as usable capabilities.
+        if robot_systems.selected_id() and not robot_systems.active():
+            models['nodes'] = {k: v for k, v in models['nodes'].items()
+                               if not k.startswith('Capability_')}
+        return models
 
     @api.get('/trees/drafts')
     async def tree_drafts():
-        return {'drafts':[item for item in store.list('tree_draft') if item.get('robot_system_id') == robot_systems.selected_id() and robot_systems.active()]}
+        return {'drafts':[item for item in store.list('tree_draft') if robot_systems.selected_id() and item.get('robot_system_id') == robot_systems.selected_id()]}
 
     @api.post('/trees/drafts')
     async def tree_create(body: TreeCreate):
@@ -433,11 +445,17 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     @api.get('/trees/drafts/{key}')
     async def tree_get(key: str):
-        return store.get('tree_draft',key)
+        draft = store.get('tree_draft',key)
+        documents._check_ownership(draft)
+        return draft
 
     @api.put('/trees/drafts/{key}')
     async def tree_save(key: str,body: TreeSave):
         return documents.save(key,body.revision,body.layout_revision,body.document.model_dump(mode='json'),body.layout.model_dump(mode='json'),body.parameters)
+
+    @api.post('/trees/drafts/{key}/rebase')
+    async def tree_rebase(key: str):
+        return documents.rebase_draft(key)
 
     @api.post('/trees/extract')
     async def tree_extract(body: TreeExtract):
@@ -445,7 +463,9 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     @api.get('/trees/drafts/{key}/xml')
     async def tree_xml(key: str):
-        return documents.serialize_xml(store.get('tree_draft',key)['document'])
+        draft = store.get('tree_draft',key)
+        documents._check_ownership(draft)
+        return documents.serialize_xml(draft['document'])
 
     @api.post('/trees/drafts/{key}/validate')
     async def tree_validate(key: str):
@@ -453,16 +473,27 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     @api.post('/trees/drafts/{key}/publish')
     async def tree_publish(key: str,body: TreePublish):
+        if not robot_systems.active():
+            fail('$.system', 'configuration_not_active', '请先在系统搭建中应用当前机器人配置，再发布任务')
         async with runtime.transition:
             return documents.publish(key,body.revision,body.base_snapshot_id)
 
     @api.get('/trees/definitions')
     async def definitions():
-        return {'definitions':[item for item in store.list('tree_definition') if item.get('robot_system_id') == robot_systems.selected_id() and robot_systems.active()]}
+        return {'definitions':[item for item in store.list('tree_definition') if robot_systems.selected_id() and item.get('robot_system_id') == robot_systems.selected_id()]}
 
     @api.get('/trees/definitions/{key}')
     async def definition_get(key: str):
-        return store.get('tree_definition',key)
+        definition = store.get('tree_definition',key)
+        documents._check_ownership(definition)
+        return definition
+
+    @api.get('/trees/definitions/{key}/preflight')
+    async def definition_preflight(key: str):
+        # Validate the immutable definition, matching its eventual start path,
+        # but never dispatch any operation or change the runtime mode.
+        documents.definition_request(key,'preflight_check')
+        return {'valid':True,'definition_id':key}
 
     @api.post('/trees/definitions/{key}/start',status_code=202)
     async def definition_start(key: str,body: TaskIntent,owner: str = Depends(authenticate)):
