@@ -108,7 +108,7 @@ agroctl agent serve --config examples/tomato_picker/system_four_backends.yaml \
 
 导入时校验描述格式、依赖冲突、工程大小、标定资产摘要；导入后的任务定义必须重新校验与发布，不能因为旧机器上执行过就自动获得运行权限；目前仅支持已接入的模拟标定证据，真实机器人应重新核验驱动与标定后才尝试运行
 
-可执行 `python tests/smoke_project_transfer.py` 复测全新状态目录间的导入导出、任务迁移和错误拒绝
+可在全新工作区中验证工程导入导出、任务迁移及异常文件拒绝处理
 
 ## 系统集成与任务流程
 

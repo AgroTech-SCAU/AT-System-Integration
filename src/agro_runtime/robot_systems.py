@@ -110,6 +110,35 @@ class RobotSystems:
         # 新建仅持久化项目，不自动启动后端、不切换正在运行的机器人
         return record
 
+    def delete(self, key):
+        """Remove a saved project, but never remove an active robot or operation history."""
+        record = self.store.get("robot_system", key)
+        self.require_stopped()
+        if self.selected_id() == key and self.active(record):
+            fail(
+                "$.system_id", "selected_system_active",
+                "当前系统配置仍在使用，请先选择其他系统，再删除此系统",
+            )
+        # All affected workspace records are removed in one transaction, so a
+        # cancelled or failed deletion cannot leave a half-deleted project
+        with self.store.db:
+            for kind in ("tree_draft", "plan"):
+                for row in self.store.list(kind):
+                    if row.get("robot_system_id") == key:
+                        self.store.db.execute(
+                            "DELETE FROM documents WHERE kind=? AND id=?",
+                            (kind, row["id"]),
+                        )
+            self.store.db.execute(
+                "DELETE FROM documents WHERE kind='robot_system' AND id=?", (key,)
+            )
+            if self.selected_id() == key:
+                self.store.db.execute(
+                    "DELETE FROM documents WHERE kind='robot_selection' AND id='current'"
+                )
+        # Published definitions and execution records are retained for audit
+        return self.listing()
+
     def export_bundle(self, key):
         """Portable declarative project; no tokens, machine paths, snapshots or control records."""
         record = self.store.get("robot_system", key)

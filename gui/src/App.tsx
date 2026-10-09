@@ -9,9 +9,13 @@ import RuntimePage from './pages/Runtime'
 import Records from './pages/Records'
 import TaskWorkspace from './pages/TaskWorkspace'
 import Overview from './pages/Overview'
-import RobotLibrary, {type RobotDirectory} from './pages/RobotLibrary'
+import RobotLibrary, {type RobotDirectory, type RobotSystem} from './pages/RobotLibrary'
+import GuideOverlay from './guide/GuideOverlay'
+import { courseSteps, courseTitle, guideCompleted, type CourseId, type GuideSession } from './guide/courses'
 
 const SETTINGS_KEY = 'agro.gui.appearance'
+const GUIDE_PROMPT_KEY = 'agro.gui.guide.autoPrompt'
+function guidePromptEnabled(){ try{return localStorage.getItem(GUIDE_PROMPT_KEY)!=='off'}catch{return true} }
 function loadSettings(): Settings {
   const defaults: Settings = { theme: 'system', language: 'zh', compact: false }
   try {
@@ -38,6 +42,12 @@ export default function App() {
   const [error, setError] = useState<'unauthorized' | 'failed' | 'fileError' | null>(null)
   const [pending, setPending] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [guide, setGuide] = useState<GuideSession | null>(null)
+  const [guideDialog, setGuideDialog] = useState<'choice' | 'invite' | null>(null)
+  const [inviteCourse, setInviteCourse] = useState<CourseId>('basic')
+  const [noGuidePrompt, setNoGuidePrompt] = useState(false)
+  const [autoGuidePrompt, setAutoGuidePrompt] = useState(guidePromptEnabled)
+
   const credential = useRef<HTMLInputElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const fileRead = useRef(0)
@@ -173,6 +183,7 @@ export default function App() {
     navigationTimer.current=setTimeout(()=>{
       history.pushState(null, '', `/ui/${next}`)
       setWorkspace(next)
+      guideCompleted(`nav:${next}`)
       setLeaving(false)
       navigationTimer.current=null
     },90)
@@ -193,6 +204,43 @@ export default function App() {
   }
   const selectedRobot=robotDirectory?.systems.find(item=>item.id===robotDirectory.selected_id)
   const canUseRobot=Boolean(selectedRobot&&robotDirectory?.active)
+  function startGuide(course: CourseId, afterCreation = false) {
+    setGuideDialog(null)
+    const session: GuideSession = { course, fromCreation: afterCreation, index: 0 }
+    setGuide(session)
+    if (workspace !== 'overview') navigate('overview')
+  }
+  function guideNext() {
+    setGuide(current => {
+      if (!current) return null
+      if (current.index >= courseSteps(current).length - 1) return null
+      return { ...current, index: current.index + 1 }
+    })
+  }
+  function onGuideEvent(event: string) {
+    setGuide(current => {
+      if (!current) return null
+      const step = courseSteps(current)[current.index]
+      if (step?.event !== event) return current
+      return current.index >= courseSteps(current).length - 1 ? null : { ...current, index: current.index + 1 }
+    })
+  }
+  function robotCreated(robot: RobotSystem, example: 'blank' | 'tomato_picker') {
+    guideCompleted('robot:created:' + example)
+    if (guide || !autoGuidePrompt) return
+    setInviteCourse(example === 'blank' ? 'basic' : 'tomato')
+    setGuideDialog('invite')
+    setNoGuidePrompt(false)
+  }
+  function finishGuideInvite(accept: boolean) {
+    if (noGuidePrompt) {
+      try { localStorage.setItem(GUIDE_PROMPT_KEY, 'off') } catch { /* preference unavailable */ }
+      setAutoGuidePrompt(false)
+    }
+    setGuideDialog(null)
+    if (accept) startGuide(inviteCourse, true)
+  }
+
 
 
   return <>
@@ -200,7 +248,7 @@ export default function App() {
       <header className="titlebar">
         <div className="brand-mini"><Icon name="system" /><strong>AgroTech Launcher</strong></div>
         <span className="title-center">{text.brand}</span>
-        <div className="title-actions"><button disabled={pending} className="title-button" aria-label={text.appearance} onClick={() => setSettings({ ...settings, theme: document.documentElement.dataset.theme === 'light' ? 'dark' : 'light' })}><Icon name="sun" /></button>
+        <div className="title-actions"><button className="title-button guide-header-button" aria-label="使用向导" title="使用向导" onClick={() => { if(guide){setGuide(null)}setGuideDialog('choice') }}><span aria-hidden="true">?</span><span className="guide-header-label">向导</span></button><button disabled={pending} className="title-button" aria-label={text.appearance} onClick={() => setSettings({ ...settings, theme: document.documentElement.dataset.theme === 'light' ? 'dark' : 'light' })}><Icon name="sun" /></button>
           <button disabled={pending} className="title-button" aria-label={text.openSettings} onClick={() => navigate('settings')}><Icon name="settings" /></button>
           {window.agroDesktop && <div className="window-controls">
             <button className="title-button" aria-label={text.minimizeWindow} onClick={() => void window.agroDesktop?.minimize()}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10" /></svg></button>
@@ -213,7 +261,7 @@ export default function App() {
           <div className="hero"><p className="eyebrow">AGROTECH · ROBOT STUDIO</p><h1>AgroTech</h1><p>{text.sidebarHint}</p></div>
           <p className="nav-caption">{text.workflow}</p>
           <nav aria-label={text.workflow}>
-            {(['overview', 'system', 'editor', 'runtime'] as const).map((item, index) => <button className="nav-item" key={item} aria-current={workspace === item ? 'page' : undefined} onClick={() => navigate(item)}>
+            {(['overview', 'system', 'editor', 'runtime'] as const).map((item, index) => <button className="nav-item" key={item} data-guide={`nav-${item}`} aria-current={workspace === item ? 'page' : undefined} onClick={() => navigate(item)}>
               <Icon name={item==='editor'?'templates':item} /><span>{text[item]}</span><small aria-hidden="true">0{index + 1}</small>
             </button>)}
           </nav>
@@ -234,6 +282,7 @@ export default function App() {
               <Panel title={text.appearance} subtitle={text.theme} icon="sun"><Segmented label={text.theme} value={settings.theme} options={[{ value: 'system', label: text.followSystem }, { value: 'dark', label: text.dark }, { value: 'light', label: text.light }]} onChange={value => setSettings({ ...settings, theme: value as Settings['theme'] })} /></Panel>
               <Panel title={text.language} icon="settings"><Segmented label={text.language} value={settings.language} options={[{ value: 'zh', label: '中文' }, { value: 'en', label: 'English' }]} onChange={value => setSettings({ ...settings, language: value as Settings['language'] })} /></Panel>
               <Panel title={text.layout} icon="templates"><label className="toggle"><input type="checkbox" checked={settings.compact} onChange={event => setSettings({ ...settings, compact: event.target.checked })} />{text.compact}</label></Panel>
+              <Panel title="使用向导" icon="templates"><label className="toggle"><input type="checkbox" checked={autoGuidePrompt} onChange={event => {setAutoGuidePrompt(event.target.checked);try{localStorage.setItem(GUIDE_PROMPT_KEY,event.target.checked?'on':'off')}catch{/* preference unavailable */}}}/>新建系统后询问是否开始教学</label></Panel>
             </div>
             {!window.agroDesktop && <Panel title="浏览器调试连接" subtitle="请输入本机会话凭据" icon="plug">
               <form onSubmit={connect}>
@@ -259,7 +308,7 @@ export default function App() {
             <span className="endpoint">{selectedRobot?.name || "机器人系统工作台"}</span>
           </div>
           {error && <p className="error" role="alert">{text[error]}</p>}
-          {workspace === 'overview' && <><RobotLibrary client={client} directory={robotDirectory} onRefresh={refreshProjects} onReconnect={reconnectLocal} onNavigate={navigate}/>{client&&canUseRobot&&observation&&<Overview observation={observation} language={settings.language} navigate={navigate} robotName={selectedRobot?.name||''}/>}</> }
+          {workspace === 'overview' && <><RobotLibrary client={client} directory={robotDirectory} onRefresh={refreshProjects} onReconnect={reconnectLocal} onNavigate={navigate} onCreated={robotCreated}/>{client&&canUseRobot&&observation&&<Overview observation={observation} language={settings.language} navigate={navigate} robotName={selectedRobot?.name||''}/>}</> }
           {client && <>
             {workspace === 'system' && selectedRobot && <SystemBuilder key={selectedRobot.id} client={client} observation={canUseRobot?observation:null} language={settings.language} changed={refreshProjects} robotSystem={selectedRobot} />}
             {workspace === 'editor' && canUseRobot && <TaskWorkspace client={client} observation={observation} language={settings.language} changed={() => observe(client)} />}
@@ -273,5 +322,20 @@ export default function App() {
       </div>
     </div>
     <PendingDialog open={pending} text={text} error={error ? text[error] : undefined} onClose={() => setPending(false)} actions={<span className="muted">{text.futureActions}</span>} />
+    {guide && !guideDialog && <GuideOverlay key={`${guide.course}:${guide.fromCreation}`} session={guide} activeWorkspace={workspace} onNext={guideNext} onBack={() => setGuide(current => current ? {...current,index:Math.max(0,current.index-1)} : null)} onClose={() => setGuide(null)} onEvent={onGuideEvent} onGoToPage={() => navigate(courseSteps(guide)[guide.index].workspace)}/>}
+    {guideDialog && <><div className="guide-modal-shade" onClick={() => setGuideDialog(null)}/><section className="guide-modal" role="dialog" aria-modal="true" aria-labelledby="guide-modal-title">
+      {guideDialog === 'choice' ? <>
+        <h2 id="guide-modal-title">选择教学内容</h2><p>按高亮提示完成操作，每一步都会说明操作位置与预期结果</p>
+        <div className="guide-modal-choices">
+          <button onClick={() => startGuide('basic', Boolean(selectedRobot && !selectedRobot.example_id))}><strong>通用机器人系统</strong><small>{selectedRobot && !selectedRobot.example_id ? '学习当前系统的搭建流程' : '从空白机器人开始搭建'}</small></button>
+          <button onClick={() => startGuide('tomato', Boolean(canUseRobot && selectedRobot?.example_id === 'tomato_picker'))}><strong>番茄采摘示例</strong><small>{selectedRobot?.example_id === 'tomato_picker' ? '学习当前番茄采摘系统' : '创建示例并学习编排与运行'}</small></button>
+        </div><div className="guide-modal-footer"><button onClick={() => setGuideDialog(null)}>关闭</button></div>
+      </> : <>
+        <h2 id="guide-modal-title">开始使用教学？</h2><p>系统已创建，是否开始{courseTitle(inviteCourse)}，你也可以随时从右上角「向导」重新学习</p>
+        <label className="guide-modal-check"><input type="checkbox" checked={noGuidePrompt} onChange={event => setNoGuidePrompt(event.target.checked)}/>不再自动提示教学</label>
+        <div className="guide-modal-footer"><button onClick={() => finishGuideInvite(false)}>暂不需要</button><button className="primary" onClick={() => finishGuideInvite(true)}>开始教学</button></div>
+      </>}
+    </section></>}
+
   </>
 }

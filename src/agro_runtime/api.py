@@ -205,6 +205,12 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     async def create_robot_system(body: RobotSystemCreate):
         return robot_systems.create(body.name, body.example_id)
 
+    @api.delete('/robot-systems/{system_id}')
+    async def delete_robot_system(system_id: str):
+        if any(not worker.done() for worker in jobs.values()):
+            fail('$.management', 'management_busy', '请等待当前管理操作完成后再删除系统')
+        return robot_systems.delete(system_id)
+
     @api.post('/robot-systems/{system_id}/select-blank')
     async def select_blank_robot_system(system_id: str):
         return robot_systems.choose_blank(system_id)

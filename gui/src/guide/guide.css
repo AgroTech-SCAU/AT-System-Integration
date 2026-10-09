@@ -1,0 +1,47 @@
+.guide-layer{position:fixed;inset:0;z-index:1500;pointer-events:none;color:var(--text)}
+.guide-shade{position:fixed;background:rgba(13,19,28,.63);backdrop-filter:blur(5px) saturate(.78);-webkit-backdrop-filter:blur(5px) saturate(.78);pointer-events:auto}
+.guide-highlight{position:fixed;border-radius:13px;outline:2px solid var(--accent);box-shadow:0 0 0 5px color-mix(in srgb,var(--accent) 24%,transparent),0 0 28px color-mix(in srgb,var(--accent) 30%,transparent);pointer-events:none;animation:guide-focus-bounce .42s cubic-bezier(.16,1.38,.3,1) both}
+.guide-tooltip{position:fixed;max-width:calc(100vw - 24px);padding:18px 18px 14px;border:1px solid color-mix(in srgb,var(--accent) 42%,var(--line));border-radius:15px;background:var(--card);box-shadow:0 18px 50px rgba(0,0,0,.32);pointer-events:auto;animation:guide-card-in .42s cubic-bezier(.18,1.45,.3,1) both}
+.guide-tooltip-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.guide-course-label{color:var(--accent);font-size:11px;font-weight:700}.guide-counter{margin-top:8px;font-size:11px;color:var(--muted)}.guide-tooltip h3{font-size:16px;margin:9px 0}.guide-tooltip p{font-size:12px;line-height:1.8;margin:0 0 13px;color:var(--muted)}
+.guide-tooltip .guide-action-hint{font-size:11px;color:var(--accent);margin-top:7px}.guide-actions{display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap}.guide-actions button,.guide-close{cursor:pointer;border:1px solid var(--line);background:var(--subtle);color:var(--text);border-radius:8px;padding:8px 11px;font-size:11px}.guide-close{font-size:18px;line-height:1;padding:3px 9px}.guide-actions button:disabled{opacity:.45;cursor:not-allowed}.guide-actions .primary{background:var(--accent);color:var(--side);border-color:var(--accent)}.guide-missing button{display:inline;border:0;background:none;color:var(--accent);font:inherit;text-decoration:underline;cursor:pointer}
+.guide-modal-shade{position:fixed;inset:0;z-index:1400;background:rgba(12,17,23,.63);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+.guide-modal{position:fixed;z-index:1401;left:50%;top:50%;transform:translate(-50%,-50%);max-width:min(470px,calc(100vw - 32px));width:100%;background:var(--card);color:var(--text);border:1px solid var(--line);border-radius:17px;padding:25px;box-shadow:0 22px 65px rgba(0,0,0,.36)}.guide-modal h2{font-size:19px;margin:0 0 12px}.guide-modal p{font-size:12px;line-height:1.8;color:var(--muted);margin:0 0 17px}.guide-modal-choices{display:grid;grid-template-columns:1fr 1fr;gap:9px}.guide-modal-choices button{display:flex;flex-direction:column;align-items:flex-start;gap:9px;text-align:left;background:var(--subtle);border:1px solid var(--line);border-radius:11px;padding:15px;color:var(--text);cursor:pointer;transition:transform .28s cubic-bezier(.18,1.55,.32,1),border-color .2s}.guide-modal-choices button:hover{transform:translateY(-3px);border-color:var(--accent)}.guide-modal-choices button small{color:var(--muted);line-height:1.5}.guide-modal-footer{margin-top:18px;display:flex;justify-content:flex-end;gap:9px;align-items:center}.guide-modal-footer button{padding:9px 13px;border-radius:9px;background:var(--subtle);color:var(--text);border:1px solid var(--line);cursor:pointer}.guide-modal-footer .primary{background:var(--accent);color:var(--side)}.guide-modal-check{display:flex;gap:8px;align-items:center;font-size:12px;color:var(--muted)}
+@keyframes guide-focus-bounce{0%{opacity:.3;transform:scale(.965)}60%{opacity:1;transform:scale(1.012)}100%{transform:none}}
+@keyframes guide-card-in{0%{opacity:0;translate:0 14px;scale:.94}60%{opacity:1;translate:0 -4px;scale:1.018}100%{translate:none;scale:1}}
+@media(max-width:560px){.guide-modal-choices{grid-template-columns:1fr}.guide-modal{padding:18px}.guide-tooltip{padding:13px}}
+@media(prefers-reduced-motion:reduce){.guide-highlight,.guide-tooltip{animation:none!important}.guide-modal-choices button{transition:none!important}}
+
+.guide-modal{animation:guide-modal-enter .42s cubic-bezier(.18,1.4,.3,1) both}
+@keyframes guide-modal-enter{0%{opacity:0;transform:translate(-50%,-47%) scale(.94)}60%{opacity:1;transform:translate(-50%,-51%) scale(1.018)}100%{transform:translate(-50%,-50%) scale(1)}}
+@media(prefers-reduced-motion:reduce){.guide-modal{animation:none!important}}
+
+/* 详细教学卡片保持内容可滚动，不遮住高亮区域的真实点击 */
+.guide-tooltip{max-height:calc(100vh - 24px);overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin}
+.guide-progress-head{display:flex;justify-content:space-between;align-items:center;margin-top:12px;font-size:11px;color:var(--muted)}
+.guide-progress-track{height:4px;margin:7px 0 13px;border-radius:5px;background:var(--subtle);overflow:hidden}
+.guide-progress-track>span{display:block;height:100%;background:var(--accent);border-radius:5px;transition:width .24s ease}
+.guide-tooltip h3{font-size:17px;margin:8px 0 15px}
+.guide-detail{margin:0 0 12px;padding:0 0 0 12px;border-left:2px solid var(--line)}
+.guide-detail strong,.guide-tip strong,.guide-unavailable strong{display:block;font-size:11px;color:var(--text);margin-bottom:4px}
+.guide-tooltip .guide-detail p,.guide-tooltip .guide-tip p,.guide-tooltip .guide-unavailable p{font-size:12px;line-height:1.7;margin:0;color:var(--muted)}
+.guide-detail-action{border-color:var(--accent)}
+.guide-detail-action strong{color:var(--accent)}
+.guide-tip{padding:10px 12px;margin:7px 0 12px;border-radius:9px;background:var(--subtle)}
+.guide-unavailable{padding:11px 12px;margin:9px 0;background:var(--subtle);border:1px solid var(--line);border-radius:9px}
+.guide-unavailable button{cursor:pointer;margin-top:8px;color:var(--accent);border:0;background:none;padding:0;text-decoration:underline;font-size:12px}
+.guide-tooltip .guide-action-hint{font-size:11px;color:var(--accent);margin:12px 0 11px}
+.guide-actions{position:sticky;bottom:-14px;z-index:2;padding-top:12px;padding-bottom:3px;background:var(--card);border-top:1px solid var(--line)}
+@media(max-width:560px){.guide-detail{margin-bottom:10px}}
+@media(prefers-reduced-motion:reduce){.guide-progress-track>span{transition:none!important}}
+
+/* 教学说明单独占位，不覆盖正在操作的目标 */
+@media(min-width:1180px){
+  body.guide-rail-active .content-wrap{padding-right:402px;transition:padding-right .24s ease}
+  body.guide-rail-active .page{max-width:1120px}
+  .guide-tooltip-docked{max-height:calc(100dvh - 74px);overflow-y:auto;overscroll-behavior:contain}
+}
+@media(max-width:1179px){
+  body.guide-bottom-active .content{padding-bottom:max(40dvh,320px);scroll-padding-bottom:40dvh}
+  .guide-tooltip-bottom{max-height:38dvh;overflow-y:auto;overscroll-behavior:contain}
+}
+@media(prefers-reduced-motion:reduce){body.guide-rail-active .content-wrap{transition:none}}

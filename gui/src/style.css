@@ -116,3 +116,62 @@ body:has(.window-controls) .pending-backdrop{top:44px}body:has(.window-controls)
 .saved-robot-actions{display:flex;flex-direction:column;gap:5px}.saved-robot-actions button{padding:6px 9px}
 @media(max-width:1250px){.library-columns-three{grid-template-columns:repeat(2,minmax(0,1fr))}.library-columns-three .library-pane:last-child{grid-column:span 2}}
 @media(max-width:790px){.library-columns-three{grid-template-columns:1fr}.library-columns-three .library-pane:last-child{grid-column:auto}}
+/* 标题栏教学入口 */
+.guide-header-button{display:flex;align-items:center;gap:6px;width:auto;padding:0 10px;font-size:11px}
+.guide-header-button>span:first-child{width:16px;height:16px;display:grid;place-items:center;border:1px solid currentColor;border-radius:50%;font-weight:750;font-size:10px}
+@media(max-width:680px){.guide-header-label{display:none}}
+
+/* 表单与内容区统一节奏 */
+.card-body>.field,.card-body>[data-guide]>.field,.card-body>[data-guide]>.primary,
+.card-body>[data-guide]+.field,.card-body>.field+.primary{margin-block:0 16px}
+.card-body>.field+.field{margin-top:16px}
+.card-body>.field+button,.card-body>[data-guide]+button{margin-top:8px;margin-bottom:18px}
+.card-body>button+.field,.card-body>[data-guide]+.field{margin-top:18px}
+.card-body>.callout+.field{margin-top:16px}
+.card-body>h3{margin:0 0 14px}
+.card-body>.buttons+.field,.card-body>.buttons+.panel{margin-top:18px}
+.card-body>.field+pre,.card-body>button+pre{margin-top:16px}
+/* 已保存系统：名称单独占行，操作按钮横向分组 */
+.robot-library-list{max-height:360px;gap:12px}
+.saved-robot{display:grid;grid-template-columns:35px minmax(0,1fr);column-gap:13px;row-gap:12px;padding:14px}
+.saved-robot-actions{grid-column:1/-1;display:flex;flex-direction:row;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:8px;padding-top:11px;border-top:1px solid var(--line)}
+.saved-robot-actions button{min-height:32px;padding:6px 12px}
+.saved-robot .saved-robot-main strong{font-size:13px;line-height:1.5}
+.saved-robot .saved-robot-main small{display:block;margin-top:4px;line-height:1.7}
+.library-columns-three{grid-template-columns:minmax(0,1fr) minmax(0,.92fr) minmax(290px,1.18fr);gap:20px}
+.library-columns-three .library-pane{padding:23px}
+.library-columns-three .create-source-grid{gap:10px}
+.library-columns-three .create-source{padding:14px;min-width:0}
+.library-pane-header{margin-bottom:24px}
+.library-pane>.muted{display:block;margin-top:12px;line-height:1.7}
+.library-action{margin-top:8px;margin-bottom:8px}
+.robot-name-field{margin-bottom:18px}
+/* 删除操作 */
+.saved-robot-actions .danger-quiet{color:var(--red)}
+.saved-robot-actions .danger-quiet:hover{background:color-mix(in srgb,var(--red) 9%,var(--card));border-color:var(--red)}
+.robot-delete-backdrop{position:fixed;inset:0;z-index:1300;display:grid;place-items:center;padding:20px;background:rgba(10,12,18,.58);backdrop-filter:blur(5px)}
+.robot-delete-dialog{width:min(450px,100%);max-height:calc(100dvh - 40px);overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:27px;box-shadow:0 24px 70px #0006;animation:agro-dialog-bounce .42s var(--bounce-page) both}
+.robot-delete-dialog h3{font-size:18px;margin:0 0 17px}
+.robot-delete-dialog p{font-size:12px;color:var(--muted);margin:0 0 12px;line-height:1.75}
+.robot-delete-dialog .field{margin:21px 0}
+.robot-delete-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px;margin-top:22px}
+.robot-delete-actions .danger-button{color:#fff;background:var(--red);border-color:var(--red);font-weight:650}
+@media(max-width:1250px){.library-columns-three{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:790px){.library-columns-three{grid-template-columns:1fr}.library-columns-three .library-pane{padding:18px}}
+@media(max-width:540px){.robot-delete-dialog{padding:19px}.saved-robot-actions button{flex:1}}
+
+/* 任务方案表单：字段、主要操作、复查操作各占一行 */
+.task-template-form-block{margin-top:20px}
+.task-template-form-block .field{margin:0}
+.task-template-action-row{display:flex;flex-wrap:wrap;gap:12px;margin-top:20px;margin-bottom:24px}
+.task-template-plan-block{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:12px;padding-top:18px;border-top:1px solid var(--line)}
+.task-template-plan-block .field{margin:0}
+.task-template-plan-block button{min-height:39px;white-space:nowrap}
+.task-template-check{margin-top:20px}
+.task-template-check>p{margin-bottom:12px}
+@media(max-width:520px){.task-template-plan-block{grid-template-columns:1fr}.task-template-plan-block button{width:100%}}
+@media(min-width:1180px){
+  body.guide-rail-active .library-columns-three{grid-template-columns:repeat(2,minmax(0,1fr))}
+  body.guide-rail-active .library-columns-three .library-pane:last-child{grid-column:span 2}
+  body.guide-rail-active .robot-system-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
