@@ -311,7 +311,7 @@ export default function App() {
           {workspace === 'overview' && <><RobotLibrary client={client} directory={robotDirectory} onRefresh={refreshProjects} onReconnect={reconnectLocal} onNavigate={navigate} onCreated={robotCreated}/>{client&&canUseRobot&&observation&&<Overview observation={observation} language={settings.language} navigate={navigate} robotName={selectedRobot?.name||''}/>}</> }
           {client && <>
             {workspace === 'system' && selectedRobot && <SystemBuilder key={selectedRobot.id} client={client} observation={canUseRobot?observation:null} language={settings.language} changed={refreshProjects} robotSystem={selectedRobot} />}
-            {workspace === 'editor' && canUseRobot && <TaskWorkspace client={client} observation={observation} language={settings.language} changed={() => observe(client)} />}
+            {workspace === 'editor' && canUseRobot && <TaskWorkspace client={client} observation={observation} language={settings.language} changed={() => observe(client)} robotExampleId={selectedRobot?.example_id} />}
             {workspace === 'runtime' && canUseRobot && <RuntimePage client={client} observation={observation} language={settings.language} changed={() => observe(client)} />}
             {workspace === 'records' && canUseRobot && <Records client={client} observation={observation} language={settings.language} changed={() => observe(client)} />}
           </>}

@@ -27,12 +27,13 @@ export default function SystemBuilder({ client, observation, language, changed, 
         return Array.from(new Set([...kept, ...nextBackends.filter(b => !previous.has(b.package_id)).map(b => `packages/${b.package_id}.yaml`)]))
     }
     const groups = [
-        { id: 'vision', name: '视觉系统', description: '目标识别、采摘结果验证', prefix: ['perception.'] },
-        { id: 'navigation', name: '导航系统', description: '底盘移动、作业点到达', prefix: ['navigation.'] },
-        { id: 'arm', name: '机械臂系统', description: '坐标转换、可达性和执行', prefix: ['manipulation.', 'geometry.'] },
-        { id: 'control', name: '电控与末端', description: '夹爪、记录和外设输出', prefix: ['end_effector.', 'job.'] },
+        { id: 'vision', name: '视觉系统', description: '目标识别与环境感知', prefix: ['perception.'] },
+        { id: 'navigation', name: '导航系统', description: '定位、建图与路径执行', prefix: ['navigation.'] },
+        { id: 'arm', name: '机械臂系统', description: '运动、轨迹与空间变换', prefix: ['manipulation.', 'geometry.'] },
+        { id: 'control', name: '电控与末端', description: '设备输入输出与执行反馈', prefix: ['end_effector.', 'job.'] },
+        { id: 'other', name: '其他系统', description: '用户自定义能力与设备', prefix: [] },
     ]
-    const roleGroup = (capability: string) => groups.find(group => group.prefix.some(prefix => capability.startsWith(prefix)))?.id
+    const roleGroup = (capability: string) => groups.find(group => group.prefix.some(prefix => capability.startsWith(prefix)))?.id || 'other'
     function bindRole(role: string, instanceId: string) {
         const binding = roles[role], backend = backends.find(b => b.instance_id === instanceId)
         const cap = catalog.find(p => p.id === backend?.package_id)?.description.capabilities.find((c: Json) => c.capability_id === binding?.capability_id)
@@ -43,7 +44,7 @@ export default function SystemBuilder({ client, observation, language, changed, 
         const source = backends[0]
         if (!content || backends.length !== 1 || source?.package_id !== 'tomato_simulator') return
         const idByGroup: Record<string, string> = { vision: 'vision', navigation: 'navigation', arm: 'arm', control: 'control' }
-        const nextBackends = groups.map(group => ({ ...source, instance_id: idByGroup[group.id], runtime: { manager: 'local_process', target: `tomato_simulator.${group.id}`, health_check: 'mock_status' } }))
+        const nextBackends = groups.filter(group=>group.id!=='other').map(group => ({ ...source, instance_id: idByGroup[group.id], runtime: { manager: 'local_process', target: `tomato_simulator.${group.id}`, health_check: 'mock_status' } }))
         const nextRoles = Object.fromEntries(Object.entries(roles).map(([name, binding]: [string, any]) => {
             const groupId = typeof binding.capability_id === 'string' ? roleGroup(binding.capability_id) : undefined
             return [name, { ...binding, backend_instance: groupId ? idByGroup[groupId] || source.instance_id : source.instance_id }]

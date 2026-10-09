@@ -28,5 +28,5 @@ export function nodeGroup(id:string){
  if(id.startsWith('Capability_navigation'))return '导航'
  if(id.startsWith('Capability_manipulation')||id.startsWith('Capability_geometry'))return '机械臂'
  if(id.startsWith('Capability_end_effector')||id.startsWith('Capability_job'))return '电控'
- return '流程控制'
+ return id.startsWith('Capability_')?'其他能力':'流程控制'
 }

@@ -364,7 +364,7 @@ class RobotSystems:
         for i, item in enumerate(drafts):
             if (
                 not isinstance(item, dict)
-                or item.get("policy") not in ("tomato_picker", "simulation_inspection")
+                or item.get("policy") not in ("general", "tomato_picker", "simulation_inspection")
                 or not isinstance(item.get("parameters"), dict)
             ):
                 fail(f"$.task_drafts[{i}]", "invalid_task_draft", "任务草稿格式无效")

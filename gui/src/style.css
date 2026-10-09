@@ -175,3 +175,13 @@ body:has(.window-controls) .pending-backdrop{top:44px}body:has(.window-controls)
   body.guide-rail-active .library-columns-three .library-pane:last-child{grid-column:span 2}
   body.guide-rail-active .robot-system-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
+
+/* Task-specific input definitions */
+.task-input-add{display:flex;align-items:end;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+.task-input-add>label,.task-input-add>.field{flex:1;min-width:190px}
+.task-input-add>button{min-height:39px}
+.task-input-list{display:grid;gap:12px;margin:14px 0 20px}
+.task-input-card{padding:16px;border:1px solid var(--line);border-radius:13px;background:var(--card)}
+.task-input-title{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px}
+.task-input-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:12px}
+.task-input-fields input,.task-input-fields select{min-width:0;width:100%}

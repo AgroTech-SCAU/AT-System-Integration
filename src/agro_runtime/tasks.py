@@ -38,7 +38,7 @@ class AssetReference(ContractModel):
 
 
 class TaskManifest(ContractModel):
-    kind: StrictStr = Field(pattern=r'^(tomato_picker|simulation_inspection)$')
+    kind: StrictStr = Field(pattern=r'^(general|tomato_picker|simulation_inspection)$')
     assets: dict[Identifier, AssetReference]
     parameters: dict[Identifier, ParameterDescriptor] = Field(default_factory=dict)
     max_targets: StrictInt = Field(ge=1, le=8)
@@ -226,12 +226,18 @@ class TaskManager:
                 for node in tree_document['nodes'].values():
                     stage=checked['stage_by_editor'].get(node['editor_id'])
                     if stage and node['attributes'].get('node_id'):stage_mapping[node['attributes']['node_id']]=stage
-        if inspection and not definition:
-            fail('$.task_ref','published_inspection_required','查询任务必须通过统一服务校验并发布')
+        if manifest.kind in {'simulation_inspection','general'} and not definition:
+            fail('$.task_ref','published_definition_required','自定义任务必须通过统一服务校验并发布')
         loops = list(tree.iter('ForEachTarget'))
-        if not inspection and (len(loops)!=1 or loops[0].get('max_targets')!=str(manifest.max_targets)):
+        if manifest.kind=='tomato_picker' and (len(loops)!=1 or loops[0].get('max_targets')!=str(manifest.max_targets)):
             fail('$.max_targets', 'policy_tree_mismatch', 'XML 候选界限必须与冻结策略一致')
-        if not inspection and any(node.tag in ('RetryUntilSuccessful', 'Repeat', 'KeepRunningUntilFailure') for node in tree.iter()):
+        if manifest.kind=='general':
+            for loop in loops:
+                try: limit=int(loop.get('max_targets', '0'))
+                except (TypeError, ValueError): limit=0
+                if not 1<=limit<=manifest.max_targets:
+                    fail('$.max_targets', 'unsafe_target_limit', '自定义任务候选上限不符合已发布的安全约束')
+        if manifest.kind=='tomato_picker' and any(node.tag in ('RetryUntilSuccessful', 'Repeat', 'KeepRunningUntilFailure') for node in tree.iter()):
             fail('$.task_ref', 'unsafe_retry_policy', '当前模板不允许自动恢复或重复执行物理动作')
         if request.config_ref:
             bound, registry = load_system(request.config_ref)
@@ -272,11 +278,11 @@ class TaskManager:
             if reference.source_frame != 'camera' or reference.target_frame != 'arm_base':
                 fail(f'$.assets.{name}', 'asset_frame_mismatch', '当前模板需要 camera 至 arm_base 的标定')
             assets[name] = {'sha256': reference.sha256, 'content': value}
-        if not inspection and set(assets) != {'camera_to_arm'}:
+        if manifest.kind=='tomato_picker' and set(assets) != {'camera_to_arm'}:
             fail('$.assets', 'calibration_required', '模板必须提供相机至机械臂标定')
         blackboard = {k: {'type': manifest.parameters[k].type, 'unit': manifest.parameters[k].unit, 'value': v}
                       for k, v in parameters.items()}
-        if not inspection:
+        if manifest.kind=='tomato_picker':
             blackboard['calibration_offset_x'] = {'type': 'number', 'unit': 'm',
                 'value': assets['camera_to_arm']['content']['translation_m'][0]}
         return {'task_ref': str(path), 'xml': xml, 'manifest': manifest.model_dump(mode='json'),
@@ -484,10 +490,11 @@ class TaskManager:
                 status['error'] = report.get('error') or next((o['error'] for o in reversed(operations) if o['error']), None) or {'code':'tree_failed','reason':'行为树业务条件未满足'}
             targets = self.store.targets(identity)
             candidates = next((o['result']['output']['targets'] for o in operations if o['capability_id']=='perception.detect_targets' and o['state']=='SUCCEEDED'), [])
-            inspection=self.store.snapshot(identity)['manifest']['kind']=='simulation_inspection'
+            kind=self.store.snapshot(identity)['manifest']['kind']
+            inspection=kind in {'simulation_inspection','general'}
             if status['state']=='SUCCEEDED' and not inspection and len(targets)!=len(candidates):
                 status.update(state='FAILED', error={'code':'target_results_incomplete','reason':'任务缺少候选目标的确认结果'})
-            status['business_result'] = {'outcome': ('inspected' if inspection else 'empty_candidates' if not candidates else 'area_completed') if status['state']=='SUCCEEDED' else status['state'].lower(),
+            status['business_result'] = {'outcome': ('completed' if kind=='general' else 'inspected' if inspection else 'empty_candidates' if not candidates else 'area_completed') if status['state']=='SUCCEEDED' else status['state'].lower(),
                 'candidate_count':len(candidates), 'picked_count':sum(t['outcome']=='picked' for t in targets),
                 'skipped_count':sum(t['outcome']=='skipped' for t in targets)}
             if status['state']!='SUCCEEDED':

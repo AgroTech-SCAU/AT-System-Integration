@@ -21,9 +21,12 @@ class AssetService:
         self.builtin=self.import_asset('camera_to_arm.json',raw.decode())
 
     def template_enabled(self):
-        return (self.robot_systems is None or
-                (self.robot_systems.active() and
-                 (self.robot_systems.selected() or {}).get('example_id') == 'tomato_picker'))
+        if self.robot_systems is not None and not self.robot_systems.active():
+            return False
+        # 模板依赖能力接口而不是机器人名称或示例来源
+        required={'navigation.move_to_waypoint','perception.detect_targets','manipulation.move_to_pose','end_effector.grip','job.record_pick'}
+        bound={role.capability.capability_id for role in self.context.bound.roles.values()}
+        return required.issubset(bound)
 
     def templates(self):
         if not self.template_enabled():

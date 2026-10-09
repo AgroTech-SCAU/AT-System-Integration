@@ -679,7 +679,7 @@ std::string Executor::models() const {
 namespace agro_bt {
 Json Executor::describe() const {
   Json nodes = Json::object();
-  const std::set<std::string> editable = {"Sequence", "Fallback", "Parallel", "Inverter",
+  const std::set<std::string> editable = {"AlwaysSuccess", "AlwaysFailure", "Sequence", "Fallback", "Parallel", "Inverter",
     "RetryUntilSuccessful", "Repeat", "ReactiveSequence", "ReactiveFallback",
     "ForEachTarget", "IsTrue", "HasTarget", "PickSucceeded", "TargetsFromPose",
     "SelectTarget", "MakePickResult", "SubTree"};

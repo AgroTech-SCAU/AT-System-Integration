@@ -331,7 +331,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     @api.post('/plans')
     async def plan_create(body: PlanCreate):
         body=body.model_dump()
-        return assets.create_plan(body.get('parameters',{}),body.get('asset_id'),body.get('template_id','tomato_picker'))
+        return assets.create_plan(body.get('parameters',{}),body.get('asset_id'),body.get('template_id'))
 
     @api.get('/plans/{plan_id}/preflight')
     async def plan_preflight(plan_id: str):

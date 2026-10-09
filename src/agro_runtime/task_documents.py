@@ -318,7 +318,7 @@ class TaskDocuments:
             return [node['registration_id'],attrs,ports,[visit(c) for c in node['expanded_children']]]
         return visit(self.expanded(document)),stages
 
-    def validate_tree(self,document,policy='simulation_inspection',parameters=None,engine=True):
+    def validate_tree(self,document,policy='general',parameters=None,engine=True):
         diagnostics=[];sources=[];models=self.describe_nodes();parameters=parameters or {}
         def error(code,reason,tree=None,node=None,port=None):
             diagnostics.append({'severity':'error','code':code,'reason':reason,'tree_id':tree,'editor_id':node,'port':port})
@@ -499,22 +499,21 @@ class TaskDocuments:
                 output_values()
             return env
         blackboard={}
-        if policy=='tomato_picker':
-            manifest=parse(__import__('agro_runtime.tasks',fromlist=['TaskManifest']).TaskManifest,__import__('agro_runtime.registry',fromlist=['read_document']).read_document(self.assets.template.with_suffix('.task.json')))
-            from .registry import _values
-            try:effective=_values(parameters,manifest.parameters,'$.parameters',parameters=True)
-            except ContractValidationError as exc:
-                for issue in exc.issues:error(issue.code,issue.reason,port=issue.path)
-                effective={}
-            for name,value in effective.items():blackboard[name]={'type':manifest.parameters[name].type,'unit':manifest.parameters[name].unit,'value':value}
-            fixture=self.assets.builtin['metadata'];blackboard['calibration_offset_x']={'type':'number','unit':'m','value':fixture['translation_m'][0]}
-        elif policy=='simulation_inspection':
+        if policy in {'general','simulation_inspection','tomato_picker'}:
             from .models import ParameterDescriptor
             from .registry import _values
-            specs={k:parse(ParameterDescriptor,v) for k,v in document['inputs'].items()}
+            # 所有任务均由当前文档声明参数，旧版番茄草稿兼容原有声明
+            definitions=document['inputs']
+            if policy=='tomato_picker' and not definitions:
+                from .registry import read_document
+                definitions=read_document(self.assets.template.with_suffix('.task.json'))['parameters']
+            specs={k:parse(ParameterDescriptor,v) for k,v in definitions.items()}
             try:
                 effective=_values(parameters,specs,'$.parameters',parameters=True)
                 for name,value in effective.items():blackboard[name]={'type':specs[name].type,'unit':specs[name].unit,'value':value}
+                if policy=='tomato_picker' and 'calibration_offset_x' not in blackboard:
+                    fixture=self.assets.builtin['metadata']
+                    blackboard['calibration_offset_x']={'type':'number','unit':'m','value':fixture['translation_m'][0]}
             except ContractValidationError as exc:
                 for issue in exc.issues:error(issue.code,issue.reason,port=issue.path)
         else:error('unknown_task_policy','任务策略不支持')
@@ -534,15 +533,23 @@ class TaskDocuments:
                     if model.get('capability_id') not in readonly_caps or not package or package.adapter_entrypoint!='agro_mock:create_adapter' or any(r['access']=='exclusive' for r in model.get('resources',[])):
                         error('inspection_side_effect_forbidden','查询策略仅允许模拟只读能力',node['tree_id'],node['editor_id'])
                 if any(n['registration_id'] in {'ForEachTarget','MakePickResult'} for t in trees.values() for n in t['nodes'].values()):error('inspection_policy_violation','查询策略不允许采摘循环或结果记账')
-            else:
+            elif policy=='tomato_picker':
+                # 仅用于兼容既有冻结番茄任务，新建任务使用通用策略
                 original=self.parse_xml(self.assets.template.read_text());expected,original_instances=self.canonical(original)
-                if canonical!=expected:error('tomato_policy_violation','番茄任务必须保留有限候选、变换、采摘放置验证与记账执行结构')
+                if canonical!=expected:error('tomato_policy_violation','旧版番茄任务仍需保留原安全执行结构')
                 else:
                     for node,reference in zip(instances,original_instances):
                         stage=reference['attributes'].get('node_id');stage_by_editor[node['editor_id']]=stage
                         stage_by_instance[node['instance_path']]=stage
+            elif policy=='general':
+                # 节点标识允许携带业务阶段标签，采摘结果的证明仍由执行核心检查
+                for item in instances:
+                    stage=item['attributes'].get('node_id')
+                    if stage:
+                        stage_by_editor[item['editor_id']]=stage
+                        stage_by_instance[item['instance_path']]=stage
             # XML 可加载不能授权物理动作重入
-            physical=any(models['nodes'][n['registration_id']].get('capability_id') not in readonly_caps for n in instances)
+            physical=any((models['nodes'][n['registration_id']].get('capability_id') not in readonly_caps) for n in instances if models['nodes'][n['registration_id']].get('capability_id'))
             if physical and any(n['registration_id'] in {'RetryUntilSuccessful','Repeat','ReactiveSequence','ReactiveFallback','Parallel'} for t in trees.values() for n in t['nodes'].values()):error('physical_reentry_forbidden','含副作用能力的重试、响应式重入或并发策略未开放')
         except (ContractValidationError,KeyError,RecursionError) as exc:error('invalid_expansion','子树无法安全展开 '+str(exc))
         result={'valid':not diagnostics,'diagnostics':diagnostics,'sources':sources,'model_digest':models['digest'],'system_snapshot_id':self.context.snapshot_id,'blackboard':blackboard,'stage_by_editor':stage_by_editor,'stage_by_instance':stage_by_instance}
@@ -580,12 +587,22 @@ class TaskDocuments:
         if self.assets.robot_systems and record.get('robot_system_id') != self.assets.robot_systems.selected_id():
             fail('$.robot_system_id','different_robot_system','此任务定义属于其他机器人系统')
 
-    def create(self,xml=None,template='simulation_inspection'):
+    def create(self,xml=None,template='general'):
         if template=='tomato_picker' and not self.assets.template_enabled():
             fail('$.template', 'template_not_imported', '先在总览导入并选择番茄采摘机器人示例')
-        if xml is None:xml=self.assets.template.read_text() if template=='tomato_picker' else '<root BTCPP_format="4" main_tree_to_execute="Inspection"><BehaviorTree ID="Inspection"><Sequence/></BehaviorTree></root>'
-        document=self.parse_xml(xml);key='draft_'+uuid4().hex
-        return self.store.put('tree_draft',key,{'id':key,'revision':1,'layout_revision':1,'policy':template,'base_snapshot_id':self.context.snapshot_id,'document':document,'layout':LayoutDocument().model_dump(mode='json'),'parameters':{},'validation':None,'published':None,'robot_system_id':self.assets.robot_systems.selected_id() if self.assets.robot_systems else None})
+        if xml is None:
+            if template=='tomato_picker':xml=self.assets.template.read_text()
+            else:xml='<root BTCPP_format="4" main_tree_to_execute="Main"><BehaviorTree ID="Main"><Sequence><AlwaysSuccess/></Sequence></BehaviorTree></root>'
+        document=self.parse_xml(xml)
+        if template=='tomato_picker':
+            from .registry import read_document
+            manifest=read_document(self.assets.template.with_suffix('.task.json'))
+            document['inputs'].update(manifest['parameters'])
+            document['inputs']['calibration_offset_x']={'type':'number','unit':'m','default':self.assets.builtin['metadata']['translation_m'][0],'apply_policy':'idle'}
+        key='draft_'+uuid4().hex
+        # 模板只用于生成初始内容，之后按照通用任务策略自由编辑
+        policy='general' if template=='tomato_picker' else template
+        return self.store.put('tree_draft',key,{'id':key,'revision':1,'layout_revision':1,'policy':policy,'base_snapshot_id':self.context.snapshot_id,'document':document,'layout':LayoutDocument().model_dump(mode='json'),'parameters':{},'validation':None,'published':None,'robot_system_id':self.assets.robot_systems.selected_id() if self.assets.robot_systems else None})
 
     def save(self,key,revision,layout_revision,document,layout,parameters):
         draft=self.store.get('tree_draft',key)
@@ -614,14 +631,16 @@ class TaskDocuments:
         if not checked['valid']:fail('$.tree','tree_publish_rejected',encoded(checked['diagnostics']))
         compiled=self.serialize_xml(draft['document']);key_definition='definition_'+uuid4().hex
         root=self.store.root/'plans'/key_definition;root.mkdir(parents=True)
-        xml=root/'harvest.xml';xml.write_text(compiled['xml']);xml.chmod(0o400)
+        xml=root/'task.xml';xml.write_text(compiled['xml']);xml.chmod(0o400)
         if draft['policy']=='tomato_picker':
+            # 旧版已保存草稿仍按原策略发布
             from .registry import read_document
             manifest=read_document(self.assets.template.with_suffix('.task.json'))
             raw=(self.assets.example/'assets/camera_to_arm.json').read_bytes();asset_path=root/'camera_to_arm.json';asset_path.write_bytes(raw);asset_path.chmod(0o400)
             manifest['assets']['camera_to_arm']['path']='camera_to_arm.json'
-        else:manifest={'kind':'simulation_inspection','assets':{},'parameters':draft['document']['inputs'],'max_targets':1,'max_recovery_attempts':0,'timeout_ms':30000}
-        (root/'harvest.task.json').write_text(encoded(manifest));(root/'harvest.task.json').chmod(0o400)
+        else:
+            manifest={'kind':draft['policy'],'assets':{},'parameters':draft['document']['inputs'],'max_targets':8,'max_recovery_attempts':0,'timeout_ms':30000}
+        (root/'task.task.json').write_text(encoded(manifest));(root/'task.task.json').chmod(0o400)
         definition={'id':key_definition,'draft_id':key,'revision':revision,'system_snapshot_id':self.context.snapshot_id,'model_digest':checked['model_digest'],'document':draft['document'],'layout':draft['layout'],'xml':compiled['xml'],'xml_sha256':checked['xml_sha256'],'manifest':manifest,'parameters':draft['parameters'],'node_mapping':checked['node_mapping'],'blackboard':checked['blackboard'],'task_ref':str(xml),'immutable':True,'robot_system_id':draft.get('robot_system_id')}
         definition['digest']=digest({k:v for k,v in definition.items() if k not in {'id','layout','task_ref'}})
         (root/'definition.json').write_text(encoded(definition));(root/'definition.json').chmod(0o400)

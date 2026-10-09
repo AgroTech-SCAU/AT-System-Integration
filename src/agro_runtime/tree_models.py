@@ -56,7 +56,7 @@ class Diagnostic(TreeModel):
 
 class TreeCreate(TreeModel):
     xml: StrictStr | None = Field(default=None,max_length=1048576)
-    template: Literal['tomato_picker','simulation_inspection']='simulation_inspection'
+    template: Literal['general','tomato_picker','simulation_inspection']='general'
 
 class TreeSave(TreeModel):
     revision: StrictInt
@@ -78,5 +78,5 @@ class TreeExtract(TreeModel):
 
 class TreeValidate(TreeModel):
     document: TreeDocument
-    policy: Literal['simulation_inspection','tomato_picker']='simulation_inspection'
+    policy: Literal['general','simulation_inspection','tomato_picker']='general'
     parameters: dict[Identifier,JsonValue] = Field(default_factory=dict)

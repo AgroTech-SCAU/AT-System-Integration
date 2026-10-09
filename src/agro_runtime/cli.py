@@ -77,10 +77,10 @@ def _parser():
     for command in ('models','list','definitions'):
         trees.add_parser(command)
     tree_new=trees.add_parser('new')
-    tree_new.add_argument('--template',choices=['simulation_inspection','tomato_picker'],default='simulation_inspection')
+    tree_new.add_argument('--template',choices=['general','simulation_inspection','tomato_picker'],default='general')
     tree_import=trees.add_parser('import')
     tree_import.add_argument('path',type=Path)
-    tree_import.add_argument('--template',choices=['simulation_inspection','tomato_picker'],default='simulation_inspection')
+    tree_import.add_argument('--template',choices=['general','simulation_inspection','tomato_picker'],default='general')
     for command in ('validate','xml'):
         trees.add_parser(command).add_argument('identity')
     tree_save=trees.add_parser('save');tree_save.add_argument('identity');tree_save.add_argument('path',type=Path)
