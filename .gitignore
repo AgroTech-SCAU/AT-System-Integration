@@ -1,0 +1,12 @@
+__pycache__/
+.pytest_cache/
+*.egg-info/
+.venv/
+.vscode/
+docs/other/
+
+.agents/
+.codex/
+node_modules/
+gui/dist/
+.install/

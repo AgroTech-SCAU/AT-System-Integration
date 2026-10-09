@@ -1,0 +1,24 @@
+system_id: mock_runtime
+packages:
+- package.yaml
+backends:
+- instance_id: robot
+  package_id: tomato_simulator
+required_roles:
+- vision
+roles:
+  vision:
+    backend_instance: robot
+    capability_id: perception.detect_tomato
+    input: {}
+    output:
+      found:
+        extensions: {}
+        type: boolean
+      target:
+        extensions: {}
+        type: stamped_pose
+        unit: m
+        frame_id: camera
+        clock_domain: monotonic_host
+        max_age_s: 5.0

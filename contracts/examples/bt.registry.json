@@ -1,0 +1,292 @@
+{
+  "system": {
+    "extensions": {},
+    "system_id": "mock_runtime",
+    "packages": [
+      "package.yaml"
+    ],
+    "backends": [
+      {
+        "extensions": {},
+        "instance_id": "robot",
+        "package_id": "tomato_simulator",
+        "config": {},
+        "runtime": null,
+        "native_config": null
+      }
+    ],
+    "required_roles": [
+      "vision"
+    ],
+    "roles": {
+      "vision": {
+        "extensions": {},
+        "capability_id": "perception.detect_tomato",
+        "backend_instance": "robot",
+        "input": {},
+        "output": {
+          "found": {
+            "extensions": {},
+            "type": "boolean",
+            "unit": null,
+            "minimum": null,
+            "maximum": null,
+            "choices": null,
+            "frame_id": null,
+            "clock_domain": null,
+            "max_age_s": null
+          },
+          "target": {
+            "extensions": {},
+            "type": "stamped_pose",
+            "unit": "m",
+            "minimum": null,
+            "maximum": null,
+            "choices": null,
+            "frame_id": "camera",
+            "clock_domain": "monotonic_host",
+            "max_age_s": 5.0
+          }
+        },
+        "parameters": {}
+      }
+    }
+  },
+  "packages": {
+    "tomato_simulator": {
+      "extensions": {},
+      "package_id": "tomato_simulator",
+      "source": "workspace:adapters/mock",
+      "platforms": [
+        "linux_x86_64",
+        "linux_arm64"
+      ],
+      "contract": "agro.capabilities.v1",
+      "adapter_entrypoint": "agro_mock:create_adapter",
+      "capabilities": [
+        {
+          "extensions": {},
+          "capability_id": "navigation.move_to_waypoint",
+          "description": "模拟导航到番茄作业点",
+          "input": {
+            "waypoint": {
+              "extensions": {},
+              "type": "string"
+            }
+          },
+          "output": {
+            "arrived": {
+              "extensions": {},
+              "type": "boolean"
+            }
+          },
+          "parameters": {},
+          "resources": [
+            {
+              "extensions": {},
+              "name": "base.motion",
+              "access": "exclusive"
+            }
+          ],
+          "preconditions": [],
+          "timeout_s": 5.0,
+          "cancellation": "supported",
+          "retry_policy": "never",
+          "feedback": {},
+          "errors": []
+        },
+        {
+          "extensions": {},
+          "capability_id": "perception.detect_tomato",
+          "description": "模拟检测单个番茄并返回带时钟域的观测",
+          "input": {},
+          "output": {
+            "found": {
+              "extensions": {},
+              "type": "boolean"
+            },
+            "target": {
+              "extensions": {},
+              "type": "stamped_pose",
+              "unit": "m",
+              "frame_id": "camera",
+              "clock_domain": "monotonic_host",
+              "max_age_s": 5.0
+            }
+          },
+          "parameters": {},
+          "resources": [],
+          "preconditions": [],
+          "timeout_s": 5.0,
+          "cancellation": "supported",
+          "retry_policy": "never",
+          "feedback": {},
+          "errors": []
+        },
+        {
+          "extensions": {},
+          "capability_id": "geometry.transform_pose",
+          "description": "用模拟平移将相机观测转换到机械臂基座",
+          "input": {
+            "target": {
+              "extensions": {},
+              "type": "stamped_pose",
+              "unit": "m",
+              "frame_id": "camera",
+              "clock_domain": "monotonic_host",
+              "max_age_s": 5.0
+            }
+          },
+          "output": {
+            "target": {
+              "extensions": {},
+              "type": "stamped_pose",
+              "unit": "m",
+              "frame_id": "arm_base",
+              "clock_domain": "monotonic_host",
+              "max_age_s": 5.0
+            }
+          },
+          "parameters": {
+            "offset_x": {
+              "extensions": {},
+              "type": "number",
+              "unit": "m",
+              "required": false,
+              "default": 0.1,
+              "apply_policy": "idle"
+            }
+          },
+          "resources": [],
+          "preconditions": [],
+          "timeout_s": 5.0,
+          "cancellation": "supported",
+          "retry_policy": "never",
+          "feedback": {},
+          "errors": []
+        },
+        {
+          "extensions": {},
+          "capability_id": "manipulation.move_to_pose",
+          "description": "模拟机械臂运动",
+          "input": {
+            "target": {
+              "extensions": {},
+              "type": "stamped_pose",
+              "unit": "m",
+              "frame_id": "arm_base",
+              "clock_domain": "monotonic_host",
+              "max_age_s": 5.0
+            }
+          },
+          "output": {
+            "reached": {
+              "extensions": {},
+              "type": "boolean"
+            }
+          },
+          "parameters": {
+            "speed": {
+              "extensions": {},
+              "type": "number",
+              "unit": "m/s",
+              "minimum": 0.01,
+              "maximum": 1.0,
+              "required": false,
+              "default": 0.2,
+              "apply_policy": "idle"
+            }
+          },
+          "resources": [
+            {
+              "extensions": {},
+              "name": "arm.motion",
+              "access": "exclusive"
+            }
+          ],
+          "preconditions": [],
+          "timeout_s": 5.0,
+          "cancellation": "supported",
+          "retry_policy": "never",
+          "feedback": {},
+          "errors": []
+        },
+        {
+          "extensions": {},
+          "capability_id": "end_effector.grip",
+          "description": "模拟夹持或释放末端",
+          "input": {
+            "target_id": {
+              "extensions": {},
+              "type": "string"
+            }
+          },
+          "output": {
+            "gripped": {
+              "extensions": {},
+              "type": "boolean"
+            }
+          },
+          "parameters": {
+            "close": {
+              "extensions": {},
+              "type": "boolean",
+              "required": false,
+              "default": true,
+              "apply_policy": "idle"
+            }
+          },
+          "resources": [
+            {
+              "extensions": {},
+              "name": "gripper.control",
+              "access": "exclusive"
+            }
+          ],
+          "preconditions": [],
+          "timeout_s": 5.0,
+          "cancellation": "supported",
+          "retry_policy": "never",
+          "feedback": {},
+          "errors": []
+        },
+        {
+          "extensions": {},
+          "capability_id": "perception.verify_pick",
+          "description": "模拟查询番茄是否被末端持有",
+          "input": {
+            "target_id": {
+              "extensions": {},
+              "type": "string"
+            }
+          },
+          "output": {
+            "picked": {
+              "extensions": {},
+              "type": "boolean"
+            }
+          },
+          "parameters": {},
+          "resources": [],
+          "preconditions": [],
+          "timeout_s": 5.0,
+          "cancellation": "supported",
+          "retry_policy": "never",
+          "feedback": {},
+          "errors": []
+        }
+      ],
+      "config": {},
+      "runtime": {
+        "extensions": {},
+        "manager": "local_process",
+        "target": "tomato_simulator",
+        "dependencies": [],
+        "health_check": "mock_status",
+        "argv": [],
+        "start_timeout_s": 10.0,
+        "stop_timeout_s": 5.0
+      }
+    }
+  }
+}

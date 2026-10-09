@@ -1,0 +1,42 @@
+package_id: tomato_mock
+source: workspace:contracts/examples
+platforms: [linux_x86_64, linux_arm64]
+contract: agro.capabilities.v1
+adapter_entrypoint: mock_adapter:create_adapter
+runtime:
+  manager: local_process
+  target: tomato_mock
+  health_check: mock_status
+capabilities:
+  - capability_id: manipulation.move_to_pose
+    description: 番茄模拟机械臂移动到目标位姿
+    input:
+      target:
+        type: stamped_pose
+        unit: m
+        frame_id: arm_base
+        clock_domain: monotonic_host
+        max_age_s: 1
+    output:
+      reached:
+        type: boolean
+    parameters:
+      speed:
+        type: number
+        unit: m/s
+        minimum: 0.01
+        maximum: 1
+        default: 0.2
+        apply_policy: idle
+      dry_run:
+        type: boolean
+        required: true
+        apply_policy: restart
+    resources:
+      - name: arm.motion
+        access: exclusive
+    preconditions: [auto_mode, fresh_observation]
+    timeout_s: 10
+    cancellation: supported
+    retry_policy: never
+    errors: [invalid_target, communication_lost]

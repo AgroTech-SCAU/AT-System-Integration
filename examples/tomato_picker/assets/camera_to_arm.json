@@ -1,0 +1,22 @@
+{
+  "device_id": "robot",
+  "source_frame": "camera",
+  "target_frame": "arm_base",
+  "translation_m": [
+    0.1,
+    0,
+    0
+  ],
+  "orientation_xyzw": [
+    0,
+    0,
+    0,
+    1
+  ],
+  "source": "模拟标定参考",
+  "verified": true,
+  "verification": {
+    "method": "synthetic_reference",
+    "position_error_m": 0.0
+  }
+}

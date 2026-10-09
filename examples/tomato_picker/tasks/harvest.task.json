@@ -1,0 +1,25 @@
+{
+  "kind": "tomato_picker",
+  "assets": {
+    "camera_to_arm": {
+      "path": "../assets/camera_to_arm.json",
+      "sha256": "6f73d8c473021727170ed76f121ff979eb389010a10e336590d05d043caeb3af",
+      "device_id": "robot",
+      "source_frame": "camera",
+      "target_frame": "arm_base"
+    }
+  },
+  "parameters": {
+    "approach_dz": {
+      "type": "number",
+      "unit": "m",
+      "minimum": 0.01,
+      "maximum": 0.1,
+      "default": 0.05,
+      "apply_policy": "idle"
+    }
+  },
+  "max_targets": 8,
+  "max_recovery_attempts": 0,
+  "timeout_ms": 30000
+}

@@ -1,0 +1,22 @@
+system_id: tomato_mock_system
+packages: [tomato_mock.package.yaml]
+backends:
+  - instance_id: arm_left
+    package_id: tomato_mock
+required_roles: [picking_arm]
+roles:
+  picking_arm:
+    capability_id: manipulation.move_to_pose
+    backend_instance: arm_left
+    input:
+      target:
+        type: stamped_pose
+        unit: m
+        frame_id: arm_base
+        clock_domain: monotonic_host
+        max_age_s: 1
+    output:
+      reached:
+        type: boolean
+    parameters:
+      dry_run: true

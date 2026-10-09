@@ -1,0 +1,219 @@
+package_id: tomato_simulator
+source: workspace:examples/tomato_picker
+platforms:
+- linux_x86_64
+- linux_arm64
+contract: agro.capabilities.v1
+adapter_entrypoint: agro_mock:create_adapter
+runtime:
+  manager: local_process
+  target: tomato_simulator
+  health_check: mock_status
+capabilities:
+- capability_id: navigation.move_to_waypoint
+  description: 模拟导航到番茄作业点
+  input:
+    waypoint:
+      type: string
+  output:
+    arrived:
+      type: boolean
+  resources:
+  - name: base.motion
+    access: exclusive
+  timeout_s: 5
+  cancellation: supported
+  retry_policy: never
+- capability_id: perception.detect_tomato
+  description: 模拟检测单个番茄并返回带时钟域的观测
+  input: {}
+  output:
+    found:
+      type: boolean
+    target:
+      type: stamped_pose
+      unit: m
+      frame_id: camera
+      clock_domain: monotonic_host
+      max_age_s: 10
+  timeout_s: 5
+  cancellation: supported
+  retry_policy: never
+- capability_id: geometry.transform_pose
+  description: 用模拟平移将相机观测转换到机械臂基座
+  input:
+    target:
+      type: stamped_pose
+      unit: m
+      frame_id: camera
+      clock_domain: monotonic_host
+      max_age_s: 10
+  output:
+    target:
+      type: stamped_pose
+      unit: m
+      frame_id: arm_base
+      clock_domain: monotonic_host
+      max_age_s: 10
+  parameters:
+    offset_x:
+      type: number
+      unit: m
+      default: 0.1
+      apply_policy: idle
+  timeout_s: 5
+  cancellation: supported
+  retry_policy: never
+- capability_id: manipulation.move_to_pose
+  description: 模拟机械臂运动
+  input:
+    target:
+      type: stamped_pose
+      unit: m
+      frame_id: arm_base
+      clock_domain: monotonic_host
+      max_age_s: 10
+  output:
+    reached:
+      type: boolean
+  parameters:
+    speed:
+      type: number
+      unit: m/s
+      minimum: 0.01
+      maximum: 1
+      default: 0.2
+      apply_policy: idle
+  resources:
+  - name: arm.motion
+    access: exclusive
+  timeout_s: 5
+  cancellation: supported
+  retry_policy: never
+- capability_id: end_effector.grip
+  description: 模拟夹持或释放末端
+  input:
+    target_id:
+      type: string
+  output:
+    gripped:
+      type: boolean
+  parameters:
+    close:
+      type: boolean
+      default: true
+      apply_policy: idle
+  resources:
+  - name: gripper.control
+    access: exclusive
+  timeout_s: 5
+  cancellation: supported
+  retry_policy: never
+- capability_id: perception.verify_pick
+  description: 模拟查询番茄是否被末端持有
+  input:
+    target_id:
+      type: string
+  output:
+    picked:
+      type: boolean
+  timeout_s: 5
+  cancellation: supported
+  retry_policy: never
+- capability_id: perception.detect_targets
+  description: 番茄闭环模拟能力
+  input: {}
+  output:
+    targets:
+      type: target_list
+      unit: m
+      frame_id: camera
+      clock_domain: monotonic_host
+      max_age_s: 10
+  parameters: {}
+  timeout_s: 5
+  cancellation: supported
+  retry_policy: never
+- capability_id: manipulation.check_reachability
+  description: 番茄闭环模拟能力
+  input:
+    target:
+      type: stamped_pose
+      unit: m
+      frame_id: arm_base
+      clock_domain: monotonic_host
+      max_age_s: 10
+  output:
+    reachable:
+      type: boolean
+  parameters: {}
+  timeout_s: 5
+  cancellation: supported
+  retry_policy: never
+- capability_id: geometry.offset_pose
+  description: 番茄闭环模拟能力
+  input:
+    target:
+      type: stamped_pose
+      unit: m
+      frame_id: arm_base
+      clock_domain: monotonic_host
+      max_age_s: 10
+  output:
+    target:
+      type: stamped_pose
+      unit: m
+      frame_id: arm_base
+      clock_domain: monotonic_host
+      max_age_s: 10
+  parameters:
+    dz:
+      type: number
+      unit: m
+      minimum: -0.2
+      maximum: 0.2
+      default: 0.05
+      apply_policy: idle
+  timeout_s: 5
+  cancellation: supported
+  retry_policy: never
+- capability_id: manipulation.collection_pose
+  description: 番茄闭环模拟能力
+  input:
+    target_id:
+      type: string
+  output:
+    target:
+      type: stamped_pose
+      unit: m
+      frame_id: arm_base
+      clock_domain: monotonic_host
+      max_age_s: 10
+  parameters: {}
+  timeout_s: 5
+  cancellation: supported
+  retry_policy: never
+- capability_id: perception.verify_place
+  description: 番茄闭环模拟能力
+  input:
+    target_id:
+      type: string
+  output:
+    placed:
+      type: boolean
+  parameters: {}
+  timeout_s: 5
+  cancellation: supported
+  retry_policy: never
+- capability_id: job.record_pick
+  description: 番茄闭环模拟能力
+  input:
+    result:
+      type: pick_result
+  output:
+    result:
+      type: pick_result
+  parameters: {}
+  timeout_s: 5
+  cancellation: supported
+  retry_policy: never

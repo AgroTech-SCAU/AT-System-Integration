@@ -1,0 +1,2036 @@
+{
+  "$defs": {
+    "AssetReference": {
+      "additionalProperties": false,
+      "properties": {
+        "extensions": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Extensions",
+          "type": "object"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "device_id": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Device Id",
+          "type": "string"
+        },
+        "source_frame": {
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
+          "title": "Source Frame",
+          "type": "string"
+        },
+        "target_frame": {
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
+          "title": "Target Frame",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "device_id",
+        "source_frame",
+        "target_frame"
+      ],
+      "title": "AssetReference",
+      "type": "object"
+    },
+    "BackendInstance": {
+      "additionalProperties": false,
+      "properties": {
+        "extensions": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Extensions",
+          "type": "object"
+        },
+        "instance_id": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Instance Id",
+          "type": "string"
+        },
+        "package_id": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Package Id",
+          "type": "string"
+        },
+        "config": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          },
+          "title": "Config",
+          "type": "object"
+        },
+        "runtime": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeDescriptor"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "native_config": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Native Config"
+        }
+      },
+      "required": [
+        "instance_id",
+        "package_id"
+      ],
+      "title": "BackendInstance",
+      "type": "object"
+    },
+    "CapabilityDescriptor": {
+      "additionalProperties": false,
+      "properties": {
+        "extensions": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Extensions",
+          "type": "object"
+        },
+        "capability_id": {
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$",
+          "title": "Capability Id",
+          "type": "string"
+        },
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "input": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/TypeDescriptor"
+            }
+          },
+          "title": "Input",
+          "type": "object"
+        },
+        "output": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/TypeDescriptor"
+            }
+          },
+          "title": "Output",
+          "type": "object"
+        },
+        "parameters": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/ParameterDescriptor"
+            }
+          },
+          "title": "Parameters",
+          "type": "object"
+        },
+        "resources": {
+          "items": {
+            "$ref": "#/$defs/ResourceRequirement"
+          },
+          "title": "Resources",
+          "type": "array"
+        },
+        "preconditions": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Preconditions",
+          "type": "array"
+        },
+        "timeout_s": {
+          "exclusiveMinimum": 0,
+          "title": "Timeout S",
+          "type": "number"
+        },
+        "cancellation": {
+          "enum": [
+            "supported",
+            "unsupported"
+          ],
+          "title": "Cancellation",
+          "type": "string"
+        },
+        "retry_policy": {
+          "enum": [
+            "never",
+            "safe_errors_only"
+          ],
+          "title": "Retry Policy",
+          "type": "string"
+        },
+        "feedback": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/TypeDescriptor"
+            }
+          },
+          "title": "Feedback",
+          "type": "object"
+        },
+        "errors": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "title": "Errors",
+          "type": "array"
+        }
+      },
+      "required": [
+        "capability_id",
+        "description",
+        "input",
+        "output",
+        "timeout_s",
+        "cancellation",
+        "retry_policy"
+      ],
+      "title": "CapabilityDescriptor",
+      "type": "object"
+    },
+    "ConfigurationApply": {
+      "additionalProperties": false,
+      "properties": {
+        "draft_id": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Draft Id",
+          "type": "string"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "base_snapshot_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Base Snapshot Id",
+          "type": "string"
+        },
+        "request_id": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Request Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "draft_id",
+        "revision",
+        "base_snapshot_id",
+        "request_id"
+      ],
+      "title": "ConfigurationApply",
+      "type": "object"
+    },
+    "ControlToken": {
+      "additionalProperties": false,
+      "properties": {
+        "extensions": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Extensions",
+          "type": "object"
+        },
+        "owner": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Owner",
+          "type": "string"
+        },
+        "control_epoch": {
+          "minimum": 0,
+          "title": "Control Epoch",
+          "type": "integer"
+        },
+        "expires_at": {
+          "minimum": 0,
+          "title": "Expires At",
+          "type": "number"
+        },
+        "clock_domain": {
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
+          "title": "Clock Domain",
+          "type": "string"
+        }
+      },
+      "required": [
+        "owner",
+        "control_epoch",
+        "expires_at",
+        "clock_domain"
+      ],
+      "title": "ControlToken",
+      "type": "object"
+    },
+    "DescriptionUpload": {
+      "additionalProperties": false,
+      "properties": {
+        "filename": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Filename",
+          "type": "string"
+        },
+        "content": {
+          "maxLength": 2097152,
+          "title": "Content",
+          "type": "string"
+        }
+      },
+      "required": [
+        "filename",
+        "content"
+      ],
+      "title": "DescriptionUpload",
+      "type": "object"
+    },
+    "Diagnostic": {
+      "additionalProperties": false,
+      "properties": {
+        "severity": {
+          "default": "error",
+          "enum": [
+            "error",
+            "warning"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "tree_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tree Id"
+        },
+        "editor_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Editor Id"
+        },
+        "port": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Port"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "reason"
+      ],
+      "title": "Diagnostic",
+      "type": "object"
+    },
+    "DraftCreate": {
+      "additionalProperties": false,
+      "properties": {
+        "base_snapshot_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Base Snapshot Id",
+          "type": "string"
+        },
+        "content": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content"
+        }
+      },
+      "required": [
+        "base_snapshot_id"
+      ],
+      "title": "DraftCreate",
+      "type": "object"
+    },
+    "DraftSave": {
+      "additionalProperties": false,
+      "properties": {
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "content": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Content",
+          "type": "object"
+        }
+      },
+      "required": [
+        "revision",
+        "content"
+      ],
+      "title": "DraftSave",
+      "type": "object"
+    },
+    "ExecutionRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "extensions": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Extensions",
+          "type": "object"
+        },
+        "capability_id": {
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$",
+          "title": "Capability Id",
+          "type": "string"
+        },
+        "backend_instance": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Backend Instance",
+          "type": "string"
+        },
+        "input": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          },
+          "title": "Input",
+          "type": "object"
+        },
+        "parameters": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          },
+          "title": "Parameters",
+          "type": "object"
+        },
+        "request_id": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "task_run_id": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Task Run Id",
+          "type": "string"
+        },
+        "node_id": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Node Id",
+          "type": "string"
+        },
+        "control": {
+          "$ref": "#/$defs/ControlToken"
+        }
+      },
+      "required": [
+        "capability_id",
+        "backend_instance",
+        "input",
+        "request_id",
+        "task_run_id",
+        "node_id",
+        "control"
+      ],
+      "title": "ExecutionRequest",
+      "type": "object"
+    },
+    "JsonValue": {},
+    "LayoutDocument": {
+      "additionalProperties": false,
+      "properties": {
+        "revision": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "positions": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            }
+          },
+          "title": "Positions",
+          "type": "object"
+        },
+        "labels": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "type": "string"
+            }
+          },
+          "title": "Labels",
+          "type": "object"
+        },
+        "collapsed": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "title": "Collapsed",
+          "type": "array"
+        },
+        "zoom": {
+          "default": 1,
+          "maximum": 3,
+          "minimum": 0.2,
+          "title": "Zoom",
+          "type": "number"
+        }
+      },
+      "title": "LayoutDocument",
+      "type": "object"
+    },
+    "LifecycleIntent": {
+      "additionalProperties": false,
+      "properties": {
+        "request_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Request Id"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        }
+      },
+      "title": "LifecycleIntent",
+      "type": "object"
+    },
+    "OperationError": {
+      "additionalProperties": false,
+      "properties": {
+        "extensions": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Extensions",
+          "type": "object"
+        },
+        "code": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Code",
+          "type": "string"
+        },
+        "reason": {
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "path": {
+          "default": "$",
+          "title": "Path",
+          "type": "string"
+        },
+        "retryable": {
+          "default": false,
+          "title": "Retryable",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "code",
+        "reason"
+      ],
+      "title": "OperationError",
+      "type": "object"
+    },
+    "OperationFeedback": {
+      "additionalProperties": false,
+      "properties": {
+        "extensions": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Extensions",
+          "type": "object"
+        },
+        "timestamp": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timestamp"
+        },
+        "clock_domain": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Clock Domain"
+        },
+        "stage": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stage"
+        },
+        "progress": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Progress"
+        },
+        "data": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          },
+          "title": "Data",
+          "type": "object"
+        }
+      },
+      "title": "OperationFeedback",
+      "type": "object"
+    },
+    "OperationResult": {
+      "additionalProperties": false,
+      "properties": {
+        "extensions": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Extensions",
+          "type": "object"
+        },
+        "output": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          },
+          "title": "Output",
+          "type": "object"
+        }
+      },
+      "title": "OperationResult",
+      "type": "object"
+    },
+    "OperationSnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "extensions": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Extensions",
+          "type": "object"
+        },
+        "operation_id": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Operation Id",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/OperationState"
+        },
+        "stop_state": {
+          "$ref": "#/$defs/StopState"
+        },
+        "feedback": {
+          "$ref": "#/$defs/OperationFeedback"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OperationResult"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OperationError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "cancel_requested": {
+          "default": false,
+          "title": "Cancel Requested",
+          "type": "boolean"
+        },
+        "cancel_accepted": {
+          "default": false,
+          "title": "Cancel Accepted",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "operation_id",
+        "state",
+        "stop_state"
+      ],
+      "title": "OperationSnapshot",
+      "type": "object"
+    },
+    "OperationState": {
+      "enum": [
+        "ACCEPTED",
+        "RUNNING",
+        "CANCELING",
+        "SUCCEEDED",
+        "FAILED",
+        "CANCELED",
+        "UNKNOWN"
+      ],
+      "title": "OperationState",
+      "type": "string"
+    },
+    "PackageDescriptor": {
+      "additionalProperties": false,
+      "properties": {
+        "extensions": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Extensions",
+          "type": "object"
+        },
+        "package_id": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Package Id",
+          "type": "string"
+        },
+        "source": {
+          "minLength": 1,
+          "title": "Source",
+          "type": "string"
+        },
+        "platforms": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Platforms",
+          "type": "array"
+        },
+        "contract": {
+          "const": "agro.capabilities.v1",
+          "title": "Contract",
+          "type": "string"
+        },
+        "adapter_entrypoint": {
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*:[A-Za-z_][A-Za-z0-9_]*$",
+          "title": "Adapter Entrypoint",
+          "type": "string"
+        },
+        "capabilities": {
+          "items": {
+            "$ref": "#/$defs/CapabilityDescriptor"
+          },
+          "minItems": 1,
+          "title": "Capabilities",
+          "type": "array"
+        },
+        "config": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/ParameterDescriptor"
+            }
+          },
+          "title": "Config",
+          "type": "object"
+        },
+        "runtime": {
+          "$ref": "#/$defs/RuntimeDescriptor"
+        }
+      },
+      "required": [
+        "package_id",
+        "source",
+        "platforms",
+        "contract",
+        "adapter_entrypoint",
+        "capabilities",
+        "runtime"
+      ],
+      "title": "PackageDescriptor",
+      "type": "object"
+    },
+    "ParameterDescriptor": {
+      "additionalProperties": false,
+      "properties": {
+        "extensions": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Extensions",
+          "type": "object"
+        },
+        "type": {
+          "enum": [
+            "string",
+            "integer",
+            "number",
+            "boolean"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit"
+        },
+        "minimum": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Minimum"
+        },
+        "maximum": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Maximum"
+        },
+        "choices": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Choices"
+        },
+        "frame_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Frame Id"
+        },
+        "clock_domain": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Clock Domain"
+        },
+        "max_age_s": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Age S"
+        },
+        "required": {
+          "default": false,
+          "title": "Required",
+          "type": "boolean"
+        },
+        "default": {
+          "$ref": "#/$defs/JsonValue",
+          "default": null
+        },
+        "apply_policy": {
+          "enum": [
+            "immediate",
+            "idle",
+            "restart"
+          ],
+          "title": "Apply Policy",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "apply_policy"
+      ],
+      "title": "ParameterDescriptor",
+      "type": "object"
+    },
+    "PickResult": {
+      "additionalProperties": false,
+      "properties": {
+        "extensions": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Extensions",
+          "type": "object"
+        },
+        "target_id": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Target Id",
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "picked",
+            "skipped",
+            "failed",
+            "unknown"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        }
+      },
+      "required": [
+        "target_id",
+        "outcome"
+      ],
+      "title": "PickResult",
+      "type": "object"
+    },
+    "PlanCreate": {
+      "additionalProperties": false,
+      "properties": {
+        "template_id": {
+          "default": "tomato_picker",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Template Id",
+          "type": "string"
+        },
+        "parameters": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          },
+          "title": "Parameters",
+          "type": "object"
+        },
+        "asset_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Asset Id"
+        }
+      },
+      "title": "PlanCreate",
+      "type": "object"
+    },
+    "PortBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "typed_literal",
+            "blackboard_reference"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/JsonValue",
+          "default": null
+        },
+        "key": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Key"
+        },
+        "type": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Type",
+          "type": "object"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "PortBinding",
+      "type": "object"
+    },
+    "ResourceRequirement": {
+      "additionalProperties": false,
+      "properties": {
+        "extensions": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Extensions",
+          "type": "object"
+        },
+        "name": {
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "access": {
+          "enum": [
+            "shared",
+            "exclusive"
+          ],
+          "title": "Access",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "access"
+      ],
+      "title": "ResourceRequirement",
+      "type": "object"
+    },
+    "RoleBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "extensions": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Extensions",
+          "type": "object"
+        },
+        "capability_id": {
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$",
+          "title": "Capability Id",
+          "type": "string"
+        },
+        "backend_instance": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Backend Instance",
+          "type": "string"
+        },
+        "input": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/TypeDescriptor"
+            }
+          },
+          "title": "Input",
+          "type": "object"
+        },
+        "output": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/TypeDescriptor"
+            }
+          },
+          "title": "Output",
+          "type": "object"
+        },
+        "parameters": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          },
+          "title": "Parameters",
+          "type": "object"
+        }
+      },
+      "required": [
+        "capability_id",
+        "backend_instance",
+        "input",
+        "output"
+      ],
+      "title": "RoleBinding",
+      "type": "object"
+    },
+    "RuntimeDescriptor": {
+      "additionalProperties": false,
+      "properties": {
+        "extensions": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Extensions",
+          "type": "object"
+        },
+        "manager": {
+          "enum": [
+            "local_process",
+            "systemd",
+            "ros_launch"
+          ],
+          "title": "Manager",
+          "type": "string"
+        },
+        "target": {
+          "minLength": 1,
+          "title": "Target",
+          "type": "string"
+        },
+        "dependencies": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "health_check": {
+          "minLength": 1,
+          "title": "Health Check",
+          "type": "string"
+        },
+        "argv": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Argv",
+          "type": "array"
+        },
+        "start_timeout_s": {
+          "default": 10.0,
+          "exclusiveMinimum": 0,
+          "title": "Start Timeout S",
+          "type": "number"
+        },
+        "stop_timeout_s": {
+          "default": 5.0,
+          "exclusiveMinimum": 0,
+          "title": "Stop Timeout S",
+          "type": "number"
+        }
+      },
+      "required": [
+        "manager",
+        "target",
+        "health_check"
+      ],
+      "title": "RuntimeDescriptor",
+      "type": "object"
+    },
+    "StampedPose": {
+      "additionalProperties": false,
+      "properties": {
+        "extensions": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Extensions",
+          "type": "object"
+        },
+        "target_id": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Target Id",
+          "type": "string"
+        },
+        "frame_id": {
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
+          "title": "Frame Id",
+          "type": "string"
+        },
+        "timestamp": {
+          "minimum": 0,
+          "title": "Timestamp",
+          "type": "number"
+        },
+        "clock_domain": {
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
+          "title": "Clock Domain",
+          "type": "string"
+        },
+        "position": {
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Position",
+          "type": "array"
+        },
+        "position_unit": {
+          "minLength": 1,
+          "title": "Position Unit",
+          "type": "string"
+        },
+        "orientation": {
+          "maxItems": 4,
+          "minItems": 4,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Orientation",
+          "type": "array"
+        }
+      },
+      "required": [
+        "target_id",
+        "frame_id",
+        "timestamp",
+        "clock_domain",
+        "position",
+        "position_unit",
+        "orientation"
+      ],
+      "title": "StampedPose",
+      "type": "object"
+    },
+    "StopState": {
+      "enum": [
+        "CONFIRMED",
+        "UNCONFIRMED",
+        "NOT_APPLICABLE"
+      ],
+      "title": "StopState",
+      "type": "string"
+    },
+    "SubtreePort": {
+      "additionalProperties": false,
+      "properties": {
+        "direction": {
+          "enum": [
+            "INPUT",
+            "OUTPUT"
+          ],
+          "title": "Direction",
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/TypeDescriptor"
+        }
+      },
+      "required": [
+        "direction",
+        "type"
+      ],
+      "title": "SubtreePort",
+      "type": "object"
+    },
+    "SystemConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "extensions": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Extensions",
+          "type": "object"
+        },
+        "system_id": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "System Id",
+          "type": "string"
+        },
+        "packages": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Packages",
+          "type": "array"
+        },
+        "backends": {
+          "items": {
+            "$ref": "#/$defs/BackendInstance"
+          },
+          "minItems": 1,
+          "title": "Backends",
+          "type": "array"
+        },
+        "required_roles": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Required Roles",
+          "type": "array"
+        },
+        "roles": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/RoleBinding"
+            }
+          },
+          "title": "Roles",
+          "type": "object"
+        }
+      },
+      "required": [
+        "system_id",
+        "backends",
+        "required_roles",
+        "roles"
+      ],
+      "title": "SystemConfig",
+      "type": "object"
+    },
+    "TargetList": {
+      "items": {
+        "$ref": "#/$defs/StampedPose"
+      },
+      "title": "TargetList",
+      "type": "array"
+    },
+    "TaskIntent": {
+      "additionalProperties": false,
+      "properties": {
+        "request_id": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Request Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id"
+      ],
+      "title": "TaskIntent",
+      "type": "object"
+    },
+    "TaskManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "extensions": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Extensions",
+          "type": "object"
+        },
+        "kind": {
+          "pattern": "^(tomato_picker|simulation_inspection)$",
+          "title": "Kind",
+          "type": "string"
+        },
+        "assets": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/AssetReference"
+            }
+          },
+          "title": "Assets",
+          "type": "object"
+        },
+        "parameters": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/ParameterDescriptor"
+            }
+          },
+          "title": "Parameters",
+          "type": "object"
+        },
+        "max_targets": {
+          "maximum": 8,
+          "minimum": 1,
+          "title": "Max Targets",
+          "type": "integer"
+        },
+        "max_recovery_attempts": {
+          "maximum": 0,
+          "minimum": 0,
+          "title": "Max Recovery Attempts",
+          "type": "integer"
+        },
+        "timeout_ms": {
+          "maximum": 60000,
+          "minimum": 1000,
+          "title": "Timeout Ms",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "assets",
+        "max_targets",
+        "max_recovery_attempts",
+        "timeout_ms"
+      ],
+      "title": "TaskManifest",
+      "type": "object"
+    },
+    "TaskStart": {
+      "additionalProperties": false,
+      "properties": {
+        "extensions": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Extensions",
+          "type": "object"
+        },
+        "task_ref": {
+          "minLength": 1,
+          "title": "Task Ref",
+          "type": "string"
+        },
+        "config_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Config Ref"
+        },
+        "request_id": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "parameters": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          },
+          "title": "Parameters",
+          "type": "object"
+        }
+      },
+      "required": [
+        "task_ref",
+        "request_id"
+      ],
+      "title": "TaskStart",
+      "type": "object"
+    },
+    "TreeCreate": {
+      "additionalProperties": false,
+      "properties": {
+        "xml": {
+          "anyOf": [
+            {
+              "maxLength": 1048576,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Xml"
+        },
+        "template": {
+          "default": "simulation_inspection",
+          "enum": [
+            "tomato_picker",
+            "simulation_inspection"
+          ],
+          "title": "Template",
+          "type": "string"
+        }
+      },
+      "title": "TreeCreate",
+      "type": "object"
+    },
+    "TreeDefinition": {
+      "additionalProperties": false,
+      "properties": {
+        "tree_id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$",
+          "title": "Tree Id",
+          "type": "string"
+        },
+        "root_id": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Root Id",
+          "type": "string"
+        },
+        "nodes": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/TreeNode"
+            }
+          },
+          "title": "Nodes",
+          "type": "object"
+        },
+        "ports": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/SubtreePort"
+            }
+          },
+          "title": "Ports",
+          "type": "object"
+        }
+      },
+      "required": [
+        "tree_id",
+        "root_id",
+        "nodes"
+      ],
+      "title": "TreeDefinition",
+      "type": "object"
+    },
+    "TreeDocument": {
+      "additionalProperties": false,
+      "properties": {
+        "main_tree_id": {
+          "title": "Main Tree Id",
+          "type": "string"
+        },
+        "trees": {
+          "additionalProperties": {
+            "$ref": "#/$defs/TreeDefinition"
+          },
+          "title": "Trees",
+          "type": "object"
+        },
+        "revision": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "inputs": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/ParameterDescriptor"
+            }
+          },
+          "title": "Inputs",
+          "type": "object"
+        },
+        "model_digest": {
+          "title": "Model Digest",
+          "type": "string"
+        },
+        "readonly": {
+          "default": false,
+          "title": "Readonly",
+          "type": "boolean"
+        },
+        "original_xml": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Original Xml"
+        },
+        "unsupported": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Unsupported",
+          "type": "array"
+        }
+      },
+      "required": [
+        "main_tree_id",
+        "trees",
+        "model_digest"
+      ],
+      "title": "TreeDocument",
+      "type": "object"
+    },
+    "TreeExtract": {
+      "additionalProperties": false,
+      "properties": {
+        "document": {
+          "$ref": "#/$defs/TreeDocument"
+        },
+        "tree_id": {
+          "title": "Tree Id",
+          "type": "string"
+        },
+        "editor_id": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Editor Id",
+          "type": "string"
+        },
+        "subtree_id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$",
+          "title": "Subtree Id",
+          "type": "string"
+        },
+        "ports": {
+          "anyOf": [
+            {
+              "patternProperties": {
+                "^[a-z][a-z0-9_]*$": {
+                  "$ref": "#/$defs/SubtreePort"
+                }
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ports"
+        }
+      },
+      "required": [
+        "document",
+        "tree_id",
+        "editor_id",
+        "subtree_id"
+      ],
+      "title": "TreeExtract",
+      "type": "object"
+    },
+    "TreeNode": {
+      "additionalProperties": false,
+      "properties": {
+        "editor_id": {
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Editor Id",
+          "type": "string"
+        },
+        "registration_id": {
+          "title": "Registration Id",
+          "type": "string"
+        },
+        "children": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "title": "Children",
+          "type": "array"
+        },
+        "ports": {
+          "additionalProperties": {
+            "$ref": "#/$defs/PortBinding"
+          },
+          "title": "Ports",
+          "type": "object"
+        },
+        "attributes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Attributes",
+          "type": "object"
+        }
+      },
+      "required": [
+        "editor_id",
+        "registration_id"
+      ],
+      "title": "TreeNode",
+      "type": "object"
+    },
+    "TreePublish": {
+      "additionalProperties": false,
+      "properties": {
+        "revision": {
+          "title": "Revision",
+          "type": "integer"
+        },
+        "base_snapshot_id": {
+          "title": "Base Snapshot Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "revision",
+        "base_snapshot_id"
+      ],
+      "title": "TreePublish",
+      "type": "object"
+    },
+    "TreeSave": {
+      "additionalProperties": false,
+      "properties": {
+        "revision": {
+          "title": "Revision",
+          "type": "integer"
+        },
+        "layout_revision": {
+          "title": "Layout Revision",
+          "type": "integer"
+        },
+        "document": {
+          "$ref": "#/$defs/TreeDocument"
+        },
+        "layout": {
+          "$ref": "#/$defs/LayoutDocument"
+        },
+        "parameters": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          },
+          "title": "Parameters",
+          "type": "object"
+        }
+      },
+      "required": [
+        "revision",
+        "layout_revision",
+        "document",
+        "layout"
+      ],
+      "title": "TreeSave",
+      "type": "object"
+    },
+    "TreeValidate": {
+      "additionalProperties": false,
+      "properties": {
+        "document": {
+          "$ref": "#/$defs/TreeDocument"
+        },
+        "policy": {
+          "default": "simulation_inspection",
+          "enum": [
+            "simulation_inspection",
+            "tomato_picker"
+          ],
+          "title": "Policy",
+          "type": "string"
+        },
+        "parameters": {
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          },
+          "title": "Parameters",
+          "type": "object"
+        }
+      },
+      "required": [
+        "document"
+      ],
+      "title": "TreeValidate",
+      "type": "object"
+    },
+    "TypeDescriptor": {
+      "additionalProperties": false,
+      "properties": {
+        "extensions": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Extensions",
+          "type": "object"
+        },
+        "type": {
+          "enum": [
+            "string",
+            "integer",
+            "number",
+            "boolean",
+            "stamped_pose",
+            "target_list",
+            "pick_result"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit"
+        },
+        "minimum": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Minimum"
+        },
+        "maximum": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Maximum"
+        },
+        "choices": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Choices"
+        },
+        "frame_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Frame Id"
+        },
+        "clock_domain": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Clock Domain"
+        },
+        "max_age_s": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Age S"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "TypeDescriptor",
+      "type": "object"
+    }
+  },
+  "title": "Agricultural capability contracts",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

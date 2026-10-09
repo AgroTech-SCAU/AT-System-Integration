@@ -1,0 +1,7 @@
+{
+  "operation_id": "operation_1",
+  "state": "UNKNOWN",
+  "stop_state": "UNCONFIRMED",
+  "feedback": {"stage": "waiting_for_result", "progress": 0.5},
+  "error": {"code": "result_lost", "reason": "结果丢失，需要核对，不能直接重试", "retryable": false}
+}

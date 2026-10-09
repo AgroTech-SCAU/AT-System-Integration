@@ -1,0 +1,20 @@
+{
+  "capability_id": "manipulation.move_to_pose",
+  "backend_instance": "arm_left",
+  "input": {
+    "target": {
+      "target_id": "tomato_1",
+      "frame_id": "arm_base",
+      "timestamp": 100,
+      "clock_domain": "monotonic_host",
+      "position": [0.3, 0.1, 0.2],
+      "position_unit": "m",
+      "orientation": [0, 0, 0, 1]
+    }
+  },
+  "parameters": {"dry_run": true},
+  "request_id": "request_1",
+  "task_run_id": "task_1",
+  "node_id": "approach",
+  "control": {"owner": "task_1", "control_epoch": 1, "expires_at": 110, "clock_domain": "monotonic_host"}
+}
