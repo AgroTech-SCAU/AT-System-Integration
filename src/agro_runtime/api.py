@@ -77,7 +77,7 @@ class GuiFiles(StaticFiles):
 
 
 def create_app(runtime, *, session_secret, session_identity='local_session', task_engine=None, endpoint=None,
-               ui_directory=None):
+               ui_directory=None, tutorial_only=False):
     if not session_secret or not session_identity:
         fail('$.session', 'invalid_session_secret', '本地会话身份与密钥不能为空')
     runtime = ActiveContext(runtime)
@@ -97,6 +97,8 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     from .tree_models import TreeCreate,TreeSave,TreePublish,TreeExtract,TreeValidate
     documents = TaskDocuments(runtime,store,assets)
     runtime.tasks.documents = documents
+    from .state_machines import StateMachines
+    hsm = StateMachines(runtime,store,robot_systems,documents,tasks)
 
     async def authenticate(authorization: Annotated[str | None, Header()] = None):
         if authorization is None or not hmac.compare_digest(authorization.encode('utf-8'),
@@ -104,17 +106,34 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
             raise HTTPException(status_code=401, detail='local_session_required')
         return session_identity
 
+    tutorial = None
+    if not tutorial_only:
+        from .tutorial_sandbox import TutorialSandbox
+        tutorial = TutorialSandbox(session_secret, task_engine=task_engine, endpoint=endpoint, ui_directory=ui_directory)
+
     @asynccontextmanager
     async def lifespan(app):
         yield
+        if tutorial is not None:
+            await tutorial.close()
         for task in jobs.values():
             if task and not task.done():
                 await task
+        await hsm.close()
         await runtime.aclose()
         store.db.close()
 
     app = FastAPI(title='Agro runtime management',
                   lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    @app.middleware('http')
+    async def tutorial_guard(request, call_next):
+        # A tutorial must never install third-party code, import projects or control a real device
+        if tutorial_only and request.method not in {'GET', 'HEAD', 'OPTIONS'}:
+            path = request.url.path.removeprefix('/tutorial')
+            if path.startswith(('/catalog', '/packages/', '/assets', '/robot-systems/import')):
+                return JSONResponse(status_code=403, content={'errors':[{'path':'$.tutorial','code':'mock_only','reason':'教学环境只能使用内置模拟适配器'}]})
+        return await call_next(request)
+
     @app.middleware('http')
     async def blocked_writes(request, call_next):
         if runtime.state == 'BLOCKED' and request.method not in {'GET','HEAD','OPTIONS'}:
@@ -128,6 +147,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     app.state.management = management
     app.state.diagnostics = diagnostics
     app.state.documents = documents
+    app.state.hsm = hsm
     api = APIRouter(dependencies=[Depends(authenticate)])
     identity = {'application': 'AT-System-Integration',
                 'source_root': str(Path(__file__).resolve().parents[2]),
@@ -203,6 +223,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     @api.post('/robot-systems/deselect')
     async def deselect_robot_system():
+        if hsm.running(): fail('$.machine','running','请先停止业务状态机并确认动作已结束')
         if any(not worker.done() for worker in jobs.values()):
             fail('$.management', 'management_busy', '仍有管理操作正在执行，无法关闭工作区')
         return robot_systems.deselect()
@@ -213,16 +234,19 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     @api.delete('/robot-systems/{system_id}')
     async def delete_robot_system(system_id: str):
+        if hsm.running(): fail('$.machine','running','请先停止业务状态机并确认动作已结束')
         if any(not worker.done() for worker in jobs.values()):
             fail('$.management', 'management_busy', '请等待当前管理操作完成后再删除系统')
         return robot_systems.delete(system_id)
 
     @api.post('/robot-systems/{system_id}/select-blank')
     async def select_blank_robot_system(system_id: str):
+        if hsm.running(): fail('$.machine','running','运行中不能切换机器人')
         return robot_systems.choose_blank(system_id)
 
     @api.post('/robot-systems/{system_id}/activate', status_code=202)
     async def activate_robot_system(system_id: str, body: RobotSystemActivate):
+        if hsm.running(): fail('$.machine','running','运行中不能切换机器人')
         async def work(phase):
             return await robot_systems.activate(system_id, phase)
         job=management.accept('robot_system_activate',body.request_id,{'id': system_id},work)
@@ -294,6 +318,15 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     @api.post('/system/stop', status_code=202)
     async def stop(body: LifecycleIntent | None = None):
+        if hsm.running():
+            async def stop_hsm_then_system(phase):
+                phase('stopping_state_machine')
+                await hsm.stop()
+                phase('stopping_system')
+                return await runtime.stop()
+            token=body.request_id if body and body.request_id else 'request_'+uuid4().hex
+            job=management.accept('stop',token,{},stop_hsm_then_system,lambda: (setattr(runtime,'accepting',False), setattr(runtime,'stop_requested',True)))
+            return {'accepted':True,'action':'stop','management_job_id':job['id'],**runtime.status()}
         return accepted_job('stop',body.request_id if body else None)
 
     @api.get('/management/jobs')
@@ -306,6 +339,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     @api.post('/config/apply', status_code=202)
     async def apply_config(body: ConfigurationApply):
+        if hsm.running(): fail('$.machine','running','先停止业务状态机再应用配置')
         body=body.model_dump()
         async def work(phase):
             return await configuration.apply(body.get('draft_id'),body.get('revision'),body.get('base_snapshot_id'),phase)
@@ -316,6 +350,45 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     async def config_status():
         return {'snapshot_id':runtime.snapshot_id,'state':runtime.state,'content':runtime.bound.config.model_dump(mode='json'),
                 'apply_policy':'restart'}
+
+    class StateMachineSave(BaseModel):
+        model_config = ConfigDict(extra='forbid')
+        id: str | None = None
+        name: str = '我的状态机'
+        document: dict
+
+    class StateMachineEvent(BaseModel):
+        model_config = ConfigDict(extra='forbid')
+        event: str
+        variables: dict = Field(default_factory=dict)
+
+    @api.get('/state-machines')
+    async def hsm_list():
+        return {'machines':hsm.list()}
+
+    @api.post('/state-machines')
+    async def hsm_save(body: StateMachineSave):
+        return hsm.save(body.model_dump())
+
+    @api.delete('/state-machines/{machine_id}')
+    async def hsm_delete(machine_id: str):
+        return hsm.delete(machine_id)
+
+    @api.get('/state-machines/status')
+    async def hsm_status():
+        return {'session':hsm.status()}
+
+    @api.post('/state-machines/{machine_id}/start',status_code=202)
+    async def hsm_start(machine_id: str):
+        return await hsm.start(machine_id)
+
+    @api.post('/state-machines/event',status_code=202)
+    async def hsm_event(body: StateMachineEvent):
+        return await hsm.event(body.event,body.variables)
+
+    @api.post('/state-machines/stop',status_code=202)
+    async def hsm_stop():
+        return hsm.request_stop()
 
     @api.get('/templates')
     async def templates():
@@ -345,6 +418,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     @api.post('/plans/{plan_id}/start', status_code=202)
     async def plan_start(plan_id: str,body: TaskIntent,owner: str=Depends(authenticate)):
+        if hsm.running(): fail('$.machine','hsm_busy','状态机持有任务控制权，请从状态机发送事件')
         body=body.model_dump()
         async with runtime.transition:
             return await tasks.start_task(assets.request(plan_id,body.get('request_id')),owner)
@@ -406,6 +480,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     @api.post('/tasks', status_code=202)
     async def task_start(body: TaskStart, owner: str = Depends(authenticate)):
+        if hsm.running(): fail('$.machine','hsm_busy','状态机持有任务控制权')
         async with runtime.transition:
             return await tasks.start_task(body, owner)
 
@@ -497,10 +572,22 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     @api.post('/trees/definitions/{key}/start',status_code=202)
     async def definition_start(key: str,body: TaskIntent,owner: str = Depends(authenticate)):
+        if hsm.running(): fail('$.machine','hsm_busy','状态机持有任务控制权，请从状态机发送事件')
         async with runtime.transition:
             return await tasks.start_task(documents.definition_request(key,body.request_id),owner)
 
+    if tutorial is not None:
+        @api.post('/tutorial/session')
+        async def tutorial_start():
+            return await tutorial.start()
+
+        @api.delete('/tutorial/session')
+        async def tutorial_close():
+            return await tutorial.close()
+
     app.include_router(api)
+    if tutorial is not None:
+        app.mount('/tutorial', tutorial, name='tutorial-api')
     directory = gui_directory(ui_directory)
     if (directory / 'index.html').is_file():
         app.mount('/ui', GuiFiles(directory=directory, html=True), name='gui')

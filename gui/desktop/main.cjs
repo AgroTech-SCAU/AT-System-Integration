@@ -22,7 +22,7 @@ try {
   app.exit(1)
 }
 if (url && dataDirectory) {
-  app.setName('AgroTech Launcher')
+  app.setName('AT Robot Studio')
   fs.mkdirSync(dataDirectory, { recursive: true })
   app.setPath('userData', dataDirectory)
   app.setPath('sessionData', dataDirectory)

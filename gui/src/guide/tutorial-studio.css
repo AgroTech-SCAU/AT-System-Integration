@@ -1,0 +1,30 @@
+/* Shared application and coach have separate, non-overlapping viewports */
+.tutorial-root.tutorial-shared{--tutorial-rail:clamp(294px,25vw,360px);position:fixed;inset:0;z-index:2100;background:var(--bg);overflow:hidden;color:var(--text)}
+.tutorial-real-app{position:absolute;inset:0 var(--tutorial-rail) 0 0;overflow:hidden;min-width:0}
+.tutorial-real-app>.app{height:100%;min-height:0;width:100%}
+/* One compositor layer, clipped around the live control */
+.tutorial-mask{position:fixed;inset:0;z-index:2103;background:rgba(13,18,29,.58);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);pointer-events:auto}
+.tutorial-spotlight{position:fixed;z-index:2104;outline:2px solid var(--accent);border-radius:9px;box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 20%,transparent);pointer-events:none}
+.tutorial-coach{position:absolute;z-index:2106;top:12px;right:12px;bottom:12px;width:calc(var(--tutorial-rail) - 24px);box-sizing:border-box;display:flex;flex-direction:column;overflow:hidden;padding:19px;background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:0 12px 30px rgba(0,0,0,.18);color:var(--text)}
+.tutorial-coach-collapsed{bottom:auto;height:auto}
+.tutorial-coach-body{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding-right:2px}
+/* Keep ordinary page animations out of the highlighted teaching flow */
+.tutorial-real-app .page.page-spring,.tutorial-real-app .page.page-leaving,.tutorial-real-app .nav-item[aria-current="page"],.tutorial-real-app .library-pane{animation:none!important}
+.tutorial-real-app .nav-item,.tutorial-real-app .title-button,.tutorial-real-app .robot-system-card,.tutorial-real-app .overview-steps button,.tutorial-real-app .saved-robot,.tutorial-real-app .create-source,.tutorial-real-app .library-pane button,.tutorial-real-app .buttons button,.tutorial-real-app .file-button,.tutorial-real-app .task-workspace-switch button,.tutorial-real-app .card{transition:none!important}
+.tutorial-coach-top{display:flex;align-items:center;justify-content:space-between;gap:10px}.tutorial-coach-top>div{display:flex;flex-direction:column;gap:5px}.tutorial-coach-top small{font-size:10px;color:var(--accent);font-weight:750}.tutorial-coach-top strong{font-size:13px}
+.tutorial-coach-top button{border:1px solid var(--line);background:var(--subtle);border-radius:8px;color:var(--text);min-height:31px;min-width:31px;cursor:pointer}
+.tutorial-progress{display:flex;justify-content:space-between;margin-top:18px;color:var(--muted);font-size:11px}.tutorial-progress-track{height:5px;background:var(--subtle);border-radius:5px;margin:7px 0 19px;overflow:hidden}.tutorial-progress-track span{display:block;height:100%;background:var(--accent)}
+.tutorial-coach h2{font-size:19px;line-height:1.35;margin:0 0 18px}.tutorial-coach-section{border-left:2px solid var(--line);padding-left:12px;margin-bottom:16px}.tutorial-coach-section.important{border-color:var(--accent)}.tutorial-coach-section strong{font-size:12px}.tutorial-coach-section.important strong{color:var(--accent)}.tutorial-coach-section p,.tutorial-coach-hint p{font-size:12px;color:var(--muted);line-height:1.7;margin:6px 0 0}.tutorial-coach-hint{display:flex;gap:9px;padding:12px;margin-bottom:12px;border-radius:9px;background:var(--subtle)}.tutorial-coach-hint p{margin:0}
+.tutorial-coach-status{font-size:11px;color:var(--accent);display:flex;gap:8px;align-items:center;margin:9px 0}.tutorial-coach-status.complete{color:#348d64}.tutorial-warning{color:#bd6645;font-size:11px}
+.tutorial-coach-actions{display:flex;flex:none;gap:6px;margin-top:auto;padding-top:14px;border-top:1px solid var(--line)}.tutorial-coach-actions button{flex:1;min-width:0;min-height:36px;padding:7px 4px;font-size:11px;color:var(--text);border:1px solid var(--line);border-radius:8px;background:var(--subtle);cursor:pointer}.tutorial-coach-actions button:disabled{cursor:not-allowed;opacity:.45}.tutorial-coach-actions .tutorial-primary{background:var(--accent);color:var(--side);border-color:var(--accent);font-weight:700}.tutorial-coach-foot{flex:none;color:var(--muted);font-size:10px;line-height:1.6;margin:12px 0 0}
+@media(max-width:1100px){.tutorial-real-app{right:0;bottom:42vh}.tutorial-coach{top:auto;left:9px;right:9px;bottom:9px;width:auto;height:calc(42vh - 18px);max-height:none}.tutorial-coach h2{font-size:16px;margin-bottom:10px}.tutorial-coach-section{margin-bottom:10px}.tutorial-coach-collapsed{height:auto}}
+@media(prefers-reduced-motion:reduce){.tutorial-spotlight{transition:none}}
+
+.tutorial-start-status,.tutorial-start-error{position:fixed;top:62px;left:50%;transform:translateX(-50%);z-index:2200;padding:14px 20px;border-radius:10px;border:1px solid var(--line);background:var(--card);box-shadow:0 10px 30px #0004;font-size:13px}.tutorial-start-error{color:var(--red)}.tutorial-start-error button{margin-left:12px}
+
+
+.tutorial-root:has(.pending-backdrop) .tutorial-mask,.tutorial-root:has(.pending-backdrop) .tutorial-spotlight{display:none}
+.tutorial-root:has(.pending-backdrop) .tutorial-coach{pointer-events:none;opacity:.4}
+body:has(.tutorial-shared) .robot-delete-backdrop{z-index:2300}
+
+.tutorial-prep-button{margin-top:10px;padding:7px 9px;background:var(--card);border:1px solid var(--line);border-radius:6px;cursor:pointer;color:var(--text);font-size:11px}

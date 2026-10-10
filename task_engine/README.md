@@ -55,7 +55,6 @@ halt 立即停止后续派发并移交取消追踪，停止超时独立为 2000 
 
 `operations[].operation_id` 只记录 Agent 返回的真实操作标识，尚未获得标识时为空，客户端排队状态不表示 Agent 已接纳，客户端合成快照使用 `local_<request_id>` 标识，不可拿它调用 Agent 操作接口，UNKNOWN/UNCONFIRMED 需要通过 Agent 台账核对
 
-测试源码只在工作区外临时目录，CMake 的 `AGRO_CPP_TEST_SOURCE` 和 `AGRO_CPP_TEST_REGISTRY` 用于挂接临时验证，不随仓库交付测试文件
 
 任务模板扩展 ForEachTarget 与 IsTrue，前者在最多 8 个互异目标上执行子树，空列表成功结束，子树失败立即中止，实时节点与操作报告通过原子替换状态文件交给 Agent
 

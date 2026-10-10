@@ -7,7 +7,11 @@ export class ApiError extends Error {
 export class ApiClient {
   #credential: string
   #requests = new Set<AbortController>()
-  constructor(credential: string) { this.#credential = credential }
+  constructor(credential: string, private readonly basePath = '') { this.#credential = credential }
+
+  scoped(prefix: string): ApiClient {
+    return new ApiClient(this.#credential, prefix)
+  }
 
   disconnect() {
     this.#credential = ''
@@ -22,9 +26,9 @@ export class ApiClient {
     const abort = () => controller.abort()
     signal?.addEventListener('abort', abort, { once: true })
     if (signal?.aborted) controller.abort()
-    const timer = setTimeout(() => controller.abort(), 5000)
+    const timer = setTimeout(() => controller.abort(), 12000)
     try {
-      const response = await fetch(path, {
+      const response = await fetch(this.basePath + path, {
         method, headers: { Authorization: `Bearer ${this.#credential}`, 'Content-Type': 'application/json' },
         body: body === undefined ? undefined : JSON.stringify(body),
         cache: 'no-store', credentials: 'omit', redirect: 'error', signal: controller.signal

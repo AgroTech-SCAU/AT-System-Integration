@@ -36,7 +36,7 @@
 
 GitHub Ruleset 才是最终保护；本地 Hook 只是为了更早、更友好地告诉你“操作错在哪里”
 
-Linux / Ubuntu：
+Linux / Ubuntu
 
 ```bash
 git clone <仓库 URL>
@@ -44,7 +44,7 @@ cd <仓库目录>
 bash scripts/setup-git.sh
 ```
 
-Windows PowerShell：
+Windows PowerShell
 
 ```powershell
 git clone <仓库 URL>
@@ -56,9 +56,9 @@ cd <仓库目录>
 
 ## 3. 开始任务：原则上先创建或认领 Issue
 
-Bug、需求、功能、测试、文档或明确的工程任务，原则上先形成 Issue，避免任务只存在于聊天记录里
+Bug、需求、功能、文档或明确的工程任务，原则上先形成 Issue，避免任务只存在于聊天记录里
 
-推荐流程：
+推荐流程
 
 1. 打开仓库 `Issues`
 2. 选择合适的 Issue Form：功能 / Bug / 一般任务
@@ -69,45 +69,43 @@ Bug、需求、功能、测试、文档或明确的工程任务，原则上先�
 
 ## 4. Branch：一个分支解决一个主题
 
-协会现有技术规范统一采用短生命周期任务分支；推荐格式：
+协会现有技术规范统一采用短生命周期任务分支；推荐格式
 
 ```text
 <type>/<scope>-<summary>
 ```
 
-如果任务较简单，也可以使用：
+如果任务较简单，也可以使用
 
 ```text
 <type>/<short-description>
 ```
 
-常用类型：
+常用类型
 
 ```text
 feat/       新功能
 fix/        Bug 修复
 refactor/   重构
 docs/       文档
-test/       测试
 chore/      工程维护
 perf/       性能优化
 ```
 
-示例：
+示例
 
 ```text
 feat/auto-navigation
 fix/fdcan-rx-callback
 refactor/arm-interface
 docs/development-flow
-test/can-parser
 ```
 
 机械臂、嵌入式等专业项目可继续使用已有的 `adapter/`、`behavior/`、`contract/`、`deploy/`、`sdk/`、`chip/` 等领域类型
 
 > 分支命名是团队协作约定，不在基础模板中通过 CI / Ruleset 硬性拦截；核心要求是：**不要直接在 `main` 开发，一个分支只解决一个清晰主题**
 
-如果不从 Issue 页面创建分支，也可以手动：
+如果不从 Issue 页面创建分支，也可以手动
 
 ```bash
 git switch main
@@ -117,7 +115,7 @@ git switch -c feat/auto-navigation
 
 ## 5. 开发与 Commit
 
-建议小步提交，每个 Commit 只表达一个相对清楚的修改：
+建议小步提交，每个 Commit 只表达一个相对清楚的修改
 
 ```bash
 git status
@@ -125,13 +123,13 @@ git add .
 git commit -m "feat(nav): add auto navigation"
 ```
 
-推荐 Commit 格式：
+推荐 Commit 格式
 
 ```text
 <type>(<scope>): <summary>
 ```
 
-示例：
+示例
 
 ```text
 feat(nav): add auto navigation
@@ -142,19 +140,19 @@ docs(flow): update deployment guide
 
 ## 6. Push 自己的 Branch
 
-第一次 Push：
+第一次 Push
 
 ```bash
 git push -u origin HEAD
 ```
 
-之后：
+之后
 
 ```bash
 git push
 ```
 
-请不要执行：
+请不要执行
 
 ```bash
 git push origin main
@@ -166,7 +164,7 @@ git push --force origin main
 
 ## 7. 创建 Pull Request
 
-Push 后创建 PR：
+Push 后创建 PR
 
 ```text
 你的任务 Branch
@@ -174,7 +172,7 @@ Push 后创建 PR：
        main
 ```
 
-仓库会自动填入 PR Template；至少说明：
+仓库会自动填入 PR Template；至少说明
 
 - 关联哪个 Issue（通常使用 `Closes #...`）
 - 本次修改做了什么
@@ -201,7 +199,7 @@ Merge → main
 
 ### 项目负责人自己的修改
 
-单人项目或负责人自己开发时，也走：
+单人项目或负责人自己开发时，也走
 
 ```text
 负责人 Branch → PR → 检查 Diff → Merge → main
@@ -240,7 +238,7 @@ git fetch origin
 git reset --hard origin/main
 ```
 
-现在：
+现在
 
 - 你的有用 Commit 已经安全保存在新 Branch 和远端
 - 本地 `main` 恢复为 GitHub 上的正式 `main`
@@ -250,13 +248,13 @@ git reset --hard origin/main
 
 ## 10. 如果还没有 Commit，只是在 main 改了文件
 
-通常可以直接把当前修改带到新 Branch：
+通常可以直接把当前修改带到新 Branch
 
 ```bash
 git switch -c feat/your-work
 ```
 
-然后正常：
+然后正常
 
 ```bash
 git add .
@@ -268,7 +266,7 @@ git push -u origin HEAD
 
 如果 PR 提示与 `main` 冲突，不要强推 `main`
 
-优先使用容易理解的 merge 方式同步：
+优先使用容易理解的 merge 方式同步
 
 ```bash
 git fetch origin
@@ -276,7 +274,7 @@ git switch <你的分支>
 git merge origin/main
 ```
 
-手动解决冲突后：
+手动解决冲突后
 
 ```bash
 git add .
@@ -288,14 +286,14 @@ git push
 
 ## 12. PR 合并后
 
-同步本地：
+同步本地
 
 ```bash
 git switch main
 git pull --ff-only origin main
 ```
 
-确认任务分支已经不再需要后：
+确认任务分支已经不再需要后
 
 ```bash
 git branch -d <分支名>
@@ -319,7 +317,7 @@ Pull Request
 负责人 Merge
 ```
 
-遇到 `main` Push 被拒绝时，先判断：
+遇到 `main` Push 被拒绝时，先判断
 
 ```text
 还没 Commit → 直接切新 Branch

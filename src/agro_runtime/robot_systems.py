@@ -122,7 +122,7 @@ class RobotSystems:
         # All affected workspace records are removed in one transaction, so a
         # cancelled or failed deletion cannot leave a half-deleted project
         with self.store.db:
-            for kind in ("tree_draft", "plan"):
+            for kind in ("tree_draft", "plan", "state_machine"):
                 for row in self.store.list(kind):
                     if row.get("robot_system_id") == key:
                         self.store.db.execute(
@@ -223,6 +223,12 @@ class RobotSystems:
                     "content": asset_text,
                 }
             )
+        state_machines = [
+            {'name': row['name'], 'document': copy.deepcopy(row['document'])}
+            for row in self.store.list('state_machine')
+            if row.get('robot_system_id') == key
+        ]
+        state_machines.extend(copy.deepcopy(record.get('pending_state_machines', [])))
         bundle = {
             "format": "agrotech.robot-system",
             "format_version": 1,
@@ -236,6 +242,7 @@ class RobotSystems:
             "assets": assets,
             "task_drafts": drafts,
             "task_plans": plans,
+            "state_machines": state_machines,
             "notes": "任务定义导入后仅作为草稿，需要重新校验及发布；设备运行状态与凭据不导出",
         }
         if len(encoded(bundle).encode("utf-8")) > 6 * 1024 * 1024:
@@ -260,6 +267,7 @@ class RobotSystems:
             "packages",
             "task_drafts",
             "task_plans",
+            "state_machines",
             "assets",
             "notes",
         }:
@@ -279,10 +287,12 @@ class RobotSystems:
         transfer_assets = bundle.get("assets", [])
         drafts = bundle.get("task_drafts", [])
         plans = bundle.get("task_plans", [])
+        imported_machines = bundle.get("state_machines", [])
         if (
             not isinstance(descriptors, list)
             or not isinstance(drafts, list)
             or not isinstance(plans, list)
+            or not isinstance(imported_machines,list) or len(imported_machines)>80
             or not isinstance(transfer_assets, list)
             or len(transfer_assets) > 50
             or len(drafts) > 100
@@ -386,6 +396,19 @@ class RobotSystems:
                     "parameters": copy.deepcopy(item["parameters"]),
                 }
             )
+        # 导入不信任旧机器的已发布定义 ID，状态结构保留，动作引用必须重新关联
+        from .state_machines import validate as validate_state_machine
+        clean_machines = []
+        for i, item in enumerate(imported_machines):
+            if not isinstance(item,dict) or not isinstance(item.get('document'),dict):
+                fail(f'$.state_machines[{i}]','invalid_machine','状态机工程结构无效')
+            document = copy.deepcopy(item['document'])
+            for state in document.get('states',[]):
+                if isinstance(state,dict):
+                    for field in ('entry','do','exit'):
+                        state.pop(field,None)
+            document = validate_state_machine(document,())
+            clean_machines.append({'name':str(item.get('name') or '导入状态机')[:80], 'document': document, 'needs_tree_rebinding':True})
         # 当前资产系统只认可内置模拟标定证据；未来真实标定须由独立校验器接入
         allowed_fixture = json.loads(
             (self.example / "assets" / "camera_to_arm.json").read_text(encoding="utf-8")
@@ -468,8 +491,14 @@ class RobotSystems:
             "revision": 1,
             "pending_task_drafts": clean_drafts,
             "pending_task_plans": clean_plans,
+            "pending_state_machines": clean_machines,
         }
         self.store.put("robot_system", key, record)
+        for machine in clean_machines:
+            mid='machine_'+uuid4().hex
+            self.store.put('state_machine',mid,{'id':mid,'name':machine['name'],'document':machine['document'],'revision':1,'robot_system_id':key,'needs_tree_rebinding':True})
+        record.pop('pending_state_machines',None)
+        self.store.put('robot_system',key,record)
         return record
 
     def restore_imported_tasks(self, record):

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { createPortal } from 'react-dom'
 import { ApiClient, ApiError } from './api'
 import { Field, Panel, PendingDialog, Segmented } from './components/Foundation'
 import { Icon } from './components/Icon'
@@ -10,8 +11,9 @@ import Records from './pages/Records'
 import TaskWorkspace from './pages/TaskWorkspace'
 import Overview from './pages/Overview'
 import RobotLibrary, {type RobotDirectory, type RobotSystem} from './pages/RobotLibrary'
-import GuideOverlay from './guide/GuideOverlay'
-import { courseSteps, courseTitle, guideCompleted, type CourseId, type GuideSession } from './guide/courses'
+import TutorialStudio from './guide/TutorialStudio'
+import './guide/guide.css'
+import { courseTitle, guideCompleted, type CourseId } from './guide/courses'
 
 const SETTINGS_KEY = 'agro.gui.appearance'
 const GUIDE_PROMPT_KEY = 'agro.gui.guide.autoPrompt'
@@ -28,11 +30,13 @@ function currentWorkspace(): Workspace {
   return path === 'templates' ? 'editor' : path === 'overview' || path === 'system' || path === 'runtime' || path === 'settings' || path === 'records' || path === 'editor' ? path : 'overview'
 }
 
-export default function App() {
+type TutorialSandboxProps = { client:ApiClient; onClose:()=>void }
+
+export default function App({sandbox}: {sandbox?:TutorialSandboxProps} = {}) {
   const [settings, setSettings] = useState(loadSettings)
-  const [workspace, setWorkspace] = useState(currentWorkspace)
-  const [client, setClient] = useState<ApiClient | null>(null)
-  const active = useRef<ApiClient | null>(null)
+  const [workspace, setWorkspace] = useState<Workspace>(sandbox?'overview':currentWorkspace)
+  const [client, setClient] = useState<ApiClient | null>(sandbox?.client||null)
+  const active = useRef<ApiClient | null>(sandbox?.client||null)
   const observationRevision = useRef(0)
   const [observation, setObservation] = useState<Observation | null>(null)
   const [robotDirectory, setRobotDirectory] = useState<RobotDirectory|null>(null)
@@ -42,7 +46,11 @@ export default function App() {
   const [error, setError] = useState<'unauthorized' | 'failed' | 'fileError' | null>(null)
   const [pending, setPending] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [guide, setGuide] = useState<GuideSession | null>(null)
+  const [guide, setGuide] = useState<CourseId | null>(null)
+  const [tutorialClient, setTutorialClient] = useState<ApiClient|null>(null)
+  const [tutorialError,setTutorialError]=useState('')
+  const [tutorialBusy,setTutorialBusy]=useState(false)
+  const storageBackup=useRef<Record<string,string>>({})
   const [guideDialog, setGuideDialog] = useState<'choice' | 'invite' | null>(null)
   const [inviteCourse, setInviteCourse] = useState<CourseId>('basic')
   const [noGuidePrompt, setNoGuidePrompt] = useState(false)
@@ -56,16 +64,17 @@ export default function App() {
   useEffect(() => {
     const preferred = window.matchMedia('(prefers-color-scheme: light)')
     const applyTheme = () => {
-      document.documentElement.dataset.theme = settings.theme === 'system' ? (preferred.matches ? 'light' : 'dark') : settings.theme
+      if (!sandbox) document.documentElement.dataset.theme = settings.theme === 'system' ? (preferred.matches ? 'light' : 'dark') : settings.theme
     }
     applyTheme()
     preferred.addEventListener('change', applyTheme)
-    document.documentElement.lang = settings.language === 'zh' ? 'zh-CN' : 'en'
-    document.title = `AgroTech · ${text.brand}`
-    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)) } catch { /* 设置存储不可用时仍保留当前界面 */ }
+    if (!sandbox) document.documentElement.lang = settings.language === 'zh' ? 'zh-CN' : 'en'
+    if (!sandbox) document.title = `AgroTech · ${text.brand}`
+    try { if (!sandbox) localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)) } catch { /* 设置存储不可用时仍保留当前界面 */ }
     return () => preferred.removeEventListener('change', applyTheme)
   }, [settings, text.brand])
   useEffect(() => {
+    if(sandbox)return
     const back = () => {
       if (!window.dispatchEvent(new Event('agro:navigate', { cancelable: true }))) { history.pushState({}, '', `/ui/${workspace}`); return }
       setWorkspace(currentWorkspace())
@@ -75,6 +84,7 @@ export default function App() {
   }, [workspace])
   useEffect(() => () => { active.current?.disconnect(); if (navigationTimer.current) clearTimeout(navigationTimer.current) }, [])
   useEffect(() => {
+    if(sandbox){ active.current=sandbox.client;setClient(sandbox.client);void observe(sandbox.client);void reloadRobots(sandbox.client);return }
     let cancelled = false
     if (window.agroDesktop) {
       setBusy(true)
@@ -112,7 +122,7 @@ export default function App() {
         active.current = null
         setClient(null)
         setRobotDirectory(null)
-        history.replaceState(null, '', '/ui/overview')
+        if(!sandbox) history.replaceState(null, '', '/ui/overview')
         setWorkspace('overview')
         setPending(false)
         setError('unauthorized')
@@ -123,7 +133,7 @@ export default function App() {
     }
   }
   useEffect(() => {
-    if (!client) return
+    if (!client || (!sandbox && guide)) return
     let stopped = false
     let timer: ReturnType<typeof setTimeout>
     async function poll() {
@@ -133,7 +143,7 @@ export default function App() {
     }
     timer = setTimeout(poll, 2000)
     return () => { stopped = true; clearTimeout(timer) }
-  }, [client])
+  }, [client, Boolean(sandbox), guide])
 
   async function connect(event: FormEvent) {
     event.preventDefault()
@@ -173,22 +183,32 @@ export default function App() {
     setPending(false)
     setBusy(false)
     setError(null)
-    history.pushState(null, '', '/ui/overview')
+    if(!sandbox) history.pushState(null, '', '/ui/overview')
     setWorkspace('overview')
   }
   function navigate(next: Workspace) {
     if(next===workspace || leaving)return
+    // Tutorial navigation is isolated from unsaved edits in the formal workspace
+    if (sandbox) { setWorkspace(next); guideCompleted(`nav:${next}`); return }
     if(!window.dispatchEvent(new Event('agro:navigate',{cancelable:true})))return
     setLeaving(true)
     navigationTimer.current=setTimeout(()=>{
-      history.pushState(null, '', `/ui/${next}`)
+      if(!sandbox) history.pushState(null, '', `/ui/${next}`)
       setWorkspace(next)
       guideCompleted(`nav:${next}`)
       setLeaving(false)
       navigationTimer.current=null
     },90)
   }
+  useEffect(()=>{
+    if(!sandbox)return
+    const onNavigate=(event:Event)=>navigate((event as CustomEvent<Workspace>).detail)
+    window.addEventListener('agro:tutorial:navigate',onNavigate)
+    return()=>window.removeEventListener('agro:tutorial:navigate',onNavigate)
+  },[sandbox,workspace,leaving])
+
   async function reconnectLocal(){
+    if(sandbox){await observe(sandbox.client);await reloadRobots(sandbox.client);return}
     if(!window.agroDesktop)return
     setBusy(true)
     try {
@@ -205,30 +225,44 @@ export default function App() {
   const selectedRobot=robotDirectory?.systems.find(item=>item.id===robotDirectory.selected_id)
   const canUseRobot=Boolean(selectedRobot&&robotDirectory?.active)
   const canEditRobot=Boolean(selectedRobot)
-  function startGuide(course: CourseId, afterCreation = false) {
+  async function startGuide(course: CourseId, _afterCreation = false) {
+    if(sandbox||!client||tutorialBusy)return
     setGuideDialog(null)
-    const session: GuideSession = { course, fromCreation: afterCreation, index: 0 }
-    setGuide(session)
-    if (workspace !== 'overview') navigate('overview')
+    setTutorialError('')
+    setTutorialBusy(true)
+    try {
+      await client.request('/tutorial/session','POST',{})
+      const backup:Record<string,string>={}
+      for(let i=0;i<localStorage.length;i++){
+        const key=localStorage.key(i)
+        if(key?.startsWith('agro.')){const value=localStorage.getItem(key);if(value!==null)backup[key]=value}
+      }
+      storageBackup.current=backup
+      setTutorialClient(client.scoped('/tutorial'))
+      setGuide(course)
+    }catch(error){
+      setTutorialError(error instanceof ApiError?error.details?.map(e=>e.reason).join('；')||error.message:String(error))
+    }finally{setTutorialBusy(false)}
   }
-  function guideNext() {
-    setGuide(current => {
-      if (!current) return null
-      if (current.index >= courseSteps(current).length - 1) return null
-      return { ...current, index: current.index + 1 }
-    })
-  }
-  function onGuideEvent(event: string) {
-    setGuide(current => {
-      if (!current) return null
-      const step = courseSteps(current)[current.index]
-      if (step?.event !== event) return current
-      return current.index >= courseSteps(current).length - 1 ? null : { ...current, index: current.index + 1 }
-    })
+  async function closeGuide() {
+    if(!client||!tutorialClient)return
+    setTutorialBusy(true)
+    setTutorialError('')
+    try {
+      await client.request('/tutorial/session','DELETE')
+      tutorialClient.disconnect()
+      setGuide(null)
+      setTutorialClient(null)
+      const backup=storageBackup.current
+      for(const key of Object.keys(localStorage))if(key.startsWith('agro.')&&!(key in backup))localStorage.removeItem(key)
+      for(const [key,value] of Object.entries(backup))localStorage.setItem(key,value)
+      storageBackup.current={}
+    }catch(error){
+      setTutorialError(error instanceof ApiError?error.details?.map(e=>e.reason).join('；')||error.message:String(error))
+    }finally{setTutorialBusy(false)}
   }
   function robotCreated(robot: RobotSystem, example: 'blank' | 'tomato_picker') {
-    guideCompleted('robot:created:' + example)
-    if (guide || !autoGuidePrompt) return
+    if (sandbox || guide || !autoGuidePrompt) return
     setInviteCourse(example === 'blank' ? 'basic' : 'tomato')
     setGuideDialog('invite')
     setNoGuidePrompt(false)
@@ -247,11 +281,11 @@ export default function App() {
   return <>
     <div className={`app ${settings.compact ? 'compact' : ''}`}>
       <header className="titlebar">
-        <div className="brand-mini"><Icon name="system" /><strong>AgroTech Launcher</strong></div>
+        <div className="brand-mini"><Icon name="system" /><strong>AT Robot Studio</strong></div>
         <span className="title-center">{text.brand}</span>
-        <div className="title-actions"><button className="title-button guide-header-button" aria-label="使用向导" title="使用向导" onClick={() => { if(guide){setGuide(null)}setGuideDialog('choice') }}><span aria-hidden="true">?</span><span className="guide-header-label">向导</span></button><button disabled={pending} className="title-button" aria-label={text.appearance} onClick={() => setSettings({ ...settings, theme: document.documentElement.dataset.theme === 'light' ? 'dark' : 'light' })}><Icon name="sun" /></button>
+        <div className="title-actions">{sandbox?<button className="title-button guide-header-button" title="返回正式工作台" onClick={sandbox.onClose}><span className="guide-header-label">教学环境 · 退出</span></button>:<button className="title-button guide-header-button" aria-label="操作教程" title="操作教程" onClick={() => setGuideDialog('choice')}><span aria-hidden="true">?</span><span className="guide-header-label">向导</span></button>}<button disabled={pending} className="title-button" aria-label={text.appearance} onClick={() => setSettings({ ...settings, theme: document.documentElement.dataset.theme === 'light' ? 'dark' : 'light' })}><Icon name="sun" /></button>
           <button disabled={pending} className="title-button" aria-label={text.openSettings} onClick={() => navigate('settings')}><Icon name="settings" /></button>
-          {window.agroDesktop && <div className="window-controls">
+          {window.agroDesktop && !sandbox && <div className="window-controls">
             <button className="title-button" aria-label={text.minimizeWindow} onClick={() => void window.agroDesktop?.minimize()}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10" /></svg></button>
             <button className="title-button" aria-label={text.maximizeWindow} onClick={() => void window.agroDesktop?.maximize()}><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="1" /></svg></button>
             <button className="title-button window-close" aria-label={text.closeWindow} onClick={() => void window.agroDesktop?.close()}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 3 10 10M13 3 3 13" /></svg></button>
@@ -283,7 +317,7 @@ export default function App() {
               <Panel title={text.appearance} subtitle={text.theme} icon="sun"><Segmented label={text.theme} value={settings.theme} options={[{ value: 'system', label: text.followSystem }, { value: 'dark', label: text.dark }, { value: 'light', label: text.light }]} onChange={value => setSettings({ ...settings, theme: value as Settings['theme'] })} /></Panel>
               <Panel title={text.language} icon="settings"><Segmented label={text.language} value={settings.language} options={[{ value: 'zh', label: '中文' }, { value: 'en', label: 'English' }]} onChange={value => setSettings({ ...settings, language: value as Settings['language'] })} /></Panel>
               <Panel title={text.layout} icon="templates"><label className="toggle"><input type="checkbox" checked={settings.compact} onChange={event => setSettings({ ...settings, compact: event.target.checked })} />{text.compact}</label></Panel>
-              <Panel title="使用向导" icon="templates"><label className="toggle"><input type="checkbox" checked={autoGuidePrompt} onChange={event => {setAutoGuidePrompt(event.target.checked);try{localStorage.setItem(GUIDE_PROMPT_KEY,event.target.checked?'on':'off')}catch{/* preference unavailable */}}}/>新建系统后询问是否开始教学</label></Panel>
+              <Panel title="教学设置" icon="graduation-cap"><label className="toggle"><input type="checkbox" checked={autoGuidePrompt} onChange={event => {setAutoGuidePrompt(event.target.checked);try{if(!sandbox)localStorage.setItem(GUIDE_PROMPT_KEY,event.target.checked?'on':'off')}catch{/* preference unavailable */}}}/>新建工程后显示教程邀请</label></Panel>
             </div>
             {!window.agroDesktop && <Panel title="浏览器调试连接" subtitle="请输入本机会话凭据" icon="plug">
               <form onSubmit={connect}>
@@ -311,7 +345,7 @@ export default function App() {
           {error && <p className="error" role="alert">{text[error]}</p>}
            {workspace === 'overview' && <><RobotLibrary client={client} directory={robotDirectory} onRefresh={refreshProjects} onReconnect={reconnectLocal} onNavigate={navigate} onCreated={robotCreated}/>{client&&canUseRobot&&observation&&<Overview observation={observation} language={settings.language} navigate={navigate} robotName={selectedRobot?.name||''}/>}</> }
           {client && <>
-            {workspace === 'system' && selectedRobot && <SystemBuilder key={selectedRobot.id} client={client} observation={canUseRobot?observation:null} language={settings.language} changed={refreshProjects} robotSystem={selectedRobot} />}
+            {workspace === 'system' && selectedRobot && <SystemBuilder key={selectedRobot.id} client={client} observation={canUseRobot?observation:null} language={settings.language} changed={refreshProjects} robotSystem={selectedRobot} onNavigate={navigate} />}
              {workspace === 'editor' && canEditRobot && <><div className="workspace-context"><span>当前工程 <strong>{selectedRobot?.name}</strong></span>{!canUseRobot && <span className="workspace-context-notice">离线编辑：可以设计任务，配置应用后才能发布与执行</span>}<button onClick={()=>navigate('system')}>系统接入 →</button></div><TaskWorkspace key={selectedRobot?.id} client={client} observation={canUseRobot?observation:null} language={settings.language} changed={() => observe(client)} robotExampleId={selectedRobot?.example_id} configured={canUseRobot} onNavigate={navigate} /></>}
              {workspace === 'runtime' && canUseRobot && <RuntimePage client={client} observation={observation} language={settings.language} changed={() => observe(client)} onNavigate={navigate} />}
             {workspace === 'records' && canUseRobot && <Records client={client} observation={observation} language={settings.language} changed={() => observe(client)} />}
@@ -323,18 +357,20 @@ export default function App() {
       </div>
     </div>
     <PendingDialog open={pending} text={text} error={error ? text[error] : undefined} onClose={() => setPending(false)} actions={<span className="muted">{text.futureActions}</span>} />
-    {guide && !guideDialog && <GuideOverlay key={`${guide.course}:${guide.fromCreation}`} session={guide} activeWorkspace={workspace} onNext={guideNext} onBack={() => setGuide(current => current ? {...current,index:Math.max(0,current.index-1)} : null)} onClose={() => setGuide(null)} onEvent={onGuideEvent} onGoToPage={() => navigate(courseSteps(guide)[guide.index].workspace)}/>}
-    {guideDialog && <><div className="guide-modal-shade" onClick={() => setGuideDialog(null)}/><section className="guide-modal" role="dialog" aria-modal="true" aria-labelledby="guide-modal-title">
+    {guide && tutorialClient && !sandbox && createPortal(<TutorialStudio key={guide} course={guide} client={tutorialClient} onClose={()=>void closeGuide()}><App sandbox={{client:tutorialClient,onClose:()=>void closeGuide()}}/></TutorialStudio>,document.body)}
+    {tutorialBusy&&!sandbox&&<div className="tutorial-start-status" role="status">正在准备或关闭隔离教学工作区…</div>}
+    {tutorialError&&!sandbox&&<div className="tutorial-start-error" role="alert">{tutorialError}<button onClick={()=>setTutorialError('')}>关闭提示</button></div>}
+    {guideDialog && !sandbox && <><div className="guide-modal-shade" onClick={() => setGuideDialog(null)}/><section className="guide-modal" role="dialog" aria-modal="true" aria-labelledby="guide-modal-title">
       {guideDialog === 'choice' ? <>
-        <h2 id="guide-modal-title">选择教学内容</h2><p>按高亮提示完成操作，每一步都会说明操作位置与预期结果</p>
+        <h2 id="guide-modal-title">选择教程</h2><p>使用独立练习工程，退出后恢复当前工作区</p>
         <div className="guide-modal-choices">
-          <button onClick={() => startGuide('basic', Boolean(selectedRobot && !selectedRobot.example_id))}><strong>通用机器人系统</strong><small>{selectedRobot && !selectedRobot.example_id ? '学习当前系统的搭建流程' : '从空白机器人开始搭建'}</small></button>
-          <button onClick={() => startGuide('tomato', Boolean(canUseRobot && selectedRobot?.example_id === 'tomato_picker'))}><strong>番茄采摘示例</strong><small>{selectedRobot?.example_id === 'tomato_picker' ? '学习当前番茄采摘系统' : '创建示例并学习编排与运行'}</small></button>
+          <button onClick={() => startGuide('basic', Boolean(selectedRobot && !selectedRobot.example_id))}><span className="guide-choice-icon"><Icon name="boxes" size="xl" /></span><strong>通用机器人</strong><small>空白工程 · 系统、HSM、BT 与运行</small></button>
+          <button onClick={() => startGuide('tomato', Boolean(canUseRobot && selectedRobot?.example_id === 'tomato_picker'))}><span className="guide-choice-icon"><Icon name="eye" size="xl" /></span><strong>番茄采摘</strong><small>示例工程 · 采摘任务编排与运行</small></button>
         </div><div className="guide-modal-footer"><button onClick={() => setGuideDialog(null)}>关闭</button></div>
       </> : <>
-        <h2 id="guide-modal-title">开始使用教学？</h2><p>系统已创建，是否开始{courseTitle(inviteCourse)}，你也可以随时从右上角「向导」重新学习</p>
-        <label className="guide-modal-check"><input type="checkbox" checked={noGuidePrompt} onChange={event => setNoGuidePrompt(event.target.checked)}/>不再自动提示教学</label>
-        <div className="guide-modal-footer"><button onClick={() => finishGuideInvite(false)}>暂不需要</button><button className="primary" onClick={() => finishGuideInvite(true)}>开始教学</button></div>
+        <h2 id="guide-modal-title">开始教程</h2><p>{courseTitle(inviteCourse)} · 独立练习工程，不影响正式项目</p>
+        <label className="guide-modal-check"><input type="checkbox" checked={noGuidePrompt} onChange={event => setNoGuidePrompt(event.target.checked)}/>不再显示教程邀请</label>
+        <div className="guide-modal-footer"><button onClick={() => finishGuideInvite(false)}>稍后</button><button className="primary" onClick={() => finishGuideInvite(true)}>进入教程</button></div>
       </>}
     </section></>}
 

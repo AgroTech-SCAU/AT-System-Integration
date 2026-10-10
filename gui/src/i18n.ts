@@ -2,10 +2,10 @@ import type { Language } from './types'
 
 const zh = {
   overview: '总览', overviewHint: '管理机器人系统，查看模块与任务状态',
-  editor: '任务编排', editorHint: '选择当前系统的任务模板，或从空白行为树开始编排',
+  editor: '任务编排', editorHint: '编辑层级状态机、行为树和任务参数',
   records: '记录与报告',
   minimizeWindow: '最小化窗口', maximizeWindow: '最大化或还原窗口', closeWindow: '关闭应用窗口',
-  settings: '设置', openSettings: '打开设置', workflow: '工作流', application: '应用', settingsTitle: '偏好设置', settingsHint: '外观、语言与布局', followSystem: '跟随系统', layout: '布局', connectionSummary: '连接概览', localOnly: '本机管理', sidebarHint: '搭建机器人 · 编排任务 · 运行调试',
+  settings: '设置', openSettings: '打开设置', workflow: '工作流', application: '应用', settingsTitle: '偏好设置', settingsHint: '外观、语言与布局', followSystem: '跟随系统', layout: '布局', connectionSummary: '连接概览', localOnly: '本机管理', sidebarHint: '系统搭建 · 任务编排 · 运行调试',
   brand: '农业机器人系统集成', subtitle: '机器人工作台', system: '系统搭建', templates: '模板任务', runtime: '运行调试',
   connectTitle: '连接本机管理服务', connectionHint: '选择本机会话文件或输入凭据，凭据只驻留当前页面内存',
   session: '会话凭据', sessionFile: '选择会话文件', connect: '连接', disconnect: '断开观察',
@@ -16,13 +16,13 @@ const zh = {
   futureActions: '正在执行的任务请到运行调试中停止', theme: '主题', light: '浅色', dark: '深色',
   language: '语言', compact: '紧凑布局', appearance: '外观', agent: '本机管理服务',
   packages: '已注册接入包', emptyPackages: '未注册接入包', enabled: '已启用', disabled: '未启用',
-  systemHint: '配置视觉、导航、机械臂、电控后端及参数',
+  systemHint: '接入功能后端并管理能力配置',
   templateTitle: '任务模板', templateHint: '配置任务参数与标定资产',
   canvas: '行为树画布', canvasHint: '编辑任务节点与连接',
   systemState: '系统状态', mode: '整机模式', estop: '急停', active: '已触发', inactive: '未触发',
   modules: '后端模块', process: '进程存在', interface: '接口就绪', yes: '是', no: '否',
   tasks: '当前任务', emptyTasks: '尚无任务', snapshot: '系统快照',
-  runtimeHint: '启动机器人系统、运行任务并查看执行结果',
+  runtimeHint: '系统控制、任务执行与状态诊断',
   noObservation: '正在获取系统状态', error: '错误', waiting: '等待连接'
 }
 const en: typeof zh = {

@@ -1,6 +1,6 @@
 
 name: "📋 一般任务"
-description: "实验、标定、测试、部署、文档、代码整理等明确任务"
+description: "实验、标定、核对、部署、文档、代码整理等明确任务"
 title: "[Task] <请在此处输入简要描述>"
 body:
   - type: textarea

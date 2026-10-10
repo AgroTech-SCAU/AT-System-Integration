@@ -1,138 +1,154 @@
-import { useEffect, useState } from 'react'
-import { Panel, Field } from '../../components/Foundation'
-import type { RobotSystem } from '../RobotLibrary'
-import { guideCompleted } from '../../guide/courses'
-import { ErrorFields, Parameters, durableIntent, useOperation, waitJob, type Json, type PageProps } from '../shared'
+import {useEffect, useState} from 'react'
+import {Panel, Field} from '../../components/Foundation'
+import {Icon} from '../../components/Icon'
+import {guideCompleted} from '../../guide/courses'
+import {systemCategories} from '../../components/systemCategories'
+import type {RobotSystem} from '../RobotLibrary'
+import type {Workspace} from '../../types'
+import {ErrorFields, Parameters, durableIntent, useOperation, waitJob, type Json, type PageProps} from '../shared'
 
-export default function SystemBuilder({ client, observation, language, changed, robotSystem }: PageProps & { robotSystem: RobotSystem }) {
-    const [catalog, setCatalog] = useState<Json[]>([]), [drafts, setDrafts] = useState<Json[]>([]), [draft, setDraft] = useState<Json | null>(null), [content, setContent] = useState<Json | null>(null), [diff, setDiff] = useState<Json | null>(null)
-    const [runtimeText, setRuntimeText] = useState<Record<string, string>>({})
-    const [instance, setInstance] = useState('backend'), [packageId, setPackageId] = useState(''), [roleName, setRoleName] = useState('')
-    const op = useOperation(language)
-    async function load() { const [a, b] = await Promise.all([client.request<Json>('/catalog'), client.request<Json>('/config/drafts')]); setCatalog(a.packages); setDrafts(b.drafts.filter((item: Json) => item.content?.system_id === robotSystem.content.system_id)) }
-    useEffect(() => { let active = true; Promise.all([client.request<Json>('/catalog'), client.request<Json>('/config/drafts')]).then(([a, b]) => { if (!active) return; const existing=b.drafts.filter((item: Json) => item.content?.system_id === robotSystem.content.system_id);setCatalog(a.packages); setDrafts(existing);const last=existing.at(-1);setContent(structuredClone(last?.content||robotSystem.content));setDraft(last||null) }).catch(e => { if (active) op.setError(e) }); return () => { active = false } }, [client,robotSystem.id])
-    const select = (next: Json) => { setDraft(next); setContent(structuredClone(next.content)); setRuntimeText({}); setDiff(null) }
-    const update = (next: Json) => { setContent(next); setRuntimeText(previous => { const next = { ...previous }; delete next.raw; return next }); setDiff(null) }
-    async function create() { const status = await client.request<Json>('/config/status'); const next = await client.request<Json>('/config/drafts', 'POST', { base_snapshot_id: status.snapshot_id, content: robotSystem.content }); select(next); await load(); guideCompleted('config:draft-created') }
-    const backends: Json[] = Array.isArray(content?.backends) ? content.backends.filter((b: unknown) => b && typeof b === 'object' && !Array.isArray(b)) : []
-    const roles: Json = content?.roles && typeof content.roles === 'object' && !Array.isArray(content.roles) ? Object.fromEntries(Object.entries(content.roles).filter(([, b]) => b && typeof b === 'object' && !Array.isArray(b))) : {}
-    const requiredRoles: string[] = Array.isArray(content?.required_roles) ? content.required_roles : []
-    const invalidEditor = Object.values(runtimeText).some(text => { try { const value = JSON.parse(text); return !value || typeof value !== 'object' || Array.isArray(value) } catch { return true } })
-    const packages = (nextBackends: Json[]) => {
-        const previous = new Set(backends.map(b => b.package_id))
-        const kept = (content?.packages || []).filter((path: string) => {
-            const ids = backends.filter(b => b.package_id === path.split('/').pop()?.replace(/\.ya?ml$/, '')).map(b => b.package_id)
-            return ids.some(id => nextBackends.some(b => b.package_id === id)) || (!path.startsWith('packages/') && nextBackends.some(b => previous.has(b.package_id)))
-        })
-        return Array.from(new Set([...kept, ...nextBackends.filter(b => !previous.has(b.package_id)).map(b => `packages/${b.package_id}.yaml`)]))
+type PackageItem = {id:string; imported?:boolean; description:Json}
+const idPattern = /^[a-z][a-z0-9_]*$/
+const friendly = (value:string) => value.split('.').slice(-2).join(' · ').replaceAll('_',' ')
+const stateText = (module?:Json) => !module ? '未运行' : module.process && module.interface ? '已连接' : module.process ? '接口未就绪' : '未运行'
+const safeId = (id:string) => id.replace(/[^a-z0-9_]/g,'_').replace(/^[^a-z]+/,'') || 'backend'
+
+export default function SystemBuilder({client, observation, language, changed, robotSystem, onNavigate}:PageProps & {robotSystem:RobotSystem;onNavigate?:(page:Workspace)=>void}){
+  const op=useOperation(language)
+  const [catalog,setCatalog]=useState<PackageItem[]>([])
+  const [drafts,setDrafts]=useState<Json[]>([])
+  const [draft,setDraft]=useState<Json|null>(null)
+  const [content,setContent]=useState<Json|null>(null)
+  const [dirty,setDirty]=useState(false)
+  const [composer,setComposer]=useState(false)
+  const [category,setCategory]=useState('视觉系统')
+  const [packageId,setPackageId]=useState('')
+  const [instance,setInstance]=useState('')
+  const [description,setDescription]=useState('')
+  const [editingBackend,setEditingBackend]=useState<string|null>(null)
+  const [expanded,setExpanded]=useState(false)
+  const [raw,setRaw]=useState('')
+  const [validation,setValidation]=useState<Json|null>(null)
+  const [message,setMessage]=useState('')
+  const [phase,setPhase]=useState('')
+  const [runtimeRaw,setRuntimeRaw]=useState('')
+  const backends:Json[]=Array.isArray(content?.backends)?content.backends:[]
+  const roles:Json=content?.roles||{}
+  const chosen=catalog.find(c=>c.id===packageId)
+  const groupOptions=systemCategories
+  const categorize=(backend:Json)=>{const nick=String(backend.instance_id).toLowerCase();const direct=nick==='vision'?'视觉系统':nick==='navigation'?'导航系统':nick==='arm'?'机械臂系统':nick==='control'?'电控系统':null;if(direct)return direct;const pack=catalog.find(p=>p.id===backend.package_id);const caps=(pack?.description.capabilities||[]).map((c:Json)=>String(c.capability_id));const matches=groupOptions.slice(0,4).filter(g=>caps.some((id:string)=>g.prefix.some(prefix=>id.startsWith(prefix))));return matches.length===1?matches[0].name:'自定义系统'}
+  const selected=backends.find(b=>b.instance_id===editingBackend)
+  const selectedPackage=catalog.find(c=>c.id===selected?.package_id)
+  const readyForApply=observation?.system.state==='STOPPED'||!observation?.system.state
+
+  async function refresh(){
+    const [a,b]=await Promise.all([client.request<Json>('/catalog'),client.request<Json>('/config/drafts')])
+    setCatalog(a.packages)
+    const found=b.drafts.filter((item:Json)=>item.content?.system_id===robotSystem.content.system_id)
+    setDrafts(found)
+    return found
+  }
+  useEffect(()=>{
+    let alive=true
+    Promise.all([client.request<Json>('/catalog'),client.request<Json>('/config/drafts')]).then(([a,b])=>{
+      if(!alive)return
+      setCatalog(a.packages)
+      const found=b.drafts.filter((item:Json)=>item.content?.system_id===robotSystem.content.system_id)
+      setDrafts(found)
+      const previous=found.at(-1)
+      setDraft(previous||null)
+      setContent(structuredClone(previous?.content||robotSystem.content))
+      setDirty(false)
+    }).catch(op.setError)
+    return ()=>{alive=false}
+  },[client,robotSystem.id])
+  function update(next:Json){setContent(next);setDirty(true);setValidation(null);setMessage('')}
+  async function ensureDraft(){
+    if(draft)return draft
+    const status=await client.request<Json>('/config/status')
+    const next=await client.request<Json>('/config/drafts','POST',{base_snapshot_id:status.snapshot_id,content:robotSystem.content})
+    setDraft(next);setContent(structuredClone(next.content));setDirty(false)
+    await refresh()
+    return next
+  }
+  async function openComposer(nextCategory?:string){
+    if(nextCategory)setCategory(nextCategory)
+    await ensureDraft();setComposer(true);setEditingBackend(null);setMessage('');if(nextCategory)guideCompleted('system:category-opened')
+    setPackageId('');setInstance('');setDescription('')
+  }
+  async function importPackage(file:File){
+    if(file.size>2097152)throw Error('接入描述文件过大')
+    const result=await client.request<Json>('/catalog','POST',{filename:file.name,content:await file.text()})
+    await refresh();setPackageId(result.id);setInstance(safeId(result.id)+'_1')
+    setMessage('接入描述已导入，需部署对应适配器后才能执行设备动作')
+  }
+  useEffect(()=>{const handler=()=>{if(!composer)void openComposer().catch(op.setError)};window.addEventListener('agro:guide:system-open',handler);return()=>window.removeEventListener('agro:guide:system-open',handler)},[composer,draft,client])
+  function addBackend(){
+    if(!content||!draft||!chosen)return
+    const name=instance.trim()
+    if(!idPattern.test(name)) {op.setError({errors:[{path:'实例名称',code:'invalid_name',reason:'请使用小写英文字母、数字和下划线，并以字母开头'}]});return}
+    if(backends.some(b=>b.instance_id===name)){op.setError({errors:[{path:'实例名称',code:'duplicate_name',reason:'实例名称已存在，请另起名称'}]});return}
+    const extraRoles:Json={}
+    for(const cap of chosen.description.capabilities||[]){
+      const role=`${name}_${safeId(cap.capability_id)}`
+      if(!roles[role])extraRoles[role]={backend_instance:name,capability_id:cap.capability_id,input:cap.input||{},output:cap.output||{},parameters:{}}
     }
-    const groups = [
-        { id: 'vision', name: '视觉系统', description: '目标识别与环境感知', prefix: ['perception.'] },
-        { id: 'navigation', name: '导航系统', description: '定位、建图与路径执行', prefix: ['navigation.'] },
-        { id: 'arm', name: '机械臂系统', description: '运动、轨迹与空间变换', prefix: ['manipulation.', 'geometry.'] },
-        { id: 'control', name: '电控与末端', description: '设备输入输出与执行反馈', prefix: ['end_effector.', 'job.'] },
-        { id: 'other', name: '其他系统', description: '用户自定义能力与设备', prefix: [] },
-    ]
-    const roleGroup = (capability: string) => groups.find(group => group.prefix.some(prefix => capability.startsWith(prefix)))?.id || 'other'
-    async function importPackage(file: File) {
-        if (file.size > 2097152) throw new Error('接入描述不能超过 2 MiB')
-        const entry = await client.request<Json>('/catalog', 'POST', { filename: file.name, content: await file.text() })
-        await load()
-        setPackageId(entry.id)
-    }
-    function addBackend() {
-        if (!content || !draft) return
-        const name = instance.trim()
-        const entry = catalog.find(p => p.id === packageId)
-        if (!/^[a-z][a-z0-9_]*$/.test(name)) { op.setError({ errors: [{ path: '$.instance_id', code: 'invalid_id', reason: '实例名仅使用小写字母、数字和下划线，并以字母开头' }] }); return }
-        if (backends.some(b => b.instance_id === name)) { op.setError({ errors: [{ path: '$.instance_id', code: 'duplicate_id', reason: '已存在同名后端，请修改实例名' }] }); return }
-        if (!entry) return
-        const nextBackends = [...backends, { instance_id: name, package_id: packageId, config: {} }]
-        // A safe, explicit default role for every declared capability. Users may rename/remove it.
-        const extraRoles: Json = {}
-        for (const cap of entry.description.capabilities as Json[]) {
-            const role = `${name}_${String(cap.capability_id).replace(/[^a-z0-9_]/g, '_')}`
-            if (!roles[role]) extraRoles[role] = { backend_instance: name, capability_id: cap.capability_id, input: cap.input, output: cap.output, parameters: {} }
-        }
-        update({ ...content, backends: nextBackends, packages: packages(nextBackends), roles: { ...roles, ...extraRoles }, required_roles: Array.from(new Set([...requiredRoles, ...Object.keys(extraRoles)])) })
-        setInstance('backend_' + (nextBackends.length + 1))
-    }
-    function bindRole(role: string, instanceId: string) {
-        const binding = roles[role], backend = backends.find(b => b.instance_id === instanceId)
-        const cap = catalog.find(p => p.id === backend?.package_id)?.description.capabilities.find((c: Json) => c.capability_id === binding?.capability_id)
-        if (!cap || JSON.stringify(cap.input) !== JSON.stringify(binding.input) || JSON.stringify(cap.output) !== JSON.stringify(binding.output)) return
-        update({ ...content, roles: { ...roles, [role]: { ...binding, backend_instance: instanceId } } })
-    }
-    function splitMock() {
-        const source = backends[0]
-        if (!content || backends.length !== 1 || source?.package_id !== 'tomato_simulator') return
-        const idByGroup: Record<string, string> = { vision: 'vision', navigation: 'navigation', arm: 'arm', control: 'control' }
-        const nextBackends = groups.filter(group=>group.id!=='other').map(group => ({ ...source, instance_id: idByGroup[group.id], runtime: { manager: 'local_process', target: `tomato_simulator.${group.id}`, health_check: 'mock_status' } }))
-        const nextRoles = Object.fromEntries(Object.entries(roles).map(([name, binding]: [string, any]) => {
-            const groupId = typeof binding.capability_id === 'string' ? roleGroup(binding.capability_id) : undefined
-            return [name, { ...binding, backend_instance: groupId ? idByGroup[groupId] || source.instance_id : source.instance_id }]
-        }))
-        update({ ...content, backends: nextBackends, roles: nextRoles, packages: content.packages })
-    }
-    return <>
-        <div className="overview-banner system-intro"><div><span className="eyebrow">SYSTEM BUILD</span><h2>{robotSystem.name} · 系统搭建</h2><p>配置后端、能力绑定与运行参数</p></div><span className="overview-state">{observation?.system.state || '尚未应用'}</span></div>
-        <div data-guide="system-groups" className="robot-system-grid system-group-grid">
-            {groups.map(group => {
-                const relevant = Object.entries(roles).filter(([, binding]: [string, any]) => roleGroup(binding.capability_id) === group.id)
-                const assigned = Array.from(new Set(relevant.map(([, binding]: [string, any]) => binding.backend_instance)))
-                const running = assigned.some(name => observation?.system.modules[name]?.process && observation?.system.modules[name]?.interface)
-                return <section key={group.id} data-guide={`system-group-${group.id}`} className="robot-system-card system-group-card">
-                    <span className="robot-system-symbol">{group.id === 'vision' ? '◉' : group.id === 'navigation' ? '◇' : group.id === 'arm' ? '⌁' : '▤'}</span>
-                    <strong>{group.name}</strong><p>{group.description}</p>
-                    <small>{relevant.length ? `${relevant.length} 项能力 · ${assigned.join('、')}` : '尚未绑定能力'}</small>
-                    <span className={'system-group-state ' + (running ? 'state-ready' : 'state-idle')}>{running ? '● 已就绪' : relevant.length ? '○ 未运行或未就绪' : '○ 待配置'}</span>
-                    {relevant.length > 0 && draft && <details className="system-group-bindings"><summary>查看 / 切换能力后端</summary>{relevant.map(([role, binding]: [string, any]) => <label className="system-cap-binding" key={role}><span title={role}>{binding.capability_id}</span><select value={binding.backend_instance} onChange={e => bindRole(role, e.target.value)}>{backends.filter(b => catalog.some(entry => entry.id === b.package_id && entry.description.capabilities.some((c: Json) => c.capability_id === binding.capability_id && JSON.stringify(c.input) === JSON.stringify(binding.input) && JSON.stringify(c.output) === JSON.stringify(binding.output)))).map(b => <option value={b.instance_id} key={b.instance_id}>{b.instance_id}</option>)}</select></label>)}</details>}
-                </section>
-            })}
-        </div>
-        <div data-guide="system-start-config"><Panel title="接入新的功能后端" subtitle="先导入能力描述，再选择后端实例，最后保存应用" icon="system">
-            <div className="integration-steps"><span className={draft?'complete':''}>1. {draft?'编辑已就绪':'开始编辑'}</span><span className={backends.length?'complete':''}>2. 添加后端</span><span className={robotSystem.configured?'complete':''}>3. 保存并应用</span></div>
-            <div className="buttons"><button data-guide="system-create-draft" className="primary" disabled={op.busy} onClick={() => {if(draft&&!window.confirm('新建配置将从已应用工程恢复，不会保留当前未保存的修改，确认继续？'))return;void op.run('开始系统配置', create)}}>{draft ? '从当前系统新建配置' : '开始配置'}</button><label className="file-button">导入接入描述<input type="file" accept=".yaml,.yml,.json" aria-label="导入接入描述" disabled={op.busy} onChange={e=>{const file=e.target.files?.[0];e.target.value='';if(file)void op.run('检查接入描述',async()=>importPackage(file))}}/></label>{backends.length === 1 && backends[0]?.package_id === 'tomato_simulator' && <button disabled={op.busy || !draft} onClick={splitMock}>拆分示例模拟后端</button>}</div>
-            <p className="muted">{draft ? '当前正在编辑配置草稿；修改不会立即作用到设备，保存并应用后才生效' : '从当前系统开始编辑；也可以先导入 package.yaml 再添加实例'}</p>
-            <p className="muted">接入描述声明能力与参数，导入文件不会自动安装 ROS 驱动、加载未知代码或启动真实硬件；真机仍需实现并部署对应适配器</p>
-            {backends.length === 1 && backends[0]?.package_id === 'tomato_simulator' && <p className="callout">可拆分为视觉、导航、机械臂、电控四个模拟实例；拆分后请保存、校验并应用</p>}
-            {draft && <div className="buttons"><a href="#system-config" className="file-button">编辑系统参数 ↓</a></div>}
-        </Panel></div>
-        <details data-guide="system-catalog-advanced" className="system-advanced"><summary>高级：接入包管理与配置历史</summary><div className="workspace-grid">
-            <Panel title="接入包目录" subtitle="导入和查看接入包" icon="plug">
-                <label className="file-button">导入 package.yaml<input type="file" accept=".yaml,.yml,.json" aria-label="导入接入包" disabled={op.busy} onChange={e => { const file = e.target.files?.[0]; e.target.value = ''; if (file) void op.run('静态校验接入包', async () => { if (file.size > 2097152) throw new Error('文件过大'); await client.request('/catalog', 'POST', { filename: file.name, content: await file.text() }); await load() }) }} /></label>
-                {catalog.map(entry => <div className="package-row" key={entry.id}><div><strong>{entry.id}</strong><p className="muted">{entry.description.source} · 描述已保存</p><details><summary>能力与契约</summary>{entry.description.capabilities.map((cap: Json) => <div key={cap.capability_id}><strong>{cap.capability_id}</strong><p>{cap.description}</p><pre>{JSON.stringify({ input: cap.input, output: cap.output }, null, 2)}</pre></div>)}</details></div><button disabled={op.busy} onClick={() => void op.run('删除目录项', async () => { await client.request(`/catalog/${entry.id}`, 'DELETE'); await load() })}>删除描述</button></div>)}
-            </Panel>
-            <Panel title="系统配置草稿" subtitle="编辑并保存系统配置" icon="system">
-                <div className="buttons"><button disabled={op.busy} onClick={() => void op.run('创建草稿', create)}>从当前系统创建草稿</button><button disabled={op.busy} onClick={() => void op.run('重新加载草稿', async () => { await load(); if (draft) select(await client.request<Json>(`/config/drafts/${draft.id}`)) })}>重新加载</button></div>
-                <Field label="选择草稿"><select value={draft?.id || ''} onChange={e => { const next = drafts.find(d => d.id === e.target.value); if (next) select(next) }}><option value="">未选择</option>{drafts.map(d => <option key={d.id} value={d.id}>{d.content.system_id} · revision {d.revision}</option>)}</select></Field>
-                <p className="muted">生效快照 {observation?.system.snapshot_id}</p>
-            </Panel>
-        </div></details>
-        {draft && content && <>
-            <ErrorFields value={draft.validation?.valid ? null : draft.validation} /><details className="system-advanced"><summary>高级：直接编辑原始 JSON</summary><textarea rows={12} value={runtimeText.raw ?? JSON.stringify(content, null, 2)} onChange={e => setRuntimeText({ ...runtimeText, raw: e.target.value })} onBlur={e => { try { const next = JSON.parse(e.target.value); if (next && typeof next === 'object' && !Array.isArray(next)) update(next) } catch { op.setError({ errors: [{ path: '$', code: 'invalid_json', reason: '草稿不是合法 JSON' }] }) } }} /></details><div id="system-config"><Panel title="机器人参数与能力绑定" subtitle="实例参数与角色绑定">
-                <div data-guide="system-config-identity" className="parameter-grid"><Field label="系统标识"><input aria-label="系统标识" value={typeof content.system_id === 'string' ? content.system_id : ''} onChange={e => update({ ...content, system_id: e.target.value })} /></Field><Field label="运行主机"><select disabled value="localhost"><option>localhost</option><option disabled>远程主机（后续阶段）</option></select></Field></div>
-                <h3 data-guide="system-backend-list">已配置后端</h3>{backends.map((backend: Json, index: number) => {
-                    const entry = catalog.find(p => p.id === backend.package_id); return <div className="backend-editor" key={draft.id + backend.instance_id + index}>
-                        <h3>{backend.instance_id} · {backend.package_id}</h3>
-                        <Parameters specs={entry?.description.config || {}} value={backend.config || {}} onChange={config => update({ ...content, backends: backends.map((b: Json, i: number) => i === index ? { ...b, config } : b) })} />
-                        <p className="muted">进程管理者 {backend.runtime?.manager || entry?.description.runtime.manager} · 目标 {backend.runtime?.target || entry?.description.runtime.target}</p>
-                        <details><summary>运行描述（应用后才生效）</summary><Field label="运行描述 JSON"><textarea rows={5} value={runtimeText[String(index)] ?? JSON.stringify(backend.runtime || entry?.description.runtime, null, 2)} onChange={e => setRuntimeText({ ...runtimeText, [index]: e.target.value })} onBlur={e => { try { const runtime = JSON.parse(e.target.value); update({ ...content, backends: backends.map((b: Json, i: number) => i === index ? { ...b, runtime } : b) }) } catch { op.setError({ errors: [{ path: `$.backends[${index}].runtime`, code: 'invalid_json', reason: '运行描述不是合法 JSON' }] }) } }} /></Field></details>
-                        <button disabled={op.busy} onClick={() => { const nextBackends = backends.filter((_: Json, i: number) => i !== index);const nextRoles=Object.fromEntries(Object.entries(roles).filter(([,b]:[string,any])=>b.backend_instance!==backend.instance_id));setRuntimeText({}); update({ ...content, backends: nextBackends, packages: packages(nextBackends), roles: nextRoles, required_roles: requiredRoles.filter(name=>name in nextRoles) }) }}>删除后端及其绑定</button>
-                    </div>
-                })}
-                <div className="integration-add" data-guide="system-backend-editor"><h3>添加后端</h3><div className="parameter-grid"><Field label="实例名称"><input value={instance} onChange={e => setInstance(e.target.value)} placeholder="例如 camera_front" /></Field><Field label="接入包"><select value={packageId} onChange={e => setPackageId(e.target.value)}><option value="">选择已有接入描述</option>{catalog.map(p => <option key={p.id} value={p.id}>{p.id} · {p.description.capabilities.length} 项能力</option>)}</select></Field></div><p className="muted">能力角色将根据所选接入描述自动生成，后续仍可在高级设置中调整</p><button data-guide="system-add-backend" className="primary" disabled={!packageId || op.busy} onClick={addBackend}>添加后端与能力</button></div>
-                <details data-guide="system-advanced-roles" className="system-advanced"><summary>高级：完整角色绑定与参数</summary><h3>角色绑定</h3>
-                    {Object.entries(roles).map(([role, binding]: [string, any]) => <div className="role-editor" key={role}><Field label={role}><select value={`${binding.backend_instance}|${binding.capability_id}`} onChange={e => { const [backend_instance, capability_id] = e.target.value.split('|'); const backend = backends.find((b: Json) => b.instance_id === backend_instance); const cap = catalog.find(p => p.id === backend?.package_id)?.description.capabilities.find((c: Json) => c.capability_id === capability_id); update({ ...content, roles: { ...content.roles, [role]: { backend_instance, capability_id, input: cap.input, output: cap.output, parameters: {} } } }) }}>
-                        <option value={`${binding.backend_instance}|${binding.capability_id}`}>{binding.backend_instance} · {binding.capability_id}</option>{backends.flatMap((b: Json) => { const entry = catalog.find(p => p.id === b.package_id); return (entry?.description.capabilities || []).filter((c: Json) => c.capability_id !== binding.capability_id || b.instance_id !== binding.backend_instance).map((c: Json) => <option key={b.instance_id + c.capability_id} value={`${b.instance_id}|${c.capability_id}`} disabled={JSON.stringify(c.input) !== JSON.stringify(binding.input) || JSON.stringify(c.output) !== JSON.stringify(binding.output)}>{b.instance_id} · {c.capability_id}</option>) })}
-                    </select></Field><Parameters specs={catalog.find(p => p.id === backends.find((b: Json) => b.instance_id === binding.backend_instance)?.package_id)?.description.capabilities.find((c: Json) => c.capability_id === binding.capability_id)?.parameters || {}} value={binding.parameters || {}} onChange={parameters => update({ ...content, roles: { ...content.roles, [role]: { ...binding, parameters } } })} />
-                        <button onClick={() => { const roles = { ...content.roles }; delete roles[role]; update({ ...content, roles, required_roles: requiredRoles.filter((r: string) => r !== role) }) }}>移除角色</button></div>)}
-                    <Field label="新增角色名称"><input value={roleName} onChange={e => setRoleName(e.target.value)} /></Field><Field label="从能力创建角色"><select value="" onChange={e => { if (!roleName || !e.target.value) return; const [backend_instance, capability_id] = e.target.value.split('|'); const b = backends.find((b: Json) => b.instance_id === backend_instance); const cap = catalog.find(p => p.id === b?.package_id)?.description.capabilities.find((c: Json) => c.capability_id === capability_id); update({ ...content, required_roles: Array.from(new Set([...requiredRoles, roleName])), roles: { ...content.roles, [roleName]: { backend_instance, capability_id, input: cap.input, output: cap.output, parameters: {} } } }) }}><option value="">选择能力，自动带入端口契约</option>{backends.flatMap((b: Json) => (catalog.find(p => p.id === b.package_id)?.description.capabilities || []).map((c: Json) => <option key={b.instance_id + c.capability_id} value={`${b.instance_id}|${c.capability_id}`}>{b.instance_id} · {c.capability_id}</option>))}</select></Field>
-                </details><div data-guide="system-save-config" className="buttons"><button className="primary" disabled={op.busy || invalidEditor} onClick={() => void op.run('保存并校验草稿', async () => { const next = await client.request<Json>(`/config/drafts/${draft.id}`, 'PUT', { revision: draft.revision, content }); select(next); await load(); if (!next.validation.valid) op.setError(next.validation); else setDiff(await client.request<Json>(`/config/drafts/${draft.id}/diff`)) })}>① 保存并检查配置</button><button disabled={op.busy} onClick={() => void op.run('生成字段差异', async () => setDiff(await client.request<Json>(`/config/drafts/${draft.id}/diff`)))}>刷新改动预览</button></div>
-            </Panel></div>
-            {diff && <Panel title="应用配置" subtitle="请先停止系统，再应用配置"><ErrorFields value={diff.validation.valid ? null : diff.validation} /><details className="system-advanced"><summary>高级：配置字段差异</summary><pre>{JSON.stringify(diff.changes, null, 2)}</pre></details><p>基准快照 {diff.base_snapshot_id}</p><button className="primary" disabled={op.busy || !diff.validation.valid || (observation?.system.state || 'STOPPED') !== 'STOPPED'} onClick={() => void op.run('应用配置', async (phase, signal) => { const payload = { draft_id: draft.id, revision: diff.revision, base_snapshot_id: diff.base_snapshot_id }; const job = await client.request<Json>('/config/apply', 'POST', { ...payload, request_id: durableIntent('apply', payload) }); await waitJob(client, job.management_job_id, phase, signal); await client.request(`/robot-systems/${robotSystem.id}/configuration`, 'PUT', { revision: robotSystem.revision, content }); await changed() })}>② 应用到系统（仅停止态）</button></Panel>}
-        </>}
-        <div data-guide="system-config-apply-help" className="muted">配置检查通过后，在停止状态下应用配置</div>
-        <ErrorFields value={op.error} />{op.dialog()}
-    </>
+    const nextBackends=[...backends,{instance_id:name,package_id:chosen.id,config:{}}]
+    const paths=new Set<string>(content.packages||[])
+    paths.add(`packages/${chosen.id}.yaml`)
+    update({...content,backends:nextBackends,packages:Array.from(paths),roles:{...roles,...extraRoles},required_roles:Array.from(new Set([...(content.required_roles||[]),...Object.keys(extraRoles)]))})
+    setComposer(false);setEditingBackend(name)
+    setMessage(`已添加「${name}」，能力映射已自动生成，检查参数后保存到机器人`)
+    guideCompleted('system:backend-added')
+  }
+  function removeBackend(name:string){
+    if(!content||!window.confirm(`从当前机器人移除「${name}」及其能力映射`))return
+    const remaining=backends.filter(b=>b.instance_id!==name)
+    const nextRoles=Object.fromEntries(Object.entries(roles).filter(([,v])=>(v as Json).backend_instance!==name))
+    const used=new Set(remaining.map(b=>b.package_id))
+    const paths=(content.packages||[]).filter((p:string)=>!p.startsWith('packages/')||used.has(p.split('/').pop()?.replace(/\.ya?ml$/,'')))
+    update({...content,backends:remaining,packages:paths,roles:nextRoles,required_roles:(content.required_roles||[]).filter((r:string)=>r in nextRoles)})
+    setEditingBackend(null)
+  }
+  function setBackendConfig(name:string,config:Json){update({...content,backends:backends.map(b=>b.instance_id===name?{...b,config}:b)})}
+  function setBackendRuntime(name:string,runtime:Json){update({...content,backends:backends.map(b=>b.instance_id===name?{...b,runtime}:b)})}
+  async function saveAndApply(progress:(value:string)=>void,signal:AbortSignal){
+    if(!content)return
+    const current=await ensureDraft()
+    progress('检查机器人配置')
+    const saved=await client.request<Json>(`/config/drafts/${current.id}`,'PUT',{revision:current.revision,content},signal)
+    setDraft(saved);setDirty(false);setValidation(saved.validation)
+    await refresh()
+    if(!saved.validation?.valid){throw {errors:saved.validation?.errors||[{path:'系统配置',code:'invalid',reason:'请先修正配置问题'}]}}
+    if(!readyForApply)throw {errors:[{path:'设备状态',code:'not_stopped',reason:'当前机器人仍在运行，请到运行工作区安全停止后再保存生效'}]}
+    progress('确认配置变更')
+    const diff=await client.request<Json>(`/config/drafts/${saved.id}/diff`,'GET',undefined,signal)
+    if(!diff.validation.valid)throw {errors:diff.validation.errors}
+    const payload={draft_id:saved.id,revision:diff.revision,base_snapshot_id:diff.base_snapshot_id}
+    const job=await client.request<Json>('/config/apply','POST',{...payload,request_id:durableIntent('apply',payload)},signal)
+    progress('应用到当前机器人')
+    await waitJob(client,job.management_job_id,progress,signal)
+    await client.request(`/robot-systems/${robotSystem.id}/configuration`,'PUT',{revision:robotSystem.revision,content},signal)
+    await changed()
+    setMessage('配置已应用')
+    setPhase('success')
+    guideCompleted('system:applied')
+  }
+  function issueHelp(error:unknown){
+    const entries=(error as Json)?.errors || (error as Json)?.details || []
+    return entries.map((e:Json)=>e.reason).filter(Boolean).join('；')
+  }
+  return <div className="studio-system">
+    <div className="studio-hero"><div><span className="eyebrow">系统搭建</span><h2>{robotSystem.name}</h2><p>管理设备、软件后端及任务能力</p></div><div className="studio-hero-actions"><span className="studio-count">{backends.length} 个后端 · {Object.keys(roles).length} 项能力</span><button className="primary" data-guide="system-add-button" disabled={op.busy||!content} onClick={()=>void op.run('准备添加系统',async()=>openComposer())}>＋ 添加系统</button></div></div>
+    <div className="robot-category-grid" data-guide="system-categories">{groupOptions.map(g=>{const groupBackends=backends.filter(b=>categorize(b)===g.name);return <button key={g.name} className={'robot-category '+(composer&&category===g.name?'chosen':'')} onClick={()=>void op.run('选择系统类型',async()=>openComposer(g.name))}><span className="robot-category-icon" aria-hidden="true"><Icon name={g.icon} size="xl" /></span><strong>{g.name}</strong><small>{g.caption}</small><span className="robot-category-number">{groupBackends.length?`${groupBackends.length} 个后端 · 添加`:'添加后端'}</span></button>})}</div>
+    {!robotSystem.configured&&<div className="studio-notice"><strong>未配置后端</strong><span>支持直接编辑逻辑任务</span><button onClick={()=>onNavigate?.('editor')}>任务编排 →</button></div>}
+    <div className="studio-steps"><span className="done">1　创建机器人</span><span className={backends.length?'done':''}>2　添加系统</span><span className={robotSystem.configured&&!dirty?'done':''}>3　保存配置</span><button onClick={()=>onNavigate?.('editor')}>4　设计任务 →</button></div>
+    {backends.length===0&&!composer?<div className="studio-empty"><span className="studio-empty-icon"><Icon name="boxes" size="xl" /></span><h3>暂无功能后端</h3><p>选择系统类别，添加可用的接入包</p><button className="primary" onClick={()=>void op.run('准备添加系统',async()=>openComposer())}>添加第一个系统 →</button></div>:null}
+    {composer&&<section className="studio-composer" data-guide="system-start-config"><header><div><span className="eyebrow">接入向导</span><h3>添加{category}</h3><p>选择类别与接入包，确认能力后添加</p></div><button disabled={op.busy} onClick={()=>setComposer(false)}>关闭</button></header><div className="studio-composer-grid"><div><div className="studio-category-select"><Field label="① 系统类别"><select value={category} onChange={e=>{setCategory(e.target.value);setPackageId('');setInstance('')}}>{groupOptions.map(g=><option key={g.name}>{g.name}</option>)}</select></Field></div><h4>② 接入包</h4><p className="muted">选择已有接入包，或导入新的接入描述</p><div data-guide="system-package-select"><Field label="已有接入描述"><select value={packageId} onChange={e=>{setPackageId(e.target.value);setInstance(safeId(e.target.value)+'_1');if(e.target.value)guideCompleted('system:package-selected')}}><option value="">选择已登记的接入描述</option>{catalog.filter(p=>category==='自定义系统'||(p.description.capabilities||[]).some((c:Json)=>groupOptions.find(g=>g.name===category)?.prefix.some(prefix=>String(c.capability_id).startsWith(prefix)))).map(p=><option key={p.id} value={p.id}>{p.id}</option>)}</select></Field></div><label className="file-button studio-import">＋ 导入新的接入描述<input type="file" accept=".yaml,.yml,.json" onChange={e=>{const file=e.target.files?.[0];e.target.value='';if(file)void op.run('导入接入描述',async()=>importPackage(file))}} /></label><Field label="③ 后端标识"><input value={instance} onChange={e=>setInstance(e.target.value)} placeholder="例如 arm_left 或 camera_front" /></Field><button data-guide="system-backend-confirm" className="primary" disabled={op.busy||!chosen||!instance.trim()} onClick={addBackend}>添加后端 →</button></div><div className="studio-capability-preview"><h4>可用能力</h4>{chosen?<><p>{chosen.description.capabilities?.length||0} 项能力 · 自动生成任务绑定</p>{chosen.description.capabilities?.map((cap:Json)=><div className="studio-capability" key={cap.capability_id}><strong>{friendly(cap.capability_id)}</strong><small>{cap.description||cap.capability_id}</small></div>)}<p className="studio-warning">设备控制需要已部署并授权的适配器</p></>:<p>选择接入包以查看能力</p>}</div></div></section>}
+    <div className="studio-module-list" data-guide="system-backend-list">{backends.map(backend=>{const entry=catalog.find(p=>p.id===backend.package_id);const mapping=Object.entries(roles).filter(([,r])=>(r as Json).backend_instance===backend.instance_id);const active=observation?.system.modules?.[backend.instance_id];return <section className={'studio-module '+(editingBackend===backend.instance_id?'focused':'')} key={backend.instance_id}><div className="studio-module-main"><div className="studio-module-icon"><Icon name={groupOptions.find(g=>g.name===categorize(backend))?.icon||'boxes'} size="xl" /></div><div className="studio-module-heading"><strong>{categorize(backend)} · {backend.instance_id}</strong><small>{entry?.description?.source||backend.package_id}</small><span>{mapping.length} 项任务能力</span></div><span className={'studio-module-state '+(active?.process&&active?.interface?'connected':'')}>{stateText(active)}</span><button data-guide="system-backend-config" onClick={()=>{const opening=editingBackend!==backend.instance_id;setEditingBackend(opening?backend.instance_id:null);setRuntimeRaw('');if(opening)guideCompleted('system:detail-opened')}}>{editingBackend===backend.instance_id?'收起':'配置与能力'} →</button></div>{editingBackend===backend.instance_id&&<div className="studio-module-detail"><h4>能力列表</h4><div className="studio-capability-grid">{mapping.map(([name,r]:[string,any])=><div className="studio-capability" key={name}><strong>{friendly(r.capability_id)}</strong><small>{entry?.description.capabilities?.find((c:Json)=>c.capability_id===r.capability_id)?.description||name}</small><details><summary>选择执行该能力的后端</summary><select value={r.backend_instance} onChange={e=>{if(!content)return;update({...content,roles:{...roles,[name]:{...r,backend_instance:e.target.value}}})}}>{backends.filter(b=>catalog.some(p=>p.id===b.package_id&&p.description.capabilities?.some((c:Json)=>c.capability_id===r.capability_id&&JSON.stringify(c.input)===JSON.stringify(r.input)&&JSON.stringify(c.output)===JSON.stringify(r.output)))).map(b=><option key={b.instance_id} value={b.instance_id}>{b.instance_id}</option>)}</select></details></div>)}</div><h4>系统参数</h4>{Object.keys(entry?.description.config||{}).length?<Parameters specs={entry?.description.config||{}} value={backend.config||{}} onChange={v=>setBackendConfig(backend.instance_id,v)}/>:<p className="muted">无额外参数</p>}<details className="studio-advanced"><summary>开发者选项 · 运行配置与接口描述</summary><p>接入包运行参数，修改后需重新应用配置</p><textarea rows={6} value={runtimeRaw||JSON.stringify(backend.runtime||entry?.description.runtime||{},null,2)} onChange={e=>setRuntimeRaw(e.target.value)} /><button onClick={()=>{try{setBackendRuntime(backend.instance_id,JSON.parse(runtimeRaw||JSON.stringify(backend.runtime||entry?.description.runtime||{})));setRuntimeRaw('')}catch{op.setError({errors:[{path:'运行配置',code:'invalid_json',reason:'请填写合法的 JSON 对象'}]})}}}>保存运行设置</button></details><button className="danger-quiet" onClick={()=>removeBackend(backend.instance_id)}>移除后端</button></div>}</section>})}</div>
+    <section className="studio-save" data-guide="system-save-config"><div><h3>{dirty?'配置待应用':robotSystem.configured?'配置已应用':'配置未应用'}</h3><p>{backends.length===0?'添加后端后可应用配置，逻辑任务无需后端':'校验通过后，在停止状态下应用配置'}</p>{!readyForApply&&<p className="studio-warning">运行中不可应用配置</p>}{validation&&!validation.valid&&<ErrorFields value={validation}/>}</div><div className="buttons"><button className="primary" disabled={!content||op.busy||!readyForApply||(!dirty&&robotSystem.configured)||backends.length===0} onClick={()=>void op.run('保存机器人配置',saveAndApply)}>{backends.length===0?'请先添加后端':dirty?'保存并应用':robotSystem.configured?'已应用':'保存并应用'}</button><button onClick={()=>onNavigate?.('editor')}>进入任务编排 →</button></div></section>
+    <details className="studio-advanced" open={expanded} onToggle={e=>setExpanded(e.currentTarget.open)}><summary>开发者选项 · 接入包与原始配置</summary><div className="studio-advanced-body"><h4>接入描述目录</h4>{catalog.map(p=><div className="studio-capability" key={p.id}><strong>{p.id}</strong><small>{p.description.capabilities?.length||0} 项能力</small><details><summary>查看接口结构</summary><pre>{JSON.stringify(p.description,null,2)}</pre></details></div>)}<h4>配置草稿</h4><select value={draft?.id||''} onChange={e=>{const item=drafts.find(v=>v.id===e.target.value);if(item){setDraft(item);setContent(structuredClone(item.content));setDirty(false);setEditingBackend(null)}}}><option value="">尚未建立草稿</option>{drafts.map((d:Json)=><option key={d.id} value={d.id}>{d.content.system_id} · {d.id.slice(-8)}</option>)}</select><button onClick={()=>void op.run('重新建立草稿',async()=>{if(dirty&&!window.confirm('当前尚未保存的修改会被放弃，确认重新开始'))return;const status=await client.request<Json>('/config/status');const next=await client.request<Json>('/config/drafts','POST',{base_snapshot_id:status.snapshot_id,content:robotSystem.content});setDraft(next);setContent(structuredClone(next.content));setDirty(false);await refresh()})}>从当前机器人重新建立配置</button><h4>原始配置</h4><textarea rows={9} value={raw||JSON.stringify(content||{},null,2)} onChange={e=>setRaw(e.target.value)}/><button onClick={()=>{try{const next=JSON.parse(raw);if(!next||Array.isArray(next)||typeof next!=='object')throw Error();update(next);setRaw('')}catch{op.setError({errors:[{path:'原始配置',code:'invalid_json',reason:'配置必须是有效的 JSON 对象'}]})}}} disabled={!raw}>应用原始编辑</button></div></details>
+    {message&&<p className={phase==='success'?'callout':'muted'} role="status">{message}</p>}
+    <ErrorFields value={op.error}/>{op.dialog()}
+  </div>
 }
