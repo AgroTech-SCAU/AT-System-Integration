@@ -100,6 +100,8 @@ export default function TutorialStudio({ course, client: _client, onClose, child
   const [index, setIndex] = useState(0)
   const [focus, setFocus] = useState<Frame | null>(null)
   const [completed, setCompleted] = useState(false)
+  const [validationIssue, setValidationIssue] = useState<string[]>([])
+  const [repairMode, setRepairMode] = useState(false)
   const [open, setOpen] = useState(true)
   const root = useRef<HTMLDivElement>(null)
   const closeRef = useRef(onClose)
@@ -111,6 +113,8 @@ export default function TutorialStudio({ course, client: _client, onClose, child
     let done = false
     let advanceTimer: number | undefined
     setCompleted(false)
+    setValidationIssue([])
+    setRepairMode(false)
     const advance = () => {
       if (done) return
       done = true
@@ -144,10 +148,31 @@ export default function TutorialStudio({ course, client: _client, onClose, child
     if (step.tab) window.dispatchEvent(new Event('agro:guide:' + step.tab))
   }, [index, step])
 
+  // Keep diagnostics visible during guided validation instead of silently waiting for success
+  useEffect(() => {
+    if (step.completion.event !== 'tree:validated') return
+    const failed=(event:Event) => {
+      const details=(event as CustomEvent<string[]>).detail
+      setValidationIssue(Array.isArray(details)?details.slice(0,5):['校验尚未通过'])
+      setRepairMode(false)
+    }
+    const edited=()=>{setValidationIssue([]);setRepairMode(false)}
+    const repair=()=>setRepairMode(true)
+    window.addEventListener('agro:tutorial:tree-validation-failed',failed)
+    window.addEventListener('agro:tutorial:tree-edited',edited)
+    window.addEventListener('agro:tutorial:tree-repair',repair)
+    return ()=>{
+      window.removeEventListener('agro:tutorial:tree-validation-failed',failed)
+      window.removeEventListener('agro:tutorial:tree-edited',edited)
+      window.removeEventListener('agro:tutorial:tree-repair',repair)
+    }
+  }, [step])
+  const activeTarget=validationIssue.length?(repairMode?'task-tree-node-settings':'tree-validation-feedback'):step.target
+
   // Measure at most once per animation frame and scroll only when a new target appears
   // Avoid a smooth-scroll + polling loop, which was forcing constant repaint of the blur
   useLayoutEffect(() => {
-    const selector = `[data-guide="${step.target}"]`
+    const selector = `[data-guide="${activeTarget}"]`
     const viewport = root.current?.querySelector('.tutorial-real-app') || null
     let animationFrame = 0
     let observed: Element | null = null
@@ -193,7 +218,7 @@ export default function TutorialStudio({ course, client: _client, onClose, child
       window.removeEventListener('resize', schedule)
       window.removeEventListener('scroll', schedule, true)
     }
-  }, [index, step])
+  }, [index, step, activeTarget])
 
   const skipStep = () => {
     if (completed) return
@@ -217,6 +242,7 @@ export default function TutorialStudio({ course, client: _client, onClose, child
         <div className="tutorial-coach-section"><strong>目标</strong><p>{step.purpose}</p></div>
         <div className="tutorial-coach-section important"><strong>操作</strong><p>{step.instruction}</p></div>
         <div className="tutorial-coach-section"><strong>完成后</strong><p>{step.expected}</p></div>
+        {validationIssue.length>0&&<div className="tutorial-coach-hint" role="alert"><Icon name="info"/><div><strong>校验未通过</strong>{validationIssue.map((message,i)=><p key={i}>{message}</p>)}<button className="tutorial-prep-button" onClick={()=>setRepairMode(value=>!value)}>{repairMode?'返回校验结果':'修改节点设置'}</button><p>修改完成后重新点击「校验树」</p></div></div>}
         {!focus && <div className="tutorial-coach-hint"><Icon name="info" /><div><p>操作区域尚未显示，等待页面加载后自动定位</p><button className="tutorial-prep-button" onClick={() => window.dispatchEvent(new CustomEvent<Workspace>('agro:tutorial:navigate', { detail: step.page }))}>重新定位</button></div></div>}
         <div className={'tutorial-coach-status' + (completed ? ' complete' : '')} role="status"><Icon name={completed ? 'check-circle' : 'mouse-pointer-2'} />{completed ? '操作完成 · 自动进入下一步' : '完成高亮区域的操作后自动继续'}</div>
         </div>

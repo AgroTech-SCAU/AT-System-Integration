@@ -356,6 +356,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
         id: str | None = None
         name: str = '我的状态机'
         document: dict
+        layout: dict = Field(default_factory=dict)
 
     class StateMachineEvent(BaseModel):
         model_config = ConfigDict(extra='forbid')

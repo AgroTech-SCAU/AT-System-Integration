@@ -111,7 +111,16 @@ class StateMachines:
         if previous and self.running() and self._session['machine_id'] == identity:
             fail('$.machine','running','当前状态机正在运行，不能覆盖定义')
         spec = validate(value.get('document'),self.definitions())
-        return self.store.put('state_machine',identity,{'id':identity,'robot_system_id':key,'name':(str(value.get('name') or '未命名状态机'))[:80], 'revision':(previous['revision']+1 if previous else 1),'document':spec})
+        layout = value.get('layout') or {}
+        positions = layout.get('positions', {}) if isinstance(layout, dict) else None
+        valid_ids = {state['id'] for state in spec['states']}
+        if not isinstance(positions, dict) or len(positions) > 48 or any(
+            key not in valid_ids or not isinstance(point, list) or len(point) != 2 or
+            any(type(x) not in (int, float) or not 0 <= x <= 12000 for x in point)
+            for key, point in positions.items()
+        ):
+            fail('$.layout.positions', 'invalid_layout', '状态画布坐标无效')
+        return self.store.put('state_machine',identity,{'id':identity,'robot_system_id':key,'name':(str(value.get('name') or '未命名状态机'))[:80], 'revision':(previous['revision']+1 if previous else 1),'document':spec, 'layout':{'positions':copy.deepcopy(positions)}})
 
     def delete(self, identity):
         machine = self.get(identity)

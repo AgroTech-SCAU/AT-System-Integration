@@ -310,3 +310,30 @@ body.guide-rail-active .tree-editor-grid>div:last-child{grid-column:1/-1}
 
 .overview-steps .overview-step-icon{display:grid;place-items:center;grid-row:span 2;width:43px;height:43px;border-radius:12px;font-size:unset;color:var(--accent);background:color-mix(in srgb,var(--accent) 9%,var(--card));border:1px solid color-mix(in srgb,var(--accent) 18%,var(--line))}
 .overview-steps .overview-step-icon svg{width:23px;height:23px}
+
+/* HSM visual layout and structural editing */
+.hsm-canvas-shell{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--subtle)}
+.hsm-canvas-toolbar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;padding:10px 13px;border-bottom:1px solid var(--line);font-size:11px;color:var(--muted)}
+.hsm-canvas-toolbar button{white-space:nowrap}
+.hsm-canvas-scroll{overflow:auto;max-height:480px;min-height:240px;background-image:radial-gradient(circle at center,color-mix(in srgb,var(--line) 80%,transparent) 1px,transparent 1.4px);background-size:20px 20px}
+.hsm-canvas-scroll svg{display:block;max-width:none;color:var(--muted);touch-action:pan-x pan-y}
+.hsm-canvas-hierarchy{fill:none;stroke:var(--muted);stroke-width:1.7;opacity:.62}
+.hsm-canvas-event path{stroke:var(--accent);stroke-width:1.3;stroke-dasharray:5 5;fill:none;opacity:.9}
+.hsm-canvas-event text{font-size:10px;fill:var(--accent)}
+.hsm-canvas-node{cursor:grab;outline:none}
+.hsm-canvas-node.dragging{cursor:grabbing}
+.hsm-canvas-node rect{fill:var(--card);stroke:var(--line);stroke-width:1.5;filter:drop-shadow(0 2px 4px #0001)}
+.hsm-canvas-node.selected rect,.hsm-canvas-node:focus rect{stroke:var(--accent);stroke-width:2.5;fill:var(--tint)}
+.hsm-canvas-node text{fill:var(--text);pointer-events:none}
+.hsm-canvas-title{font-size:13px;font-weight:650}
+.hsm-canvas-node .hsm-canvas-meta{font-size:10px;fill:var(--muted)}
+.hsm-hierarchy-row.drag-over>.hsm-state{outline:2px dashed var(--accent);outline-offset:2px}
+.hsm-state[draggable="true"]{cursor:grab}
+.hsm-state[draggable="true"]:active{cursor:grabbing}
+
+.tree-validation-feedback{display:flex;flex-wrap:wrap;align-items:center;gap:9px;margin:10px 0 15px;padding:12px 15px;border:1px solid var(--line);border-radius:10px;font-size:12px;background:var(--subtle)}
+.tree-validation-feedback.ok{border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+.tree-validation-feedback.fail{border-color:var(--red);background:color-mix(in srgb,var(--red) 5%,var(--card))}
+.tree-validation-feedback strong{white-space:nowrap}
+.tree-validation-feedback div{flex:1;min-width:200px}
+.tree-validation-feedback p{margin:3px 0;line-height:1.4}

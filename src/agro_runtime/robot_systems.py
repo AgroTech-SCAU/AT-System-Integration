@@ -224,7 +224,7 @@ class RobotSystems:
                 }
             )
         state_machines = [
-            {'name': row['name'], 'document': copy.deepcopy(row['document'])}
+            {'name': row['name'], 'document': copy.deepcopy(row['document']), 'layout':copy.deepcopy(row.get('layout', {'positions':{}}))}
             for row in self.store.list('state_machine')
             if row.get('robot_system_id') == key
         ]
@@ -408,7 +408,16 @@ class RobotSystems:
                     for field in ('entry','do','exit'):
                         state.pop(field,None)
             document = validate_state_machine(document,())
-            clean_machines.append({'name':str(item.get('name') or '导入状态机')[:80], 'document': document, 'needs_tree_rebinding':True})
+            layout=item.get('layout') or {'positions':{}}
+            positions=layout.get('positions',{}) if isinstance(layout,dict) else {}
+            keys={state['id'] for state in document['states']}
+            if not isinstance(positions,dict) or len(positions)>48 or any(
+                key not in keys or not isinstance(point,list) or len(point)!=2 or
+                any(type(v) not in (int,float) or not 0<=v<=12000 for v in point)
+                for key,point in positions.items()
+            ):
+                fail(f'$.state_machines[{i}].layout','invalid_layout','画布布局无效')
+            clean_machines.append({'name':str(item.get('name') or '导入状态机')[:80], 'document': document, 'layout':{'positions':copy.deepcopy(positions)}, 'needs_tree_rebinding':True})
         # 当前资产系统只认可内置模拟标定证据；未来真实标定须由独立校验器接入
         allowed_fixture = json.loads(
             (self.example / "assets" / "camera_to_arm.json").read_text(encoding="utf-8")
@@ -496,7 +505,7 @@ class RobotSystems:
         self.store.put("robot_system", key, record)
         for machine in clean_machines:
             mid='machine_'+uuid4().hex
-            self.store.put('state_machine',mid,{'id':mid,'name':machine['name'],'document':machine['document'],'revision':1,'robot_system_id':key,'needs_tree_rebinding':True})
+            self.store.put('state_machine',mid,{'id':mid,'name':machine['name'],'document':machine['document'],'layout':machine.get('layout',{'positions':{}}),'revision':1,'robot_system_id':key,'needs_tree_rebinding':True})
         record.pop('pending_state_machines',None)
         self.store.put('robot_system',key,record)
         return record
