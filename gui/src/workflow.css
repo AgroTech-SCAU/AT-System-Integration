@@ -30,10 +30,10 @@
 .app.atil-shell .sidebar-spacer{display:block;flex:1;min-height:18px}
 .app.atil-shell .runtime-card{display:block;flex:none;margin:8px 2px 0;padding:12px 8px 0;border:0;border-top:1px solid var(--line);background:transparent;font-size:11px;line-height:1.8}
 .app.atil-shell .runtime-card small{font-size:10px}
-.sidebar-robot-actions{display:grid;grid-template-columns:minmax(0,1fr) 30px;gap:5px;padding:0 3px;margin:0 0 20px;flex:none}
+.sidebar-robot-actions{display:grid;grid-template-columns:minmax(0,1fr);gap:5px;padding:0 3px;margin:0 0 20px;flex:none}
 .sidebar-robot-actions>button{min-height:30px;font-size:11px;border:1px solid var(--line);background:var(--subtle);padding:4px 7px;gap:5px;color:var(--muted)}
 .sidebar-robot-actions>button:hover{color:var(--text);border-color:color-mix(in srgb,var(--accent) 35%,var(--line))}
-.sidebar-robot-actions svg{width:14px;height:14px;flex:none}.sidebar-manage-robots{width:30px}
+.sidebar-robot-actions svg{width:14px;height:14px;flex:none}
 .association-icon{display:inline-block;width:18px;height:18px;object-fit:contain;flex:none;vertical-align:middle}
 .brand-mini>.association-icon{width:25px;height:25px}.library-icon>.association-icon{width:31px;height:31px}.robot-avatar>.association-icon{width:26px;height:26px}
 @media(max-width:760px){
@@ -44,5 +44,5 @@
  .app.atil-shell .sidebar .nav-item span{display:none}
  .app.atil-shell .runtime-card{display:none}
  .sidebar-robot-actions{display:flex;padding:0;margin-bottom:16px}.sidebar-robot-actions>.sidebar-new-robot{width:38px;min-height:30px;padding:4px}
- .sidebar-robot-actions .sidebar-new-robot span,.sidebar-robot-actions .sidebar-manage-robots{display:none}
+ .sidebar-robot-actions .sidebar-new-robot span{display:none}
 }

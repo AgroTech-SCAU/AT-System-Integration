@@ -7,7 +7,6 @@ import type {Workspace} from '../types'
 import {ApiError} from '../api'
 import {Icon} from '../components/Icon'
 import {AnchoredPopover} from '../components/AnchoredPopover'
-import {guideCompleted} from '../guide/courses'
 import {requestId, waitJob, type Json} from './shared'
 import './robot-manager.css'
 
@@ -17,7 +16,6 @@ export type RobotSystem = {
 }
 export type RobotDirectory = {
     systems: RobotSystem[]; selected_id: string | null; active: boolean; running_state: string; switch_blocked_reason?: string | null
-    examples: {id: string; title: string; description: string; simulation: boolean}[]
 }
 type Section = 'create' | 'manage' | 'import'
 type ProjectBundle = {format: string; format_version: number; system: {name: string}; [key: string]: unknown}
@@ -41,14 +39,14 @@ export default function RobotLibrary({client, directory, onRefresh, onReconnect,
  const {t}=useLocale()
 
     const [section, setSection] = useState<Section | 'rename' | 'delete'>(initialSection)
-    const [name, setName] = useState(''), [source, setSource] = useState<'blank' | 'tomato_picker'>('blank')
+    const [name, setName] = useState('')
     const [busy, setBusy] = useState(false), [message, setMessage] = useState(''), [failed, setFailed] = useState(false)
     const [phase, setPhase] = useState(''), [query, setQuery] = useState('')
     const [target, setTarget] = useState<RobotSystem | null>(null), [editName, setEditName] = useState('')
     const [menu, setMenu] = useState<{robot: RobotSystem; anchor: HTMLButtonElement} | null>(null)
     const [highlight, setHighlight] = useState('')
     const root = useRef<HTMLDivElement>(null), fileInput = useRef<HTMLInputElement>(null), operation = useRef(false)
-    const examples = directory?.examples || [], systems = directory?.systems || []
+    const systems = directory?.systems || []
     const locked = busy || !client
     const switchReason = directory?.switch_blocked_reason || (directory && directory.running_state !== 'STOPPED' ? t("机器人正在运行，停止后可以切换") : '')
     const filtered = systems.filter(robot => `${robot.name} ${robot.connection?.namespace || ''}`.toLowerCase().includes(query.trim().toLowerCase()))
@@ -88,18 +86,16 @@ export default function RobotLibrary({client, directory, onRefresh, onReconnect,
                 await waitJob(client, result.management_job_id, () => setPhase(t("正在切换至 {0}", {0: robot.name})))
             }
             await onRefresh()
-            guideCompleted('robot:selected')
             onNavigate('overview')
         }, t("正在切换至 {0}", {0: robot.name}))
     }
     async function create() {
         if (!client || !name.trim()) return
         await perform(async () => {
-            const robot = await client.request<RobotSystem>('/robot-systems', 'POST', {name: name.trim(), example_id: source === 'blank' ? null : source})
+            const robot = await client.request<RobotSystem>('/robot-systems', 'POST', {name: name.trim()})
             await onRefresh()
             setName(''); setQuery(''); setSection('manage'); setHighlight(robot.id)
             setMessage(t("已创建 {0}，点击切换即可打开", {0: robot.name}))
-            guideCompleted(`robot:created:${source}`)
         }, t("正在创建机器人"))
     }
     async function acceptImport(bundle: unknown) {
@@ -161,7 +157,7 @@ export default function RobotLibrary({client, directory, onRefresh, onReconnect,
         if (event.key !== 'Escape') return
         if (busy || section !== 'manage') {event.preventDefault(); event.stopPropagation(); if (!busy) changeSection('manage')}
     }}>
-        <header className="robot-manager-heading" data-guide="guide-selected-robot">
+        <header className="robot-manager-heading">
             <div>{section !== 'manage' && <button className="robot-manager-back" aria-label={t("返回机器人列表")} disabled={busy} onClick={() => changeSection('manage')}><Icon name="arrow-left"/></button>}<h2>{title}</h2>{section === 'manage' && <span className="robot-manager-count">{systems.length}</span>}</div>
             {onClose && <button className="robot-manager-close" aria-label={t("关闭机器人管理")} disabled={busy} onClick={onClose}><Icon name="x"/></button>}
         </header>
@@ -173,7 +169,7 @@ export default function RobotLibrary({client, directory, onRefresh, onReconnect,
                 <button disabled={busy} onClick={() => changeSection('import')}><Icon name="import"/>{t("导入")}</button>
                 <button className="primary" disabled={locked} onClick={() => changeSection('create')}><Icon name="plus"/>{t("新建机器人")}</button>
             </div>
-            <ul data-guide="robot-list" className="robot-manager-list" aria-label={t("我的机器人")}>{filtered.map(robot => {
+            <ul className="robot-manager-list" aria-label={t("我的机器人")}>{filtered.map(robot => {
                 const current = robot.id === directory?.selected_id
                 const duplicate = systems.some(other => other.id !== robot.id && other.name === robot.name)
                 return <motion.li layout="position" initial={{opacity:0,y:4}} animate={{opacity:1,y:0}} transition={springs.spatial} key={robot.id} data-robot-id={robot.id} className={`robot-manager-row${current ? ' is-current' : ''}${highlight === robot.id ? ' is-highlighted' : ''}`}>
@@ -188,13 +184,10 @@ export default function RobotLibrary({client, directory, onRefresh, onReconnect,
                 </motion.li>
             })}{!filtered.length && <li className="robot-manager-empty"><Icon name={query ? 'search' : 'association'}/><strong>{query ? t("没有找到机器人") : t("还没有机器人")}</strong><p>{query ? t("试试其他名称或命名空间") : t("新建一个机器人，或导入已有工程")}</p>{!query && <button disabled={locked} onClick={() => changeSection('create')}>{t("新建机器人")}<Icon name="plus"/></button>}</li>}</ul>
             {switchReason && systems.some(robot => robot.id !== directory?.selected_id) && <p className="robot-switch-note"><Icon name="info"/>{t(switchReason)}</p>}
-        </> : section === 'create' ? <form className="robot-manager-form" data-guide="create-robot-form" onSubmit={event => {event.preventDefault(); void create()}}>
-            <fieldset disabled={locked}><label className="field robot-manager-name" data-guide="create-robot-name"><span>{t("机器人名称")}</span><input data-initial-focus value={name} onChange={event => setName(event.target.value)} maxLength={60} placeholder={t("例如：番茄采摘机器人")} required/></label>
-                <span className="robot-form-label">{t("创建方式")}</span><div className="robot-source-options">
-                    <button type="button" data-guide="create-blank" className={source === 'blank' ? 'is-chosen' : ''} aria-pressed={source === 'blank'} onClick={() => {setSource('blank'); guideCompleted('guide:source:blank')}}><Icon name="association"/><strong>{t("空白机器人")}</strong><small>{t("连接 ROS，创建任务与流程")}</small><span aria-hidden="true">{source === 'blank' ? '✓' : ''}</span></button>
-                    {examples.map(example => <button type="button" key={example.id} data-guide="create-tomato" className={source === example.id ? 'is-chosen' : ''} aria-pressed={source === example.id} onClick={() => {setSource('tomato_picker'); if (!name.trim()) setName(t(example.title)); guideCompleted('guide:source:tomato_picker')}}><Icon name="templates"/><strong>{t("从示例创建")}</strong><small>{t(example.title)}</small><span aria-hidden="true">{source === example.id ? '✓' : ''}</span></button>)}
-                </div><p className="robot-form-hint">{t("同名机器人会自动添加序号，创建后可在列表中切换")}</p>
-                <footer><button type="button" onClick={() => changeSection('manage')}>{t("取消")}</button><button data-guide="create-robot-submit" className="primary" type="submit" disabled={!name.trim() || busy}>{t("创建机器人")}</button></footer>
+        </> : section === 'create' ? <form className="robot-manager-form" onSubmit={event => {event.preventDefault(); void create()}}>
+            <fieldset disabled={locked}><label className="field robot-manager-name"><span>{t("机器人名称")}</span><input data-initial-focus value={name} onChange={event => setName(event.target.value)} maxLength={60} placeholder={t("机器人名称")} required/></label>
+                <p className="robot-form-hint">{t("同名机器人会自动添加序号，创建后可在列表中切换")}</p>
+                <footer><button type="button" onClick={() => changeSection('manage')}>{t("取消")}</button><button className="primary" type="submit" disabled={!name.trim() || busy}>{t("创建机器人")}</button></footer>
             </fieldset>
         </form> : section === 'import' ? <div className="robot-manager-form robot-import-form">
             <div className="robot-import-art"><Icon name="association"/></div><h3>{t("导入机器人工程")}</h3><p>{t("恢复机器人任务和流程，随后连接 ROS 环境")}</p>

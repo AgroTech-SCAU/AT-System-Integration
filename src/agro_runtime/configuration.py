@@ -56,6 +56,17 @@ class WorkspaceStore:
             self.db.execute('INSERT OR REPLACE INTO documents VALUES (?,?,?)',(kind,key,encoded(value)))
         return value
 
+    def put_many(self, kind, items):
+        rows = []
+        values = []
+        for key, value in items:
+            identifier(key)
+            rows.append((kind, key, encoded(value)))
+            values.append(value)
+        with self.db:
+            self.db.executemany('INSERT OR REPLACE INTO documents VALUES (?,?,?)', rows)
+        return values
+
     def delete(self, kind, key):
         self.get(kind,key)
         with self.db:

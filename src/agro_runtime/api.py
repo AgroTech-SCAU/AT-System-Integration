@@ -515,9 +515,27 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
         except asyncio.TimeoutError:
             fail('$.ros','discovery_timeout','ROS 2 接口发现超时，请检查 ROS_DOMAIN_ID 与网络')
 
+    @api.get('/ros/interface-types')
+    async def ros_interface_types():
+        from .ros_interfaces import InterfaceLibrary
+        return InterfaceLibrary(store).catalog()
+
+    class RosInterfaceFile(BaseModel):
+        name: str = Field(max_length=160)
+        content: str = Field(max_length=262144)
+
+    class RosInterfaceImport(BaseModel):
+        package: str = Field(max_length=100)
+        files: list[RosInterfaceFile] = Field(min_length=1, max_length=64)
+
+    @api.post('/ros/interface-types/import')
+    async def ros_interface_import(body: RosInterfaceImport):
+        from .ros_interfaces import InterfaceLibrary
+        return InterfaceLibrary(store).import_files(body.package, [item.model_dump() for item in body.files])
+
     @api.get('/ros/schema')
     async def ros_schema(kind: str, ros_type: str):
-        return await asyncio.to_thread(ros_tasks.describe,kind,ros_type)
+        return ros_tasks.describe(kind,ros_type)
 
     @api.get('/state-machines')
     async def hsm_list():

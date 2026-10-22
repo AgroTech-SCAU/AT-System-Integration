@@ -646,6 +646,7 @@ class TaskDocuments:
             fail('$.template', 'template_not_imported', '先在总览导入并选择番茄采摘机器人示例')
         if xml is None:
             if template=='tomato_picker':xml=self.assets.template.read_text()
+            elif template=='general':xml='<root BTCPP_format="4" main_tree_to_execute="Main"><BehaviorTree ID="Main"><Sequence/></BehaviorTree></root>'
             else:xml='<root BTCPP_format="4" main_tree_to_execute="Main"><BehaviorTree ID="Main"><Sequence><AlwaysSuccess/></Sequence></BehaviorTree></root>'
         document=self.parse_xml(xml)
         if template=='tomato_picker':

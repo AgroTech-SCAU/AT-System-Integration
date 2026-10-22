@@ -10,7 +10,7 @@ export type SavedMachine = {id:string;name:string;document:MachineDocument;layou
 export type Diagnostic = {message:string;stateId?:string;edgeIndex?:number}
 export const isIdentifier=(value:string)=>/^[a-z][a-z0-9_]{0,63}$/.test(value)
 export const activeStatus=(value?:string)=>['ENTERING','RUNNING','TRANSITIONING','STOPPING'].includes(value||'')
-export const blankMachine=(t:(text:string)=>string=text=>text):MachineSnapshot=>({title:t("我的状态机"),document:{initial:'workflow',states:[{id:'workflow',label:t("工作流程"),initial:'idle'},{id:'idle',label:t("待命"),parent:'workflow'},{id:'working',label:t("执行任务"),parent:'workflow'},{id:'finished',label:t("已完成"),parent:'workflow'}],transitions:[{source:'idle',target:'working',event:'start'},{source:'working',target:'finished',event:'completed'},{source:'working',target:'idle',event:'failed'}],variables:{}},layout:{positions:{}}})
+export const blankMachine=(t:(text:string)=>string=text=>text):MachineSnapshot=>({title:t("我的状态机"),document:{initial:'workflow',states:[{id:'workflow',label:t("工作流程")}],transitions:[],variables:{}},layout:{positions:{}}})
 export const snapshotOf=(machine:SavedMachine):MachineSnapshot=>({title:machine.name,document:structuredClone(machine.document),layout:structuredClone(machine.layout||{positions:{}})})
 export const fingerprint=(snapshot:MachineSnapshot)=>JSON.stringify(snapshot)
 

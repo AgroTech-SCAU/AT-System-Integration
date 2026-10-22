@@ -1,5 +1,4 @@
 import {useEffect,useRef,useState} from 'react'
-import {guideCompleted} from '../guide/courses'
 import {Panel} from '../components/Foundation'
 import {ApiError} from '../api'
 import type {Json,PageProps} from './shared'
@@ -17,8 +16,8 @@ export default function HsmRuntime({client,onNavigate,observation}:PageProps & {
   setSession(next)
   if(next?.id!==lastSession.current){lastSession.current=next?.id||null;setVariables({})}
   if(next&&active(next.status))setId(next.machine_id)
-  if(expected.current==='start'&&next?.status==='RUNNING'){setMessage('状态机已运行');guideCompleted('hsm:started');expected.current=null}
-  if(expected.current==='stop'&&next?.status==='STOPPED'){setMessage('状态机停止已确认');guideCompleted('hsm:stopped');expected.current=null}
+  if(expected.current==='start'&&next?.status==='RUNNING'){setMessage('状态机已运行');expected.current=null}
+  if(expected.current==='stop'&&next?.status==='STOPPED'){setMessage('状态机停止已确认');expected.current=null}
   if(next?.status==='UNKNOWN'){expected.current=null;setMessage('设备停止状态需要核对')}
  }
  const fail=(cause:unknown)=>setError(cause instanceof ApiError?cause.kind==='offline'?'无法连接后台，请核对当前设备状态':cause.details.map(detail=>detail.reason).join(' · ')||'后台连接已失效':cause instanceof Error?cause.message:'操作未完成，请重试')
@@ -51,7 +50,7 @@ export default function HsmRuntime({client,onNavigate,observation}:PageProps & {
   setMessage(response.queued?`事件已进入队列，待处理 ${response.queued} 个`:'事件已提交');setVariables({})
  }
  async function stop(){await client.request('/state-machines/stop','POST',{});expected.current='stop';setMessage('停止请求已提交，正在等待设备确认');const response=await client.request<Json>('/state-machines/status');showSession(response.session)}
- return <div data-guide="runtime-hsm"><Panel title="运行状态流程" subtitle="选择流程后启动，在运行中发送事件以切换状态" icon="system"><div className="hsm-runtime-row"><label className="field"><span>选择状态机</span><select value={id} onChange={event=>{setId(event.target.value);setVariables({})}} disabled={active(session?.status)||busy}><option value="">选择状态机</option>{machines.map(item=><option value={item.id} key={item.id}>{item.name}</option>)}</select></label><div className="buttons"><button disabled={busy||!id||active(session?.status)||(blankRobot?!safetyConfirmed:observation?.system.state!=='READY')} className="primary" onClick={()=>void request(run)}>运行</button><button disabled={busy||!active(session?.status)||session?.status==='STOPPING'} onClick={()=>void request(stop)}>停止</button><button onClick={()=>onNavigate('editor')}>编辑状态机</button></div></div>
+ return <div><Panel title="运行状态流程" subtitle="选择流程后启动，在运行中发送事件以切换状态" icon="system"><div className="hsm-runtime-row"><label className="field"><span>选择状态机</span><select value={id} onChange={event=>{setId(event.target.value);setVariables({})}} disabled={active(session?.status)||busy}><option value="">选择状态机</option>{machines.map(item=><option value={item.id} key={item.id}>{item.name}</option>)}</select></label><div className="buttons"><button disabled={busy||!id||active(session?.status)||(blankRobot?!safetyConfirmed:observation?.system.state!=='READY')} className="primary" onClick={()=>void request(run)}>运行</button><button disabled={busy||!active(session?.status)||session?.status==='STOPPING'} onClick={()=>void request(stop)}>停止</button><button onClick={()=>onNavigate('editor')}>编辑状态机</button></div></div>
  {blankRobot&&<label className="ros-safety-confirm"><input type="checkbox" checked={safetyConfirmed} onChange={event=>setSafetyConfirmed(event.target.checked)}/><span><strong>机器人运行确认</strong><small>已确认设备急停、动作取消与通信失联保护可用</small></span></label>}
  {!machines.length&&<div className="record-empty"><h3>还没有可运行的状态流程</h3><p>先在编排画布添加状态并保存，再回到这里启动</p><button onClick={()=>onNavigate('editor')}>创建状态流程 →</button></div>}
  {session&&session.machine_id===machine?.id&&<div className="hsm-runtime-status"><strong>{statusName[session.status]||session.status}</strong><span>活动状态 {states.find(state=>state.id===session.active)?.label||session.active||'未进入'}</span>{session.pending_events>0&&<span>事件队列 {session.pending_events}</span>}{session.task_run_id&&<span>行为树正在执行 {session.action||''}</span>}{session.ros_task_id&&<span>{rosTasks.find(task=>task.id===session.ros_task_id)?.name||'ROS 任务'} · {session.action==='entry'?'Entry':session.action==='exit'?'Exit':'Do'}</span>}{session.ros_feedback&&<details><summary>最近反馈</summary><pre className="ros-live-feedback">{JSON.stringify(session.ros_feedback,null,2)}</pre></details>}{session.error&&<p className="error">{session.error}</p>}</div>}

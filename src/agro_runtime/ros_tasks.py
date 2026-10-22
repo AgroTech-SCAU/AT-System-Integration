@@ -245,30 +245,11 @@ class RosTasks:
                 rclpy.shutdown(context=context)
         return lookup()
 
-    @staticmethod
-    def describe(kind, ros_type):
+    def describe(self, kind, ros_type):
         if kind not in KINDS:
             fail('$.kind', 'invalid_kind', '通信方式无效')
-        if not isinstance(ros_type,str) or not re.fullmatch(r'[A-Za-z]\w*/(msg|srv|action)/[A-Za-z]\w*',ros_type):
-            fail('$.ros_type', 'invalid_type', '接口类型格式无效')
-        _, (get_message, get_service, get_action), _, _ = _ros_modules()
-        try:
-            if kind == 'action':
-                cls = get_action(ros_type).Goal
-            elif kind == 'service':
-                cls = get_service(ros_type).Request
-            else:
-                cls = get_message(ros_type)
-            sample = cls()
-            response_cls=get_action(ros_type).Result if kind=='action' else get_service(ros_type).Response if kind=='service' else cls
-            result={'fields':_message_as_dict(sample),'field_types':cls.get_fields_and_field_types(),
-                    'output_fields':_message_as_dict(response_cls()),'output_field_types':response_cls.get_fields_and_field_types()}
-            if kind=='action':
-                feedback_cls=get_action(ros_type).Feedback
-                result.update(feedback_fields=_message_as_dict(feedback_cls()),feedback_field_types=feedback_cls.get_fields_and_field_types())
-            return result
-        except (ImportError, AttributeError, ModuleNotFoundError) as exc:
-            fail('$.ros_type','type_not_found','没有找到该 ROS 2 接口类型，请先 source 对应工作空间: '+str(exc))
+        from .ros_interfaces import InterfaceLibrary
+        return InterfaceLibrary(self.store).describe(kind, ros_type)
 
     async def run(self, task_id, stop: threading.Event, feedback=None, *, definition=None, inputs=None):
         data = prepared_task(definition if definition is not None else self.get(task_id), inputs)
