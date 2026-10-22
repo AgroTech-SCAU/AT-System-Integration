@@ -1,0 +1,110 @@
+.robot-manager{display:flex;flex-direction:column;min-height:0;max-height:inherit;max-width:720px;width:100%;margin:0 auto;color:var(--text);overflow:hidden}
+.robot-manager-heading{display:flex;align-items:center;justify-content:space-between;padding:24px 26px 20px;gap:16px;flex:none}
+.robot-manager-heading>div{display:flex;align-items:center;gap:11px;min-width:0}
+.robot-manager-heading h2{font-size:19px;font-weight:600;letter-spacing:-.025em;margin:0}
+.robot-manager-count{font-size:12px;color:var(--dim);font-variant-numeric:tabular-nums}
+.robot-manager .robot-manager-close,.robot-manager .robot-manager-back{border:0;background:transparent;padding:5px;min-height:28px;color:var(--muted);border-radius:7px;flex:none}
+.robot-manager .robot-manager-close:hover,.robot-manager .robot-manager-back:hover{background:var(--hover);color:var(--text)}
+.robot-manager-heading svg{width:17px;height:17px}
+.robot-manager-toolbar{display:flex;align-items:center;gap:9px;padding:0 26px 18px;flex:none}
+.robot-manager-toolbar>button{font-size:12px;min-height:34px;padding:6px 11px;white-space:nowrap;gap:6px}
+.robot-manager-toolbar svg{width:15px;height:15px}
+.robot-manager-search{display:flex;align-items:center;gap:8px;min-width:80px;flex:1;background:var(--subtle);border:1px solid var(--line);border-radius:8px;padding:0 10px;min-height:34px;transition:border-color .18s,box-shadow .18s}
+.robot-manager-search:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 10%,transparent)}
+.robot-manager-search>svg{flex:none;color:var(--dim)}
+.robot-manager .robot-manager-search input{width:100%;min-width:0;border:0;outline:0;box-shadow:none;background:transparent;font-size:12px;padding:6px 0;height:32px}
+.robot-manager .robot-manager-search>button{background:none;border:0;padding:0;min-height:20px;color:var(--dim)}
+.robot-manager-search>button svg{width:12px;height:12px}
+.robot-manager-list{list-style:none;margin:0 10px 14px;padding:0 10px 2px;overflow-y:auto;overflow-x:hidden;max-height:min(460px,calc(100dvh - 240px));min-height:220px;scrollbar-gutter:stable;overscroll-behavior:contain}
+.robot-manager-row{display:flex;align-items:center;min-width:0;border:1px solid transparent;border-radius:10px;margin:2px 0;transition:background .18s,border-color .18s;position:relative}
+.robot-manager-row:hover,.robot-manager-row:focus-within{background:var(--hover)}
+.robot-manager-row.is-current{background:var(--tint);border-color:color-mix(in srgb,var(--accent) 18%,transparent)}
+.robot-manager-row.is-highlighted{animation:robot-row-arrive .45s var(--bounce-soft)}
+.robot-manager .robot-row-open{display:flex;align-items:center;justify-content:flex-start;gap:13px;text-align:left;flex:1;min-width:0;min-height:76px;padding:12px 10px;border:0;background:transparent;border-radius:9px;color:var(--text)}
+.robot-manager .robot-row-open:disabled{opacity:.58}
+.robot-row-avatar{display:grid;place-items:center;width:40px;height:40px;flex:none;border-radius:10px;background:color-mix(in srgb,var(--accent) 5%,transparent)}
+.robot-row-avatar .association-icon{width:34px;height:34px}
+.robot-row-description{flex:1;min-width:0}
+.robot-row-description strong{font-size:13px;font-weight:550;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.6}
+.robot-row-description small{font-size:11px;color:var(--muted);display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:4px;line-height:1.5}
+.robot-row-identity{font-family:ui-monospace,monospace;color:var(--dim)}
+.robot-current-badge{display:flex;align-items:center;gap:5px;white-space:nowrap;font-size:10px;color:var(--accent);flex:none}
+.robot-current-badge>span{width:5px;height:5px;background:currentColor;border-radius:50%}
+.robot-switch-label{display:flex;align-items:center;gap:3px;white-space:nowrap;font-size:11px;color:var(--muted);flex:none}
+.robot-switch-label svg{width:12px;height:12px;transition:transform .24s var(--bounce-fast)}
+.robot-row-open:hover .robot-switch-label{color:var(--accent)}
+.robot-row-open:hover .robot-switch-label svg{transform:translateX(3px)}
+.robot-manager .robot-row-more{border:0;background:transparent;flex:none;min-height:29px;width:29px;padding:5px;margin-right:9px;border-radius:7px;color:var(--muted)}
+.robot-manager .robot-row-more:hover,.robot-manager .robot-row-more[aria-expanded=true]{background:var(--card);color:var(--text);box-shadow:var(--shadow)}
+.robot-row-more svg{width:17px;height:17px;stroke-linecap:round;stroke-width:3}
+.robot-manager-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;min-height:220px;text-align:center;padding:24px 12px;color:var(--muted)}
+.robot-manager-empty>.association-icon{width:60px;height:60px;margin-bottom:4px}
+.robot-manager-empty>svg{width:28px;height:28px;margin-bottom:4px}
+.robot-manager-empty strong{font-size:14px;color:var(--text);font-weight:550}
+.robot-manager-empty p{font-size:12px;margin:0;line-height:1.7}
+.robot-manager-empty button{margin-top:4px;font-size:12px}
+.robot-manager-empty button svg{width:14px;height:14px}
+.robot-switch-note{display:flex;align-items:flex-start;gap:7px;padding:0 26px 18px;color:var(--muted);font-size:11px;line-height:1.7;margin:0;flex:none}
+.robot-switch-note svg{width:14px;height:14px;flex:none;margin-top:2px}
+.robot-manager-form{padding:2px 26px 24px;overflow-y:auto;overflow-x:hidden;min-height:0;animation:robot-form-enter .28s var(--bounce-soft)}
+.robot-manager-form fieldset{padding:0;margin:0;min-width:0;border:0}
+.robot-manager .robot-manager-name{display:block;margin:0 0 23px}
+.robot-manager-name>span,.robot-form-label{display:block;font-size:12px;color:var(--muted);margin-bottom:9px}
+.robot-manager-name input{width:100%;font-size:13px;min-height:38px}
+.robot-source-options{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.robot-manager .robot-source-options>button{display:grid;grid-template-columns:26px minmax(0,1fr) 13px;column-gap:9px;row-gap:5px;text-align:left;align-content:center;align-items:center;background:var(--subtle);border:1px solid var(--line);padding:16px 12px;min-height:86px;position:relative;transition:background .18s,border-color .18s,box-shadow .2s}
+.robot-manager .robot-source-options>button:hover{border-color:color-mix(in srgb,var(--accent) 50%,var(--line))}
+.robot-manager .robot-source-options>button.is-chosen{background:var(--tint);border-color:color-mix(in srgb,var(--accent) 65%,var(--line));box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 10%,transparent)}
+.robot-source-options svg,.robot-source-options .association-icon{grid-column:1;grid-row:1/3;width:25px;height:25px;color:var(--accent)}
+.robot-source-options strong{font-size:12px;font-weight:550;grid-column:2;grid-row:1}
+.robot-source-options small{font-size:10px;color:var(--muted);grid-column:2/4;grid-row:2;line-height:1.6}
+.robot-source-options>button>span{grid-column:3;grid-row:1;color:var(--accent);font-size:12px}
+.robot-form-hint{font-size:11px;line-height:1.7;color:var(--muted);margin:16px 0 0}
+.robot-manager-form footer{display:flex;align-items:center;justify-content:flex-end;gap:9px;margin-top:25px;padding-top:18px;border-top:1px solid var(--line)}
+.robot-manager-form footer button{min-width:74px;font-size:12px;min-height:34px}
+.robot-import-form{display:flex;flex-direction:column;align-items:center;text-align:center;padding-top:16px}
+.robot-import-art .association-icon{width:72px;height:72px}
+.robot-import-form h3{font-size:16px;font-weight:550;margin:19px 0 9px}
+.robot-import-form p{font-size:12px;color:var(--muted);line-height:1.8;margin:0 0 24px}
+.robot-import-form>small{font-size:11px;color:var(--dim);margin-top:13px}
+.robot-import-form>footer{width:100%;margin-top:30px}
+.robot-edit-summary{display:flex;align-items:center;gap:11px;margin:0 0 20px;min-width:0}
+.robot-edit-summary strong{font-size:14px;font-weight:550;overflow-wrap:anywhere}
+.robot-delete-explanation{font-size:12px;color:var(--muted);line-height:1.9;margin:0 0 22px}
+.robot-manager-status{display:flex;align-items:center;gap:9px;font-size:12px;line-height:1.7;padding:13px 26px;border-top:1px solid var(--line);background:var(--subtle);flex:none;color:var(--muted)}
+.robot-manager-status>span:not(.robot-operation-spinner){flex:1;min-width:0;overflow-wrap:anywhere}
+.robot-manager-status.is-error{color:var(--red)}
+.robot-manager-status>button{border:0;background:none;padding:3px;min-height:22px;color:inherit}
+.robot-manager-status svg{width:13px;height:13px}
+.robot-operation-spinner{width:13px;height:13px;flex:none;border:1.5px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:robot-operation-spin .8s linear infinite}
+.robot-manager>.library-connection-note{margin:0 26px 18px}
+.studio-popover{position:fixed;inset:auto;margin:0;padding:6px;border:1px solid var(--line);border-radius:11px;background:var(--card);color:var(--text);box-shadow:0 8px 32px #0002,0 2px 7px #0001;max-width:calc(100vw - 16px);max-height:calc(100dvh - 16px);overflow:auto;font-family:inherit}
+.studio-popover:popover-open{animation:studio-popover-enter .2s var(--bounce-soft)}
+.robot-row-menu{width:184px}
+.robot-row-menu button{display:flex;align-items:center;justify-content:flex-start;gap:9px;width:100%;text-align:left;font-size:12px;padding:8px 9px;min-height:33px;border:0;background:transparent;border-radius:6px;color:var(--text)}
+.robot-row-menu button:hover,.robot-row-menu button:focus-visible{background:var(--hover)}
+.robot-row-menu button svg{width:15px;height:15px;color:var(--muted)}
+.robot-row-menu .robot-menu-delete,.robot-row-menu .robot-menu-delete svg{color:var(--red)}
+.robot-menu-separator{height:1px;background:var(--line);margin:5px 4px}
+.robot-row-menu>small{display:block;font-size:10px;line-height:1.7;color:var(--dim);padding:3px 9px 6px}
+.ros-task-name{display:flex;align-items:flex-end;gap:10px;min-width:0}
+.ros-task-name>.field{flex:1;min-width:0}
+.task-icon-picker{flex:none;margin-bottom:13px}
+.ros-workbench .task-icon-trigger{display:flex;align-items:center;gap:3px;padding:3px 5px;border:1px solid var(--line);border-radius:8px;background:var(--subtle);min-height:35px;transition:background .16s,border-color .16s,box-shadow .2s}
+.task-icon-trigger:hover,.task-icon-trigger[aria-expanded=true]{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));background:var(--tint)}
+.task-icon-trigger img{width:28px;height:28px;object-fit:contain}
+.task-icon-trigger svg{width:10px;height:10px;color:var(--dim)}
+.task-icon-options{width:288px;padding:9px}
+.task-icon-options:popover-open{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px}
+.task-icon-options>button{position:relative;display:flex;flex-direction:column;gap:7px;align-items:center;justify-content:center;min-height:86px;padding:10px 4px 8px;background:transparent;border:1px solid transparent;border-radius:8px;color:var(--text);font-size:11px;transition:background .16s,border-color .16s,transform .22s var(--bounce-fast)}
+.task-icon-options>button:hover{background:var(--hover)}
+.task-icon-options>button:active{transform:scale(.94)}
+.task-icon-options>button[aria-selected=true]{background:var(--tint);border-color:color-mix(in srgb,var(--accent) 30%,transparent)}
+.task-icon-options img{width:43px;height:43px;object-fit:contain}
+.task-icon-check{position:absolute;right:6px;top:3px;color:var(--accent);font-size:11px}
+@keyframes robot-form-enter{from{opacity:0;transform:translateX(10px)}to{opacity:1;transform:none}}
+@keyframes robot-row-arrive{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes studio-popover-enter{from{opacity:0;transform:translateY(-3px) scale(.97)}to{opacity:1;transform:none}}
+@keyframes robot-operation-spin{to{transform:rotate(360deg)}}
+@media(max-width:560px){.robot-manager-heading{padding:20px 18px 17px}.robot-manager-toolbar{padding:0 18px 15px;display:grid;grid-template-columns:1fr 1fr}.robot-manager-search{grid-column:1/-1}.robot-manager-toolbar>button{justify-content:center}.robot-manager-list{margin:0 6px 10px;padding:0 5px 2px;max-height:calc(100dvh - 245px)}.robot-manager .robot-row-open{gap:8px;padding:10px 8px;min-height:73px}.robot-row-avatar{width:33px;height:33px}.robot-row-avatar .association-icon{width:29px;height:29px}.robot-row-description strong{font-size:12px}.robot-row-description small{font-size:10px}.robot-manager .robot-row-more{margin-right:4px;width:25px}.robot-current-badge{font-size:10px}.robot-manager-form{padding:2px 18px 20px}.robot-source-options{grid-template-columns:1fr}.robot-manager .robot-source-options>button{min-height:72px}.robot-manager-status{padding:12px 18px}.robot-switch-note{padding:0 18px 15px}.robot-manager>.library-connection-note{margin:0 18px 15px}}
+@media(prefers-reduced-motion:reduce){.robot-manager-row,.robot-switch-label svg,.robot-source-options>button,.task-icon-options>button{transition:none!important}.robot-manager-form,.robot-manager-row.is-highlighted,.studio-popover:popover-open{animation:none!important}}

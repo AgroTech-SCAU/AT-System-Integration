@@ -217,6 +217,10 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
         revision: int
         content: dict
 
+    class RobotSystemRename(BaseModel):
+        name: str = Field(min_length=1, max_length=60)
+        revision: int
+
     class RobotSystemImport(BaseModel):
         bundle: dict
 
@@ -230,7 +234,21 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     @api.get('/robot-systems')
     async def list_robot_systems():
-        return robot_systems.listing()
+        reason = None
+        if hsm.running():
+            reason = '流程正在运行，停止后可以切换机器人'
+        elif any(not worker.done() for worker in jobs.values()):
+            reason = '正在执行管理操作，完成后可以切换机器人'
+        else:
+            try:
+                robot_systems.require_stopped()
+            except ContractValidationError as error:
+                reason = error.issues[0].reason
+        return {**robot_systems.listing(), 'switch_blocked_reason': reason}
+
+    @api.put('/robot-systems/{system_id}/name')
+    async def rename_robot_system(system_id: str, body: RobotSystemRename):
+        return robot_systems.rename(system_id, body.name, body.revision)
 
     @api.post('/robot-systems/deselect')
     async def deselect_robot_system():

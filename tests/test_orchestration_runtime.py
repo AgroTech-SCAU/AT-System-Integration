@@ -12,12 +12,68 @@ from pathlib import Path
 import uvicorn
 
 from agro_runtime.api import create_app
+from agro_runtime.configuration import WorkspaceStore
 from agro_runtime.errors import ContractValidationError
+from agro_runtime.robot_systems import RobotSystems
 from agro_runtime.ros_tasks import RosTasks, prepared_task, mapped_outputs, validate_task
 from agro_runtime.runtime import Runtime
 
 ROOT = Path(__file__).resolve().parents[1]
 ENGINE = ROOT / '.install/task-engine/agro-bt'
+
+
+class RobotProjects(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory(prefix='atil-projects-')
+        self.store = WorkspaceStore(self.directory.name)
+        self.robots = RobotSystems(SimpleNamespace(state='RUNNING'), self.store,
+                                  SimpleNamespace(catalog=lambda: []))
+
+    def tearDown(self):
+        self.store.db.close()
+        self.directory.cleanup()
+
+    def test_create_and_import_disambiguate_names_without_selecting(self):
+        first = self.robots.create('  番茄采摘机器人  ')
+        second = self.robots.create('番茄采摘机器人')
+        imported = self.robots.import_bundle(self.robots.export_bundle(first['id']))
+        self.assertEqual([first['name'], second['name'], imported['name']],
+                         ['番茄采摘机器人', '番茄采摘机器人 2', '番茄采摘机器人 3'])
+        self.assertEqual(len({first['id'], second['id'], imported['id']}), 3)
+        self.assertIsNone(self.robots.selected_id())
+
+    def test_long_duplicate_names_stay_within_limit(self):
+        first = self.robots.create('机' * 60)
+        second = self.robots.create(first['name'])
+        third = self.robots.import_bundle(self.robots.export_bundle(first['id']))
+        self.assertEqual(len(second['name']), 60)
+        self.assertEqual(len(third['name']), 60)
+        self.assertEqual(len({first['name'], second['name'], third['name']}), 3)
+
+    def test_rename_preserves_identity_configuration_and_selection(self):
+        first = self.robots.create('Robot')
+        self.store.put('robot_selection', 'current', {'id': 'current', 'system_id': first['id']})
+        result = self.robots.rename(first['id'], '  采摘机器人  ', first['revision'])
+        self.assertEqual(result['name'], '采摘机器人')
+        self.assertEqual(result['content'], first['content'])
+        self.assertEqual(result['id'], self.robots.selected_id())
+        self.assertEqual(result['revision'], first['revision'] + 1)
+        with self.assertRaises(ContractValidationError):
+            self.robots.rename(first['id'], '过期修改', first['revision'])
+        self.assertEqual(self.robots.selected()['name'], '采摘机器人')
+
+    def test_rename_rejects_duplicates_and_invalid_names_without_writes(self):
+        first = self.robots.create('Robot')
+        second = self.robots.create('Another')
+        for name in ('robot', '  ', '机' * 61):
+            with self.assertRaises(ContractValidationError):
+                self.robots.rename(second['id'], name, second['revision'])
+        self.assertEqual(self.store.get('robot_system', second['id']), second)
+        self.assertEqual(self.robots.create('ROBOT')['name'], 'ROBOT 2')
+        self.store.put('ros_connection', first['id'], {'id': first['id'], 'domain_id': 7, 'namespace': '/greenhouse'})
+        listing = self.robots.listing()
+        self.assertEqual(listing['systems'][0]['connection']['namespace'], '/greenhouse')
+        self.assertNotIn('connection', self.store.get('robot_system', first['id']))
 
 
 def task(identity, *, inputs=None, outputs=None, input_bindings=None, output_bindings=None):

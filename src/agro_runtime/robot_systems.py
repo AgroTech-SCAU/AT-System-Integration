@@ -48,8 +48,10 @@ class RobotSystems:
         )
 
     def listing(self):
+        connections = {item['id']: item for item in self.store.list('ros_connection')}
         return {
-            "systems": self.store.list("robot_system"),
+            "systems": [{**item, 'connection': connections.get(item['id'])}
+                        for item in self.store.list("robot_system")],
             "selected_id": self.selected_id(),
             "active": self.active(),
             "running_state": self.context.state,
@@ -63,10 +65,34 @@ class RobotSystems:
             ],
         }
 
-    def create(self, name, example_id=None):
+    def _name(self, name):
         name = str(name or "").strip()
         if not name or len(name) > 60:
-            fail("$.name", "invalid_name", "系统名称需为 1–60 个字符")
+            fail("$.name", "invalid_name", "机器人名称需为 1–60 个字符")
+        return name
+
+    def _available_name(self, name):
+        name = self._name(name)
+        existing = {item['name'].casefold() for item in self.store.list('robot_system')}
+        candidate, index = name, 2
+        while candidate.casefold() in existing:
+            suffix = f' {index}'
+            candidate = name[:60 - len(suffix)].rstrip() + suffix
+            index += 1
+        return candidate
+
+    def rename(self, key, name, revision):
+        record = self.store.get('robot_system', key)
+        if record['revision'] != revision:
+            fail('$.revision', 'revision_conflict', '机器人信息已改变，请刷新后重试')
+        name = self._name(name)
+        if any(item['id'] != key and item['name'].casefold() == name.casefold()
+               for item in self.store.list('robot_system')):
+            fail('$.name', 'duplicate_name', '已有同名机器人，请使用其他名称')
+        return self.store.put('robot_system', key, {**record, 'name': name, 'revision': revision + 1})
+
+    def create(self, name, example_id=None):
+        name = self._available_name(name)
         if example_id not in (None, "tomato_picker"):
             fail("$.example_id", "unknown_example", "不存在此示例")
         key = "robot_" + uuid4().hex
@@ -520,7 +546,7 @@ class RobotSystems:
                 )
         record = {
             "id": key,
-            "name": name.strip(),
+            "name": self._available_name(name),
             "example_id": example,
             "content": content,
             "configured": bool(system.get("configured")),

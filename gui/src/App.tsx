@@ -9,7 +9,7 @@ import RobotConnection from './pages/RobotConnection'
 import RosTaskLibrary from './pages/RosTaskLibrary'
 import RuntimeConsole from './pages/RuntimeConsole'
 import TaskWorkspace from './pages/TaskWorkspace'
-import RobotLibrary, {type RobotDirectory, type RobotSystem} from './pages/RobotLibrary'
+import RobotLibrary, {type RobotDirectory} from './pages/RobotLibrary'
 import TutorialStudio from './guide/TutorialStudio'
 import './guide/guide.css'
 import { courseTitle, guideCompleted, type CourseId } from './guide/courses'
@@ -44,6 +44,7 @@ export default function App({sandbox}: {sandbox?:TutorialSandboxProps} = {}) {
   const [projectPicker,setProjectPicker]=useState(false)
   const [projectSection,setProjectSection]=useState<'create'|'manage'|'import'>('manage')
   const projectSheet=useRef<HTMLElement>(null)
+  const projectBusy=useRef(false)
   const [pending, setPending] = useState(false)
   const [busy, setBusy] = useState(false)
   const [guide, setGuide] = useState<CourseId | null>(null)
@@ -258,13 +259,20 @@ export default function App({sandbox}: {sandbox?:TutorialSandboxProps} = {}) {
   }
   function openRobotManager(section:'create'|'manage'|'import'='manage'){setProjectSection(section);setProjectPicker(true)}
   useEffect(()=>{
+    if(!projectPicker||!client)return
+    void reloadRobots(client)
+    const timer=setInterval(()=>{if(!projectBusy.current)void reloadRobots(client)},2000)
+    return()=>clearInterval(timer)
+  },[projectPicker,client])
+  useEffect(()=>{
     if(!projectPicker)return
     const previous=document.activeElement as HTMLElement|null
-    const frame=requestAnimationFrame(()=>projectSheet.current?.querySelector<HTMLElement>(projectSection==='create'?'input:not([type=file])':'button[aria-pressed=true],button')?.focus())
+    const frame=requestAnimationFrame(()=>projectSheet.current?.querySelector<HTMLElement>('[data-initial-focus]')?.focus())
     const key=(event:KeyboardEvent)=>{
-      if(event.key==='Escape'){event.preventDefault();setProjectPicker(false)}
+      if(event.defaultPrevented)return
+      if(event.key==='Escape'){event.preventDefault();if(!projectBusy.current)setProjectPicker(false)}
       if(event.key==='Tab'){
-        const elements=Array.from(projectSheet.current?.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled),[tabindex="0"]')||[]).filter(element=>element.getClientRects().length)
+        const elements=Array.from(projectSheet.current?.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled),[tabindex="0"]')||[]).filter(element=>element.tabIndex>=0&&element.getClientRects().length)
         const first=elements[0],last=elements.at(-1)
         if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus()}
         else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus()}
@@ -273,7 +281,6 @@ export default function App({sandbox}: {sandbox?:TutorialSandboxProps} = {}) {
     window.addEventListener('keydown',key)
     return()=>{cancelAnimationFrame(frame);window.removeEventListener('keydown',key);if(previous?.isConnected)previous.focus()}
   },[projectPicker,projectSection])
-  function robotCreated(_robot:RobotSystem,_example:'blank'|'tomato_picker'){setProjectPicker(false)}
 
   function finishGuideInvite(accept: boolean) {
     if (noGuidePrompt) {
@@ -352,7 +359,7 @@ export default function App({sandbox}: {sandbox?:TutorialSandboxProps} = {}) {
             <span className="endpoint">{selectedRobot?.name || "机器人系统工作台"}</span>
           </div>
           {error && <p className="error" role="alert">{text[error]}</p>}
-          {!selectedRobot&&<><RobotLibrary initialSection="create" client={client} directory={robotDirectory} onRefresh={refreshProjects} onReconnect={reconnectLocal} onNavigate={navigate} onCreated={robotCreated}/>{!client&&<button className="primary" onClick={()=>navigate('settings')}>连接本机服务 →</button>}</>}
+          {!selectedRobot&&<><RobotLibrary initialSection="create" client={client} directory={robotDirectory} onRefresh={refreshProjects} onReconnect={reconnectLocal} onNavigate={navigate}/>{!client&&<button className="primary" onClick={()=>navigate('settings')}>连接本机服务 →</button>}</>}
           {client && <>
             {workspace === 'overview' && selectedRobot && <RobotConnection key={selectedRobot.id} robotId={selectedRobot.id} client={client} observation={observation} language={settings.language} changed={refreshProjects} onNavigate={navigate}/>}
             {workspace === 'system' && selectedRobot && <RosTaskLibrary key={selectedRobot.id} robotId={selectedRobot.id} client={client} observation={observation} language={settings.language} changed={refreshProjects} onNavigate={navigate}/>}
@@ -365,7 +372,7 @@ export default function App({sandbox}: {sandbox?:TutorialSandboxProps} = {}) {
         </section>
       </div>
     </div>
-    {projectPicker&&<div className="project-sheet-backdrop" onMouseDown={event=>{if(event.target===event.currentTarget)setProjectPicker(false)}}><section ref={projectSheet} className="project-sheet" role="dialog" aria-modal="true" aria-label="机器人管理"><header><h2>机器人管理</h2><button aria-label="关闭项目选择" onClick={()=>setProjectPicker(false)}><Icon name="x"/></button></header><RobotLibrary initialSection={projectSection} client={client} directory={robotDirectory} onRefresh={refreshProjects} onReconnect={reconnectLocal} onNavigate={next=>{setProjectPicker(false);navigate(next)}} onCreated={robotCreated}/></section></div>}
+    {projectPicker&&<div className="project-sheet-backdrop" onMouseDown={event=>{if(event.target===event.currentTarget&&!projectBusy.current)setProjectPicker(false)}}><section ref={projectSheet} className="project-sheet" role="dialog" aria-modal="true" aria-label="机器人管理"><RobotLibrary initialSection={projectSection} client={client} directory={robotDirectory} onRefresh={refreshProjects} onReconnect={reconnectLocal} onBusyChange={value=>{projectBusy.current=value}} onClose={()=>{if(!projectBusy.current)setProjectPicker(false)}} onNavigate={next=>{setProjectPicker(false);navigate(next)}}/></section></div>}
     <PendingDialog open={pending} text={text} error={error ? text[error] : undefined} onClose={() => setPending(false)} actions={<span className="muted">{text.futureActions}</span>} />
     {guide && tutorialClient && !sandbox && createPortal(<TutorialStudio key={guide} course={guide} client={tutorialClient} onClose={()=>void closeGuide()}><App sandbox={{client:tutorialClient,onClose:()=>void closeGuide()}}/></TutorialStudio>,document.body)}
     {tutorialBusy&&!sandbox&&<div className="tutorial-start-status" role="status">正在准备或关闭隔离教学工作区…</div>}

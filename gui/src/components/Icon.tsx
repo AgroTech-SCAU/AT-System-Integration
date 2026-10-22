@@ -2,6 +2,10 @@
 const paths = {
   brand: 'M12 4 14 10 20 12 14 14 12 20 10 14 4 12 10 10zM12 1v2M12 21v2M1 12h2M21 12h2',
   plus: 'M12 5v14M5 12h14',
+  more: 'M5 12h.01M12 12h.01M19 12h.01',
+  edit: 'M14 4l6 6M3 21l5-1L21 7l-4-4L4 16z',
+  import: 'M12 3v12M7 10l5 5 5-5M4 16v5h16v-5',
+  export: 'M12 15V3M7 8l5-5 5 5M4 16v5h16v-5',
   search: 'M10.5 3a7.5 7.5 0 1 0 0 15 7.5 7.5 0 0 0 0-15zM16 16l5 5',
   'arrow-left': 'M19 12H5M11 6l-6 6 6 6',
   'chevron-right': 'M9 5l7 7-7 7',
