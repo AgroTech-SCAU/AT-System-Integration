@@ -1,3 +1,4 @@
+import {useLocale} from '../locale'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ApiClient, ApiError } from '../api'
 import { Field, PendingDialog } from '../components/Foundation'
@@ -7,18 +8,22 @@ import type { Language, Observation } from '../types'
 export type Json = Record<string, any>
 export interface PageProps { client: ApiClient; observation: Observation | null; language: Language; changed(): Promise<void> }
 export function ErrorFields({ value }: {value: unknown}) {
+ const {t}=useLocale()
+
   if (!value) return null
   const errors = value instanceof ApiError ? value.details : (value as Json).errors
-  return <div className="error" role="alert">{errors?.length ? errors.map((e: Json, i: number) => <p key={i}><code>{e.path}</code> · {e.reason} ({e.code})</p>) : <p>{value instanceof ApiError && value.kind === 'unauthorized' ? '后台认证已失效，请重新连接' : '请求未完成，请核对后台状态后重试'}</p>}</div>
+  return <div className="error" role="alert">{errors?.length ? errors.map((e: Json, i: number) => <p key={i}><code>{e.path}</code> · {t(e.reason)} ({e.code})</p>) : <p>{value instanceof ApiError && value.kind === 'unauthorized' ? t("后台认证已失效，请重新连接") : t("请求未完成，请核对后台状态后重试")}</p>}</div>
 }
 export function Parameters({ specs, value, onChange }: {specs: Json; value: Json; onChange(value: Json): void}) {
+ const {t}=useLocale()
+
   return <div className="parameter-grid">{Object.entries(specs).map(([name, spec]: [string, any]) => {
     const update = (next: unknown) => { const copy = { ...value }; if (next === undefined) delete copy[name]; else copy[name] = next; onChange(copy) }
     return <Field key={name} label={`${name}${spec.unit ? ` (${spec.unit})` : ''}${spec.required ? ' *' : ''}`}>
-      {spec.choices ? <select value={value[name] === undefined ? '' : JSON.stringify(value[name])} onChange={e => update(e.target.value === '' ? undefined : JSON.parse(e.target.value))}><option value="">使用缺省值</option>{spec.choices.map((x: unknown,i:number) => <option key={i} value={JSON.stringify(x)}>{String(x)}</option>)}</select>
-        : spec.type === 'boolean' ? <select value={value[name] === undefined ? '' : String(value[name])} onChange={e => update(e.target.value === '' ? undefined : e.target.value === 'true')}><option value="">使用缺省值</option><option value="true">true</option><option value="false">false</option></select>
-        : <input type={spec.type === 'string' ? 'text' : 'number'} step={spec.type === 'integer' ? 1 : 'any'} min={spec.minimum} max={spec.maximum} value={value[name] ?? ''} placeholder={spec.default === undefined ? '未设置' : String(spec.default)} onChange={e => update(e.target.value === '' ? undefined : spec.type === 'string' ? e.target.value : Number(e.target.value))} />}
-      <small className="muted">{spec.minimum !== undefined ? `最小 ${spec.minimum} ` : ''}{spec.maximum !== undefined ? `最大 ${spec.maximum} ` : ''} · {spec.apply_policy}</small>
+      {spec.choices ? <select value={value[name] === undefined ? '' : JSON.stringify(value[name])} onChange={e => update(e.target.value === '' ? undefined : JSON.parse(e.target.value))}><option value="">{t("使用缺省值")}</option>{spec.choices.map((x: unknown,i:number) => <option key={i} value={JSON.stringify(x)}>{String(x)}</option>)}</select>
+        : spec.type === 'boolean' ? <select value={value[name] === undefined ? '' : String(value[name])} onChange={e => update(e.target.value === '' ? undefined : e.target.value === 'true')}><option value="">{t("使用缺省值")}</option><option value="true">true</option><option value="false">false</option></select>
+        : <input type={spec.type === 'string' ? 'text' : 'number'} step={spec.type === 'integer' ? 1 : 'any'} min={spec.minimum} max={spec.maximum} value={value[name] ?? ''} placeholder={spec.default === undefined ? t("未设置") : String(spec.default)} onChange={e => update(e.target.value === '' ? undefined : spec.type === 'string' ? e.target.value : Number(e.target.value))} />}
+      <small className="muted">{spec.minimum !== undefined ? t("最小 {0} ", {0: spec.minimum}) : ''}{spec.maximum !== undefined ? t("最大 {0} ", {0: spec.maximum}) : ''} · {spec.apply_policy}</small>
     </Field>
   })}</div>
 }

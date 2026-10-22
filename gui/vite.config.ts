@@ -6,7 +6,17 @@ const outputDirectory = process.env.AGRO_GUI_DIST || '/tmp/agro-gui-dist'
 
 export default defineConfig({
   base: '/ui/',
-  build: { outDir: outputDirectory, emptyOutDir: false },
+  build: {
+    outDir: outputDirectory, emptyOutDir: false,
+    rollupOptions: {
+      // This client-only application does not use React Server Components
+      onwarn(warning, report) {
+        if (warning.code === 'MODULE_LEVEL_DIRECTIVE' && warning.message.includes('use client')) return
+        report(warning)
+      },
+      output: {manualChunks: {react: ['react', 'react-dom/client'], motion: ['motion/react']}}
+    }
+  },
   plugins: [{
     name: 'include-third-party-notices',
     writeBundle() {

@@ -1,3 +1,5 @@
+import {motion, useIsPresent} from 'motion/react'
+import {springs, fade} from '../motion'
 import {useLayoutEffect, useRef, type ReactNode} from 'react'
 
 export function AnchoredPopover({anchor, children, onClose, label, className = '', role = 'dialog', columns = 1, align = 'end'}: {
@@ -5,12 +7,15 @@ export function AnchoredPopover({anchor, children, onClose, label, className = '
   className?: string; role?: 'dialog' | 'menu' | 'listbox'; columns?: number; align?: 'start' | 'end'
 }) {
   const panel = useRef<HTMLDivElement>(null)
+  const present=useIsPresent()
+  useLayoutEffect(()=>{if(!present&&panel.current){panel.current.inert=true;if(panel.current.contains(document.activeElement))anchor.focus()}},[present,anchor])
   useLayoutEffect(() => {
     const node = panel.current!
     const position = () => {
       const rect = anchor.getBoundingClientRect(), size = {width: node.offsetWidth, height: node.offsetHeight}
       const below = rect.bottom + 8
       node.style.left = `${Math.max(8, Math.min(align === 'start' ? rect.left : rect.right - size.width, window.innerWidth - size.width - 8))}px`
+      node.style.setProperty('--popover-origin', `${Math.max(12,Math.min(size.width-12,rect.left+rect.width/2-Math.max(8,Math.min(align==='start'?rect.left:rect.right-size.width,window.innerWidth-size.width-8))))}px ${below+size.height<=window.innerHeight-8?'0%':'100%'}`)
       node.style.top = `${Math.max(8, Math.min(below + size.height <= window.innerHeight - 8 ? below : rect.top - size.height - 8, window.innerHeight - size.height - 8))}px`
     }
     node.showPopover()
@@ -27,11 +32,11 @@ export function AnchoredPopover({anchor, children, onClose, label, className = '
     }
   }, [anchor, align])
 
-  return <div ref={panel} popover="auto" role={role} aria-label={label} className={`studio-popover ${className}`}
-    onToggle={event => {if (event.newState === 'closed') onClose()}}
+  return <motion.div initial={{opacity:0,scale:.985,y:-2}} animate={{opacity:1,scale:1,y:0}} exit={{opacity:0,scale:.99,y:-1,transition:fade}} transition={springs.quick} ref={panel} aria-hidden={!present} popover="auto" role={role} aria-label={label} className={`studio-popover ${className}`}
+    onToggle={event => {if (present && event.newState === 'closed') onClose()}}
     onBlur={() => requestAnimationFrame(() => {
       const node = panel.current
-      if (node && !node.contains(document.activeElement)) onClose()
+      if (present && node && !node.contains(document.activeElement)) onClose()
     })}
     onKeyDown={event => {
       if (event.key === 'Escape') {event.preventDefault(); event.stopPropagation(); onClose(); return}
@@ -44,5 +49,5 @@ export function AnchoredPopover({anchor, children, onClose, label, className = '
         const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + step! + buttons.length) % buttons.length
         buttons[next]?.focus()
       }
-    }}>{children}</div>
+    }}>{children}</motion.div>
 }

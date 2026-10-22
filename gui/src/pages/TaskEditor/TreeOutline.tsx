@@ -1,3 +1,4 @@
+import {useLocale} from '../../locale'
 import {useState, type DragEvent} from 'react'
 import type {Json} from '../shared'
 import {nodeLabel} from './labels'
@@ -6,6 +7,8 @@ export default function TreeOutline({tree,labels,selected,onSelect,onAdd,onRepar
   tree:Json;labels:Record<string,string>;selected:string;onSelect:(id:string)=>void
   onAdd:(parent:string,registration:string)=>void;onReparent:(node:string,parent:string)=>void;disabled:boolean
 }){
+ const {t,language}=useLocale()
+
   const [hover,setHover]=useState('')
   const visited=new Set<string>()
   const entries:{id:string;depth:number;order:number}[]=[]
@@ -25,8 +28,8 @@ export default function TreeOutline({tree,labels,selected,onSelect,onAdd,onRepar
     if(registration)onAdd(parent,registration)
     else if(moving&&moving!==tree.root_id&&moving!==parent)onReparent(moving,parent)
   }
-  return <div className="studio-outline" role="tree" aria-label="任务结构">
-    <p className="muted">点击节点编辑 · 把节点拖到另一个节点上以改变父子关系</p>
+  return <div className="studio-outline" role="tree" aria-label={t("任务结构")}>
+    <p className="muted">{t("点击节点编辑 · 把节点拖到另一个节点上以改变父子关系")}</p>
     {entries.map(({id,depth,order})=>{const node=tree.nodes[id];return <button
       key={id} type="button" role="treeitem" aria-selected={selected===id}
       className={'studio-outline-item'+(selected===id?' current':'')+(hover===id?' drop-target':'')}
@@ -37,6 +40,6 @@ export default function TreeOutline({tree,labels,selected,onSelect,onAdd,onRepar
       onDragOver={e=>{if(!disabled&&canParent(id)){e.preventDefault();e.dataTransfer.dropEffect='move';setHover(id)}}}
       onDragLeave={()=>setHover('')}
       onDrop={e=>drop(e,id)}
-    ><span className="studio-outline-guide">{depth===0?'◆':anyChildren(id)?'▾':'·'}</span><span className="studio-outline-label">{labels[id]||nodeLabel(node.registration_id)}</span><small>{order||'ROOT'}</small></button>})}
+    ><span className="studio-outline-guide">{depth===0?'◆':anyChildren(id)?'▾':'·'}</span><span className="studio-outline-label">{labels[id]||nodeLabel(node.registration_id,language)}</span><small>{order||'ROOT'}</small></button>})}
   </div>
 }
