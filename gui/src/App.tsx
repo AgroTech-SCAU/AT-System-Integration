@@ -5,11 +5,10 @@ import { Field, Panel, PendingDialog, Segmented } from './components/Foundation'
 import { Icon } from './components/Icon'
 import { messages } from './i18n'
 import type { Observation, Settings, Workspace } from './types'
-import SystemBuilder from './pages/SystemBuilder'
-import RuntimePage from './pages/Runtime'
-import Records from './pages/Records'
+import RobotConnection from './pages/RobotConnection'
+import RosTaskLibrary from './pages/RosTaskLibrary'
+import RuntimeConsole from './pages/RuntimeConsole'
 import TaskWorkspace from './pages/TaskWorkspace'
-import Overview from './pages/Overview'
 import RobotLibrary, {type RobotDirectory, type RobotSystem} from './pages/RobotLibrary'
 import TutorialStudio from './guide/TutorialStudio'
 import './guide/guide.css'
@@ -42,6 +41,9 @@ export default function App({sandbox}: {sandbox?:TutorialSandboxProps} = {}) {
   const [robotDirectory, setRobotDirectory] = useState<RobotDirectory|null>(null)
   const [lastSeen, setLastSeen] = useState<Date | null>(null)
   const [error, setError] = useState<'unauthorized' | 'failed' | 'fileError' | null>(null)
+  const [projectPicker,setProjectPicker]=useState(false)
+  const [projectSection,setProjectSection]=useState<'create'|'manage'|'import'>('manage')
+  const projectSheet=useRef<HTMLElement>(null)
   const [pending, setPending] = useState(false)
   const [busy, setBusy] = useState(false)
   const [guide, setGuide] = useState<CourseId | null>(null)
@@ -67,7 +69,7 @@ export default function App({sandbox}: {sandbox?:TutorialSandboxProps} = {}) {
     applyTheme()
     preferred.addEventListener('change', applyTheme)
     if (!sandbox) document.documentElement.lang = settings.language === 'zh' ? 'zh-CN' : 'en'
-    if (!sandbox) document.title = 'AT Robot Studio'
+    if (!sandbox) document.title = 'ATIL Robot Studio'
     try { if (!sandbox) localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)) } catch { /* 设置存储不可用时仍保留当前界面 */ }
     return () => preferred.removeEventListener('change', applyTheme)
   }, [settings, text.brand])
@@ -254,12 +256,25 @@ export default function App({sandbox}: {sandbox?:TutorialSandboxProps} = {}) {
       setTutorialError(error instanceof ApiError?error.details?.map(e=>e.reason).join('；')||error.message:String(error))
     }finally{setTutorialBusy(false)}
   }
-  function robotCreated(robot: RobotSystem, example: 'blank' | 'tomato_picker') {
-    if (sandbox || guide || !autoGuidePrompt) return
-    setInviteCourse(example === 'blank' ? 'basic' : 'tomato')
-    setGuideDialog('invite')
-    setNoGuidePrompt(false)
-  }
+  function openRobotManager(section:'create'|'manage'|'import'='manage'){setProjectSection(section);setProjectPicker(true)}
+  useEffect(()=>{
+    if(!projectPicker)return
+    const previous=document.activeElement as HTMLElement|null
+    const frame=requestAnimationFrame(()=>projectSheet.current?.querySelector<HTMLElement>(projectSection==='create'?'input:not([type=file])':'button[aria-pressed=true],button')?.focus())
+    const key=(event:KeyboardEvent)=>{
+      if(event.key==='Escape'){event.preventDefault();setProjectPicker(false)}
+      if(event.key==='Tab'){
+        const elements=Array.from(projectSheet.current?.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled),[tabindex="0"]')||[]).filter(element=>element.getClientRects().length)
+        const first=elements[0],last=elements.at(-1)
+        if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus()}
+        else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus()}
+      }
+    }
+    window.addEventListener('keydown',key)
+    return()=>{cancelAnimationFrame(frame);window.removeEventListener('keydown',key);if(previous?.isConnected)previous.focus()}
+  },[projectPicker,projectSection])
+  function robotCreated(_robot:RobotSystem,_example:'blank'|'tomato_picker'){setProjectPicker(false)}
+
   function finishGuideInvite(accept: boolean) {
     if (noGuidePrompt) {
       try { localStorage.setItem(GUIDE_PROMPT_KEY, 'off') } catch { /* preference unavailable */ }
@@ -272,11 +287,11 @@ export default function App({sandbox}: {sandbox?:TutorialSandboxProps} = {}) {
 
 
   return <>
-    <div className={`app ${settings.compact ? 'compact' : ''} ${workspace === 'editor' && canEditRobot ? 'app-studio' : ''}`}>
+    <div className={`app atil-shell ${settings.compact ? 'compact' : ''} ${canEditRobot && ['overview','system','editor','runtime','records'].includes(workspace) ? 'app-studio atil-workspace' : ''}`}>
       <header className="titlebar">
-        <div className="brand-mini"><Icon name="system" /><strong>AT Robot Studio</strong></div>
+        <div className="brand-mini"><Icon name="association" /><strong>ATIL Robot Studio</strong></div>
         <span className="title-center">{selectedRobot?.name || text.brand}<span className="title-connection" title={observation ? text.connected : text.offline}><span className={`dot ${observation ? 'live' : ''}`} /></span></span>
-        <div className="title-actions">{sandbox?<button className="title-button guide-header-button" title="返回正式工作台" onClick={sandbox.onClose}><span className="guide-header-label">教学环境 · 退出</span></button>:<button className="title-button guide-header-button" aria-label="操作教程" title="操作教程" onClick={() => setGuideDialog('choice')}><span aria-hidden="true">?</span><span className="guide-header-label">向导</span></button>}<button disabled={pending} className="title-button" aria-label={text.appearance} onClick={() => setSettings({ ...settings, theme: document.documentElement.dataset.theme === 'light' ? 'dark' : 'light' })}><Icon name="sun" /></button>
+        <div className="title-actions"><button disabled={pending} className="title-button" aria-label={text.appearance} onClick={() => setSettings({ ...settings, theme: document.documentElement.dataset.theme === 'light' ? 'dark' : 'light' })}><Icon name="sun" /></button>
           <button disabled={pending} className="title-button" aria-label={text.openSettings} onClick={() => navigate('settings')}><Icon name="settings" /></button>
           {window.agroDesktop && !sandbox && <div className="window-controls">
             <button className="title-button" aria-label={text.minimizeWindow} onClick={() => void window.agroDesktop?.minimize()}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10" /></svg></button>
@@ -286,31 +301,32 @@ export default function App({sandbox}: {sandbox?:TutorialSandboxProps} = {}) {
       </header>
       <div className="shell" inert={pending}>
         <aside className="sidebar">
-          <div className="sidebar-project"><Icon name="boxes"/><span>{selectedRobot?.name || '工作空间'}</span></div>
+          <button className="sidebar-project project-picker-trigger" aria-label="切换机器人项目" onClick={()=>openRobotManager()}><Icon name="association"/><span>{selectedRobot?.name || '选择机器人'}</span><Icon name="chevron-down"/></button>
+          <div className="sidebar-robot-actions"><button className="sidebar-new-robot" aria-label="新建机器人" title="新建机器人" onClick={()=>openRobotManager('create')}><Icon name="plus"/><span>新建机器人</span></button><button className="sidebar-manage-robots" aria-label="管理机器人" title="管理机器人" onClick={()=>openRobotManager()}><Icon name="boxes"/></button></div>
           <p className="nav-caption">{text.workflow}</p>
           <nav aria-label={text.workflow}>
             {(['overview', 'system', 'editor', 'runtime'] as const).map(item => <button className="nav-item" key={item} title={text[item]} aria-label={text[item]} data-guide={`nav-${item}`} aria-current={workspace === item ? 'page' : undefined} onClick={() => navigate(item)}>
-              <Icon name={item==='editor'?'templates':item} /><span>{text[item]}</span>
+              <Icon name={item==='overview'?'association':item==='system'?'network':item==='editor'?'git-branch':'play-circle'} /><span>{text[item]}</span>
             </button>)}
           </nav>
+          <div className="sidebar-spacer" />
           <p className="nav-caption">{text.application}</p>
           <button className="nav-item" aria-label={text.settings} title={text.settings} aria-current={workspace === 'settings' ? 'page' : undefined} onClick={() => navigate('settings')}><Icon name="settings" /><span>{text.settings}</span></button>
-          <button className="nav-item" aria-label={text.records} title={text.records} aria-current={workspace === 'records' ? 'page' : undefined} onClick={() => navigate('records')}><Icon name="runtime" /><span>{text.records}</span></button>
-          <div className="sidebar-spacer" />
+
           <div className="runtime-card"><span className={`dot ${observation ? 'live' : ''}`} />{observation ? text.connected : text.offline}<small>本地运行环境</small><small>{selectedRobot?.name||'未选择机器人系统'}</small></div>
         </aside>
         <section className="content-wrap">
           <div className="top-status"><span className="breadcrumb">{text.subtitle} / {text[workspace]}</span><span className="pill">{text.localOnly}</span><span className="pill"><span className={`dot ${observation ? 'live' : ''}`} />{observation ? text.connected : text.offline}</span></div>
           <main className="content"><div key={workspace+':'+(robotDirectory?.selected_id||'none')} className="page page-enter">
           <div className="page-heading"><div><p className="eyebrow">AGROTECH · WORKSPACE</p><h1>{workspace === 'settings' ? text.settingsTitle : text[workspace]}</h1><p className="page-description">{workspace === 'settings' ? text.settingsHint : text[workspace === 'overview' ? 'overviewHint' : workspace === 'system' ? 'systemHint' : workspace === 'templates' ? 'templateHint' : workspace === 'editor' ? 'editorHint' : workspace === 'records' ? 'recordsHint' : 'runtimeHint']}</p></div>
-            {client && <div className="buttons"><button disabled={busy} onClick={refresh}><Icon name="refresh" />{text.refresh}</button>{workspace!=='overview'&&<button onClick={()=>navigate('overview')}>选择机器人系统</button>}</div>}
+            {client && <div className="buttons"><button disabled={busy} onClick={refresh}><Icon name="refresh" />{text.refresh}</button></div>}
           </div>
           {workspace === 'settings' ? <>
             <div className="workspace-grid settings-grid">
               <Panel title={text.appearance} subtitle={text.theme} icon="sun"><Segmented label={text.theme} value={settings.theme} options={[{ value: 'system', label: text.followSystem }, { value: 'dark', label: text.dark }, { value: 'light', label: text.light }]} onChange={value => setSettings({ ...settings, theme: value as Settings['theme'] })} /></Panel>
               <Panel title={text.language} icon="settings"><Segmented label={text.language} value={settings.language} options={[{ value: 'zh', label: '中文' }, { value: 'en', label: 'English' }]} onChange={value => setSettings({ ...settings, language: value as Settings['language'] })} /></Panel>
               <Panel title={text.layout} icon="templates"><label className="toggle"><input type="checkbox" checked={settings.compact} onChange={event => setSettings({ ...settings, compact: event.target.checked })} />{text.compact}</label></Panel>
-              <Panel title="教学设置" icon="graduation-cap"><label className="toggle"><input type="checkbox" checked={autoGuidePrompt} onChange={event => {setAutoGuidePrompt(event.target.checked);try{if(!sandbox)localStorage.setItem(GUIDE_PROMPT_KEY,event.target.checked?'on':'off')}catch{/* preference unavailable */}}}/>新建工程后显示教程邀请</label></Panel>
+
             </div>
             {!window.agroDesktop && <Panel title="浏览器调试连接" subtitle="请输入本机会话凭据" icon="plug">
               <form onSubmit={connect}>
@@ -327,7 +343,7 @@ export default function App({sandbox}: {sandbox?:TutorialSandboxProps} = {}) {
               </form>
               {client&&<button onClick={disconnect}>断开浏览器观察</button>}
             </Panel>}
-            
+
           </> : <>
           <div className={`observation-bar ${observation ? '' : 'unobserved'}`} role="status">
             <span className={`dot ${observation ? 'live' : ''}`} />
@@ -336,19 +352,20 @@ export default function App({sandbox}: {sandbox?:TutorialSandboxProps} = {}) {
             <span className="endpoint">{selectedRobot?.name || "机器人系统工作台"}</span>
           </div>
           {error && <p className="error" role="alert">{text[error]}</p>}
-           {workspace === 'overview' && <><details className="project-switcher" open={!selectedRobot||undefined}><summary>{selectedRobot?`${selectedRobot.name} · 切换、新建或导入机器人`:'选择或创建机器人'}</summary><RobotLibrary client={client} directory={robotDirectory} onRefresh={refreshProjects} onReconnect={reconnectLocal} onNavigate={navigate} onCreated={robotCreated}/></details>{client&&canEditRobot&&observation&&<Overview configured={canUseRobot} observation={observation} language={settings.language} navigate={navigate} robotName={selectedRobot?.name||''}/>}</> }
+          {!selectedRobot&&<><RobotLibrary initialSection="create" client={client} directory={robotDirectory} onRefresh={refreshProjects} onReconnect={reconnectLocal} onNavigate={navigate} onCreated={robotCreated}/>{!client&&<button className="primary" onClick={()=>navigate('settings')}>连接本机服务 →</button>}</>}
           {client && <>
-            {workspace === 'system' && selectedRobot && <SystemBuilder key={selectedRobot.id} client={client} observation={canUseRobot?observation:null} language={settings.language} changed={refreshProjects} robotSystem={selectedRobot} onNavigate={navigate} />}
+            {workspace === 'overview' && selectedRobot && <RobotConnection key={selectedRobot.id} robotId={selectedRobot.id} client={client} observation={observation} language={settings.language} changed={refreshProjects} onNavigate={navigate}/>}
+            {workspace === 'system' && selectedRobot && <RosTaskLibrary key={selectedRobot.id} robotId={selectedRobot.id} client={client} observation={observation} language={settings.language} changed={refreshProjects} onNavigate={navigate}/>}
              {workspace === 'editor' && canEditRobot && <><TaskWorkspace key={selectedRobot?.id} client={client} observation={observation} language={settings.language} changed={() => observe(client)} robotExampleId={selectedRobot?.example_id} configured={canUseRobot} onNavigate={navigate} /></>}
-             {workspace === 'runtime' && canEditRobot && <RuntimePage configured={canUseRobot} client={client} observation={observation} language={settings.language} changed={() => observe(client)} onNavigate={navigate} />}
-            {workspace === 'records' && canEditRobot && <Records client={client} observation={observation} language={settings.language} changed={() => observe(client)} />}
+             {(workspace === 'runtime'||workspace==='records') && canEditRobot && <RuntimeConsole key={selectedRobot?.id} client={client} observation={observation} language={settings.language} changed={() => observe(client)} onNavigate={navigate} initialHistory={workspace==='records'}/>}
           </>}
-           {workspace!=='overview' && (!client||!selectedRobot||(!canUseRobot&&workspace!=='system'&&workspace!=='editor'&&workspace!=='runtime'&&workspace!=='records')) && <div className="library-empty-workspace"><Icon name="system"/><h2>{!selectedRobot?'请先选择机器人系统':'当前系统尚未应用'}</h2><p>{!client?'请到总览选择机器人系统':'请先在系统搭建中应用配置，运行操作才能启用'}</p><div className="buttons"><button className="primary" onClick={()=>navigate(selectedRobot?'system':'overview')}>{selectedRobot?'前往系统搭建':'返回总览'} →</button>{selectedRobot&&<button onClick={()=>navigate('editor')}>先设计任务</button>}</div></div>}
+
           </>}
           </div></main>
         </section>
       </div>
     </div>
+    {projectPicker&&<div className="project-sheet-backdrop" onMouseDown={event=>{if(event.target===event.currentTarget)setProjectPicker(false)}}><section ref={projectSheet} className="project-sheet" role="dialog" aria-modal="true" aria-label="机器人管理"><header><h2>机器人管理</h2><button aria-label="关闭项目选择" onClick={()=>setProjectPicker(false)}><Icon name="x"/></button></header><RobotLibrary initialSection={projectSection} client={client} directory={robotDirectory} onRefresh={refreshProjects} onReconnect={reconnectLocal} onNavigate={next=>{setProjectPicker(false);navigate(next)}} onCreated={robotCreated}/></section></div>}
     <PendingDialog open={pending} text={text} error={error ? text[error] : undefined} onClose={() => setPending(false)} actions={<span className="muted">{text.futureActions}</span>} />
     {guide && tutorialClient && !sandbox && createPortal(<TutorialStudio key={guide} course={guide} client={tutorialClient} onClose={()=>void closeGuide()}><App sandbox={{client:tutorialClient,onClose:()=>void closeGuide()}}/></TutorialStudio>,document.body)}
     {tutorialBusy&&!sandbox&&<div className="tutorial-start-status" role="status">正在准备或关闭隔离教学工作区…</div>}

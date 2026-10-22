@@ -1,12 +1,12 @@
 import type { Language } from './types'
 
 const zh = {
-  overview: '总览', overviewHint: '管理机器人系统，查看模块与任务状态',
-  editor: '任务编排', editorHint: '编辑层级状态机、行为树和任务参数',
+  overview: '机器人', overviewHint: '发现 ROS 接口，观察消息并创建任务',
+  editor: '流程编排', editorHint: '编辑层级状态机、行为树和任务参数',
   records: '运行记录', recordsHint: '按任务查看执行结果、失败原因与日志',
   minimizeWindow: '最小化窗口', maximizeWindow: '最大化或还原窗口', closeWindow: '关闭应用窗口',
   settings: '设置', openSettings: '打开设置', workflow: '工作流', application: '应用', settingsTitle: '偏好设置', settingsHint: '外观、语言与布局', followSystem: '跟随系统', layout: '布局', connectionSummary: '连接概览', localOnly: '本机管理', sidebarHint: '系统搭建 · 任务编排 · 运行调试',
-  brand: '机器人工作台', subtitle: '机器人工作台', system: '设备与接入', templates: '模板任务', runtime: '运行调试',
+  brand: 'ATIL Robot Studio', subtitle: 'ATIL Robot Studio', system: '任务库', templates: '模板任务', runtime: '运行台',
   connectTitle: '连接本机管理服务', connectionHint: '选择本机会话文件或输入凭据，凭据只驻留当前页面内存',
   session: '会话凭据', sessionFile: '选择会话文件', connect: '连接', disconnect: '断开观察',
   connected: '已连接', offline: '未连接', lastSeen: '更新时间', never: '尚未连接',
@@ -26,12 +26,12 @@ const zh = {
   noObservation: '正在获取系统状态', error: '错误', waiting: '等待连接'
 }
 const en: typeof zh = {
-  overview: 'Overview', overviewHint: 'Manage robots and inspect system and task status',
+  overview: 'Robot', overviewHint: 'Manage robots and inspect system and task status',
   editor: 'Task composition', editorHint: 'Configure tasks for your selected robot system or start from a blank behavior tree',
   records: 'Run history', recordsHint: 'Inspect results, failures and logs by task',
   minimizeWindow: 'Minimize window', maximizeWindow: 'Maximize or restore window', closeWindow: 'Close application window',
   settings: 'Settings', openSettings: 'Open settings', workflow: 'WORKFLOW', application: 'APPLICATION', settingsTitle: 'Preferences', settingsHint: 'Appearance, language and layout', followSystem: 'System', layout: 'Layout', connectionSummary: 'Connection overview', localOnly: 'Local management', sidebarHint: 'Build · Compose · Run',
-  brand: 'Robot workspace', subtitle: 'Robot workspace', system: 'System builder', templates: 'Task templates', runtime: 'Runtime',
+  brand: 'Robot workspace', subtitle: 'Robot workspace', system: 'Task library', templates: 'Task templates', runtime: 'Run console',
   connectTitle: 'Connect to local management service', connectionHint: 'Select a local session file or enter a credential, kept only in page memory',
   session: 'Session credential', sessionFile: 'Select session file', connect: 'Connect', disconnect: 'Disconnect observation',
   connected: 'Connected', offline: 'Disconnected', lastSeen: 'Updated', never: 'Not connected',

@@ -1,6 +1,7 @@
 """本地会话管理 API，接受与完成保持独立"""
 import asyncio
 import hmac
+import json
 import hashlib
 import os
 import secrets
@@ -383,6 +384,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
         model_config = ConfigDict(extra='forbid')
         id: str | None = None
         name: str
+        icon: Literal['navigation','arm','vision','operations','mechanical','electrical'] = 'navigation'
         kind: Literal['service', 'action', 'publish_once', 'publish_periodic', 'subscribe_wait']
         interface: str
         ros_type: str
@@ -414,6 +416,43 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     async def ros_operation_cancel(operation_id: str):
         return ros_operations.cancel(operation_id)
 
+    class RosTest(BaseModel):
+        inputs: dict = Field(default_factory=dict)
+        confirm_safety: bool = False
+        request_id: str = Field(pattern=r'^[a-z][a-z0-9_]*$',max_length=128)
+
+    @api.post('/ros/tasks/{task_id}/test',status_code=202)
+    async def ros_test(task_id: str,body: RosTest,owner: str = Depends(authenticate)):
+        from xml.etree import ElementTree as ET
+        from .ros_tasks import prepared_task
+        if hsm.running():fail('$.machine','hsm_busy','请先停止正在运行的状态流程')
+        if not body.confirm_safety:fail('$.safety','confirmation_required','试运行前请确认设备环境与停止方式')
+        task=ros_tasks.get(task_id)
+        prepared_task(task,body.inputs)
+        async with runtime.transition:
+            existing=next((item for item in store.list('tree_definition') if item.get('test_request_id')==body.request_id and item.get('robot_system_id')==robot_systems.selected_id()),None)
+            if existing:
+                if existing.get('test_inputs')!=body.inputs:fail('$.request_id','idempotency_conflict','同一试运行请求不能更换输入')
+                definition=existing
+            else:
+                root=ET.Element('root',{'BTCPP_format':'4','main_tree_to_execute':'TaskTest'})
+                tree=ET.SubElement(root,'BehaviorTree',{'ID':'TaskTest'})
+                ports={}
+                for name,value in body.inputs.items():
+                    ports[name]=json.dumps(value,ensure_ascii=False) if isinstance(value,(dict,list,bool)) else str(value)
+                for name in task.get('outputs',{}):ports['out_'+name]='{'+name+'}'
+                ET.SubElement(tree,'RosTask_'+task_id,ports)
+                draft=documents.create(ET.tostring(root,encoding='unicode'))
+                try:
+                    definition=documents.publish(draft['id'],draft['revision'],draft['base_snapshot_id'])
+                    definition.update(test_only=True,test_request_id=body.request_id,test_inputs=body.inputs,task_name=task['name'])
+                    store.put('tree_definition',definition['id'],definition)
+                finally:
+                    store.delete('tree_draft',draft['id'])
+            standalone=runtime.state=='STOPPED' and not robot_systems.selected().get('configured')
+            result=await tasks.start_task(documents.definition_request(definition['id'],body.request_id),owner,standalone=standalone)
+            return result
+
     @api.get('/ros/tasks')
     async def ros_task_list():
         return {'tasks':ros_tasks.list()}
@@ -432,10 +471,29 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
                 fail('$.ros','task_in_use','此任务仍被状态机引用，请先解除关联')
         return ros_tasks.delete(task_id)
 
+    class RosConnection(BaseModel):
+        domain_id: int = Field(ge=0,le=232)
+        namespace: str = '/'
+
+    @api.get('/ros/connection')
+    async def ros_connection():
+        return ros_tasks.connection()
+
+    @api.put('/ros/connection')
+    async def ros_connection_save(body: RosConnection):
+        async with runtime.transition:
+            if hsm.running() or any(item['state'] in ('ACCEPTED','RUNNING','CANCELING','UNKNOWN') for item in tasks.list()) or any(item['snapshot']['state'] in ('ACCEPTED','RUNNING','CANCELING','UNKNOWN') for item in store.list('ros_operation')):
+                fail('$.connection','running','请先停止运行并确认设备状态，再切换 ROS 域')
+            return ros_tasks.save_connection(body.domain_id,body.namespace)
+
+    @api.get('/ros/message')
+    async def ros_message(interface: str, ros_type: str):
+        return await asyncio.to_thread(ros_tasks.sample,interface,ros_type,ros_tasks.connection()['domain_id'])
+
     @api.get('/ros/interfaces')
     async def ros_interfaces():
         try:
-            return await asyncio.wait_for(asyncio.to_thread(ros_tasks.discover), timeout=5)
+            return await asyncio.wait_for(asyncio.to_thread(ros_tasks.discover,ros_tasks.connection()), timeout=5)
         except asyncio.TimeoutError:
             fail('$.ros','discovery_timeout','ROS 2 接口发现超时，请检查 ROS_DOMAIN_ID 与网络')
 
@@ -454,6 +512,32 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     @api.delete('/state-machines/{machine_id}')
     async def hsm_delete(machine_id: str):
         return hsm.delete(machine_id)
+
+    @api.get('/studio/flow-runs')
+    async def studio_flow_runs():
+        key=robot_systems.selected_id()
+        return {'runs':[{k:item.get(k) for k in ('id','machine_id','status','sequence','active','error')} | {'name':item.get('definition',{}).get('name','状态流程')} for item in store.list('hsm_session') if key and item.get('robot_system_id')==key]}
+
+    @api.get('/studio/flow-runs/{run_id}')
+    async def studio_flow_run(run_id: str):
+        result=store.get('hsm_session',run_id)
+        if not robot_systems.selected_id() or result.get('robot_system_id')!=robot_systems.selected_id():
+            fail('$.run','ownership','运行记录不属于当前机器人')
+        return result
+
+    @api.get('/studio/task-runs')
+    async def studio_task_runs():
+        selected=robot_systems.selected_id()
+        runs=[]
+        for item in tasks.list():
+            snapshot=tasks.store.snapshot(item['task_run_id'])
+            definition=snapshot.get('definition',{})
+            if not selected or definition.get('robot_system_id')!=selected:continue
+            document=definition.get('document',{})
+            root=document.get('trees',{}).get(document.get('main_tree_id'),{}).get('root_id','')
+            name=definition.get('task_name') or definition.get('layout',{}).get('labels',{}).get(root) or document.get('main_tree_id','任务')
+            runs.append({**item,'name':name,'test_only':definition.get('test_only',False)})
+        return {'tasks':runs}
 
     @api.get('/state-machines/status')
     async def hsm_status():
@@ -593,7 +677,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     @api.get('/trees/drafts')
     async def tree_drafts():
-        return {'drafts':[item for item in store.list('tree_draft') if robot_systems.selected_id() and item.get('robot_system_id') == robot_systems.selected_id()]}
+        return {'drafts':[item for item in store.list('tree_draft') if robot_systems.selected_id() and item.get('robot_system_id') == robot_systems.selected_id() and not item.get('test_only')]}
 
     @api.post('/trees/drafts')
     async def tree_create(body: TreeCreate):
@@ -637,7 +721,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     @api.get('/trees/definitions')
     async def definitions():
-        return {'definitions':[item for item in store.list('tree_definition') if robot_systems.selected_id() and item.get('robot_system_id') == robot_systems.selected_id()]}
+        return {'definitions':[item for item in store.list('tree_definition') if robot_systems.selected_id() and item.get('robot_system_id') == robot_systems.selected_id() and not item.get('test_only')]}
 
     @api.get('/trees/definitions/{key}')
     async def definition_get(key: str):

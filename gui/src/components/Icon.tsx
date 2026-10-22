@@ -1,5 +1,6 @@
 // 图标路径改编自 SerialArm-Core launcher，授权说明见 gui/THIRD_PARTY_NOTICES.md
 const paths = {
+  brand: 'M12 4 14 10 20 12 14 14 12 20 10 14 4 12 10 10zM12 1v2M12 21v2M1 12h2M21 12h2',
   plus: 'M12 5v14M5 12h14',
   search: 'M10.5 3a7.5 7.5 0 1 0 0 15 7.5 7.5 0 0 0 0-15zM16 16l5 5',
   'arrow-left': 'M19 12H5M11 6l-6 6 6 6',
@@ -41,5 +42,7 @@ const paths = {
   x: 'M5 5l14 14 M19 5L5 19'
 }
 export function Icon({ name, size }: { name: string; size?: "xl" }) {
-  return <svg viewBox="0 0 24 24" aria-hidden="true" style={size === "xl" ? {width: 30,height: 30} : undefined}>{name === 'sun' && <circle cx="12" cy="12" r="4" />}<path d={paths[name as keyof typeof paths] || paths.system} /></svg>
+  if(name==='association')return <img className="association-icon" src="/ui/brand/association.png" alt="" aria-hidden="true" style={size==='xl'?{width:30,height:30}:undefined}/>
+  const emblem=['brand','navigation','network','git-branch','play-circle','bot','overview','system','runtime','templates'].includes(name)
+  return <svg className={emblem?'atil-icon-emblem':undefined} viewBox="0 0 24 24" aria-hidden="true" style={size === "xl" ? {width: 30,height: 30} : undefined}>{emblem&&<path className="atil-icon-ring" d="M7 2.8a10.4 10.4 0 0 0-4.2 4.2M16.8 2.8A10.4 10.4 0 0 1 21.2 7M21.2 17a10.4 10.4 0 0 1-4.2 4.2M7 21.2A10.4 10.4 0 0 1 2.8 17"/>}{name === 'sun' && <circle cx="12" cy="12" r="4" />}<path transform={emblem&&name!=='brand'?'translate(4 4) scale(.6667)':undefined} d={paths[name as keyof typeof paths] || paths.system} /></svg>
 }

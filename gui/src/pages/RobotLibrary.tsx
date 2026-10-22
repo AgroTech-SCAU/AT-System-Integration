@@ -24,13 +24,14 @@ function downloadJson(project: ProjectBundle) {
     setTimeout(() => URL.revokeObjectURL(url), 1500)
 }
 
-export default function RobotLibrary({ client, directory, onRefresh, onReconnect, onNavigate, onCreated }: { onNavigate: (page: Workspace) => void; client: ApiClient | null; directory: RobotDirectory | null; onRefresh: () => Promise<void>; onReconnect: () => Promise<void>; onCreated?: (robot: RobotSystem, source: 'blank' | 'tomato_picker') => void }) {
+export default function RobotLibrary({ client, directory, onRefresh, onReconnect, onNavigate, onCreated, initialSection='create' }: { initialSection?:'create'|'manage'|'import'; onNavigate: (page: Workspace) => void; client: ApiClient | null; directory: RobotDirectory | null; onRefresh: () => Promise<void>; onReconnect: () => Promise<void>; onCreated?: (robot: RobotSystem, source: 'blank' | 'tomato_picker') => void }) {
     const [name, setName] = useState('')
     const [source, setSource] = useState<'blank' | 'tomato_picker'>('blank')
     const [busy, setBusy] = useState(false)
     const [message, setMessage] = useState('')
     const [phase, setPhase] = useState('')
-    const [manageOpen, setManageOpen] = useState(false)
+    const [section,setSection]=useState(initialSection)
+    useEffect(()=>setSection(initialSection),[initialSection])
     const [deleting, setDeleting] = useState<RobotSystem | null>(null)
     const [deleteName, setDeleteName] = useState('')
     const fileInput = useRef<HTMLInputElement>(null)
@@ -40,8 +41,9 @@ export default function RobotLibrary({ client, directory, onRefresh, onReconnect
     const locked = busy || !client
     async function enter(system: RobotSystem) {
         if (!client) return
+        if(system.id!==directory?.selected_id&&!window.dispatchEvent(new Event('agro:navigate',{cancelable:true})))return
         if (system.id === directory?.selected_id && (directory?.active || !system.configured)) {
-            onNavigate('system'); return
+            onNavigate('overview'); return
         }
         setBusy(true); setMessage(''); setPhase('')
         try {
@@ -57,6 +59,7 @@ export default function RobotLibrary({ client, directory, onRefresh, onReconnect
     }
     async function create() {
         if (!client || !name.trim()) return
+        if(!window.dispatchEvent(new Event('agro:navigate',{cancelable:true})))return
         setBusy(true); setMessage(''); setPhase('')
         try {
             const robot = await client.request<RobotSystem>('/robot-systems', 'POST', { name: name.trim(), example_id: source === 'blank' ? null : source })
@@ -64,7 +67,7 @@ export default function RobotLibrary({ client, directory, onRefresh, onReconnect
             await enterCreated(robot)
             onCreated?.(robot, source)
             guideCompleted(`robot:created:${source}`)
-            onNavigate('system')
+            onNavigate('overview')
         } catch (error) { setMessage(problem(error)); await onRefresh().catch(() => { }) }
         finally { setBusy(false); setPhase('') }
     }
@@ -85,7 +88,7 @@ export default function RobotLibrary({ client, directory, onRefresh, onReconnect
             if (!bundle || typeof bundle !== 'object') throw new Error('工程文件不是 JSON 对象')
             const robot = await client.request<RobotSystem>('/robot-systems/import', 'POST', { bundle })
             await onRefresh()
-            setMessage('已导入「' + robot.name + '」，请在已有系统中选择')
+            setMessage('已导入「' + robot.name + '」，可在我的机器人中选择');setSection('manage')
         } catch (error) { setMessage('导入失败：' + problem(error)) }
         finally { setBusy(false) }
     }
@@ -141,32 +144,30 @@ export default function RobotLibrary({ client, directory, onRefresh, onReconnect
         finally { setBusy(false) }
     }
     return <>
-        <div className="library-heading" data-guide="guide-selected-robot"><div><span className="eyebrow">项目</span><h2>机器人工作台</h2><p>管理当前工程与本地机器人项目</p></div>{selected && <span className="library-current">当前：{selected.name}</span>}</div>
+        <div className="library-heading" data-guide="guide-selected-robot"><div><span className="eyebrow">项目</span><h2>机器人项目</h2><p>管理当前工程与本地机器人项目</p></div>{selected && <span className="library-current">当前：{selected.name}</span>}</div>
         {!client && <div className="library-connection-note"><Icon name="plug" /><span>{window.agroDesktop ? '本机服务连接失败，请重试' : '浏览器调试需要在设置中连接会话'}</span>{window.agroDesktop && <button className="primary" onClick={() => void onReconnect()} disabled={busy}>重新连接</button>}</div>}
-        {selected && <div className="project-continue"><div><span className="eyebrow">CURRENT WORKSPACE</span><h3>{selected.name}</h3><p>{directory?.active ? '配置已应用' : '配置未应用'}</p></div><div className="project-continue-actions"><button className="primary" onClick={()=>onNavigate('system')}>系统接入 →</button><button onClick={()=>onNavigate('editor')}>设计任务 →</button>{directory?.active&&<button onClick={()=>onNavigate('runtime')}>运行调试 →</button>}<button disabled={locked || directory?.running_state !== 'STOPPED'} title="仅在系统与所有操作确认停止后关闭" onClick={()=>void closeCurrent()}>关闭工作区</button></div></div>}
-        {selected && !directory?.active && <div className="library-connection-note"><Icon name="system" /><span>「{selected.name}」{selected.configured ? '配置未激活' : '待配置'}</span><button className="primary" disabled={!client} onClick={() => onNavigate('system')}>系统搭建 →</button></div>}
-        <div className="studio-project-tools"><h3>项目管理</h3><p>新建、导入及切换机器人项目</p>{selected&&<button onClick={()=>setManageOpen(value=>!value)}>{manageOpen?'收起项目管理':'新建、导入或切换机器人 →'}</button>}</div>
-        {(!selected||manageOpen)&&<div className="library-columns library-columns-three">
-            <section className="library-pane"><div className="library-pane-header"><span className="library-icon"><Icon name="boxes" /></span><div><h3>新建系统</h3><p>创建空白工程或使用示例</p></div></div>
+        <nav className="robot-management-tabs" aria-label="机器人管理选项">{([['create','新建机器人'],['manage','我的机器人'],['import','导入机器人']] as const).map(([id,label])=><button key={id} aria-pressed={section===id} onClick={()=>setSection(id)}>{label}{id==='manage'&&directory?.systems.length?<small>{directory.systems.length}</small>:null}</button>)}</nav>
+        <div className="robot-management-panels">
+            <section className="library-pane" hidden={section!=='create'}><div className="library-pane-header"><span className="library-icon"><Icon name="association" /></span><div><h3>新建机器人</h3><p>创建一个机器人工作空间</p></div></div>
                 <div className="create-source-grid">
-                    <button data-guide="create-blank" className={'create-source ' + (source === 'blank' ? 'chosen' : '')} aria-pressed={source === 'blank'} onClick={() => { setSource('blank'); setName('');guideCompleted('guide:source:blank') }}><Icon name="system" /><strong>空白机器人</strong><small>空白配置与任务</small></button>
+                    <button data-guide="create-blank" className={'create-source ' + (source === 'blank' ? 'chosen' : '')} aria-pressed={source === 'blank'} onClick={() => { setSource('blank'); setName('');guideCompleted('guide:source:blank') }}><Icon name="association" /><strong>空白机器人</strong><small>从 ROS 接口开始</small></button>
                     {examples.map(example => <button key={example.id} data-guide="create-tomato" className={'create-source ' + (source === example.id ? 'chosen' : '')} aria-pressed={source === example.id} onClick={() => { setSource('tomato_picker'); setName(example.title);guideCompleted('guide:source:tomato_picker') }}><Icon name="templates" /><strong>从示例创建</strong><small>{example.title}</small></button>)}
                 </div>
-                <div data-guide="create-robot-form"><label data-guide="create-robot-name" className="field robot-name-field"><span>机器人系统名称</span><input value={name} onChange={event => setName(event.target.value)} maxLength={60} placeholder="例如：我的农业机器人" /></label>
+                <div data-guide="create-robot-form"><label data-guide="create-robot-name" className="field robot-name-field"><span>机器人名称</span><input autoFocus={section==='create'} value={name} onChange={event => setName(event.target.value)} maxLength={60} placeholder="例如：我的农业机器人" /></label>
                 <button data-guide="create-robot-submit" className="primary library-action" disabled={locked || !name.trim()} onClick={() => void create()}>创建并选择 <span aria-hidden>→</span></button></div>
 
             </section>
-            <section className="library-pane"><div className="library-pane-header"><span className="library-icon"><Icon name="templates" /></span><div><h3>导入系统</h3><p>从工程文件恢复配置与任务草稿</p></div></div>
-                <div className="library-import-visual"><Icon name="system" /><strong>工程文件</strong><small>.agrobot.json</small></div>
+            <section className="library-pane" hidden={section!=='import'}><div className="library-pane-header"><span className="library-icon"><Icon name="templates" /></span><div><h3>导入机器人</h3><p>恢复接口任务与流程草稿</p></div></div>
+                <div className="library-import-visual"><Icon name="association" /><strong>工程文件</strong><small>.agrobot.json</small></div>
                 <button className="library-action" disabled={locked} onClick={() => void importProject()}>选择工程文件并导入 →</button>
                 <input ref={fileInput} type="file" accept=".json,.agrobot.json,application/json" hidden onChange={event => void browseFile(event.target.files?.[0])} />
-                <p className="muted">导入工程需重新核验配置与运行条件</p>
+                <p className="muted">导入任务与流程后，重新连接 ROS 环境即可使用</p>
             </section>
-            <section className="library-pane"><div className="library-pane-header"><span className="library-icon"><Icon name="system" /></span><div><h3>已有工程</h3><p>打开、导出与删除</p></div></div>
-                {directory?.systems.length ? <div className="robot-library-list">{directory.systems.map(system => <div key={system.id} className={'saved-robot ' + (system.id === directory.selected_id ? 'selected' : '')}><span className="robot-avatar"><Icon name="system" /></span><div className="saved-robot-main"><strong>{system.name}</strong><small>{system.example_id === 'tomato_picker' ? '来自番茄示例' : '自建或导入'} · {system.configured ? '已配置' : '待搭建'}</small></div><div className="saved-robot-actions"><button disabled={locked} onClick={() => void enter(system)}>{system.id === directory.selected_id ? '继续' : '选择'}</button><button disabled={locked} onClick={() => void exportProject(system)}>导出</button><button className="danger-quiet" title={directory.running_state !== 'STOPPED' ? '请先停止机器人系统及任务' : '删除前需输入机器人名称确认'} disabled={locked || directory.running_state !== 'STOPPED'} onClick={() => { setMessage(''); setDeleting(system); setDeleteName('') }}>删除</button></div></div>)}</div> : <div className="robot-library-empty"><Icon name="system" /><strong>还没有已保存系统</strong><p>创建工程或导入现有配置</p></div>}
+            <section className="library-pane" hidden={section!=='manage'}><div className="library-pane-header"><span className="library-icon"><Icon name="association" /></span><div><h3>我的机器人</h3><p>切换工作空间、导出工程或管理机器人</p></div></div>
+                {directory?.systems.length ? <div className="robot-library-list">{directory.systems.map(system => <div key={system.id} className={'saved-robot ' + (system.id === directory.selected_id ? 'selected' : '')}><span className="robot-avatar"><Icon name="association" /></span><div className="saved-robot-main"><strong>{system.name}</strong><small>{system.example_id === 'tomato_picker' ? '来自番茄示例' : '自建或导入'} · {system.configured ? '包含设备驱动' : 'ROS 工作流'}</small></div><div className="saved-robot-actions"><button disabled={locked} onClick={() => void enter(system)}>{system.id === directory.selected_id ? '继续' : '选择'}</button><button disabled={locked} onClick={() => void exportProject(system)}>导出</button><button className="danger-quiet" title={directory.running_state !== 'STOPPED' ? '请先停止机器人系统及任务' : '删除前需输入机器人名称确认'} disabled={locked || directory.running_state !== 'STOPPED'} onClick={() => { setMessage(''); setDeleting(system); setDeleteName('') }}>删除</button></div></div>)}</div> : <div className="robot-library-empty"><Icon name="association" /><strong>还没有机器人项目</strong><p>创建工程或导入现有配置</p></div>}
                 <p className="muted">切换项目需要系统处于安全停止状态</p>
             </section>
-        </div>}
+        </div>
         {(message || phase) && <p className={message.startsWith('导入失败') || message.startsWith('导出失败') || message.startsWith('删除失败') || message.startsWith('无法') ? 'error' : 'callout'} role="status">{message || `正在切换机器人系统 · ${phase}`}</p>}
         {deleting && createPortal(<div className="robot-delete-backdrop" onMouseDown={event => { if (event.target === event.currentTarget && !busy) { setDeleting(null); setDeleteName('') } }}>
             <section role="alertdialog" aria-modal="true" aria-labelledby="robot-delete-title" className="robot-delete-dialog">

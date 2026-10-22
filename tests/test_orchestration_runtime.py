@@ -154,6 +154,58 @@ class Orchestration(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.calls[0][0],'standalone')
         self.assertEqual(self.runtime.state,'STOPPED')
 
+    async def test_task_trial_uses_cpp_typed_ports_and_idempotent_request(self):
+        import httpx
+        self.store.put('robot_system','robot_test',{'id':'robot_test','name':'Offline','configured':False})
+        self.robots.active=lambda *args:False
+        self.runtime.state='STOPPED';self.runtime.accepting=False
+        self.ros.save(task('trial',inputs={'value':{'type':'integer','unit':'1'}},
+            outputs={'sum':{'type':'integer','unit':'1'}},input_bindings={'a':'value'},output_bindings={'sum':'sum'}))
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app),base_url='http://test',headers={'Authorization':'Bearer offline-test'}) as client:
+            route='/ros/tasks/trial/test'
+            denied=await client.post(route,json={'request_id':'trial_confirm','inputs':{'value':5}})
+            self.assertEqual(denied.status_code,409,denied.text)
+            accepted=await client.post(route,json={'request_id':'trial_confirm','confirm_safety':True,'inputs':{'value':5}})
+            self.assertEqual(accepted.status_code,202,accepted.text)
+            identity=accepted.json()['task_run_id']
+            await self.wait(lambda:self.runtime.tasks.status(identity)['state'] not in {'ACCEPTED','RUNNING','CANCELING'})
+            result=self.runtime.tasks.status(identity)
+            self.assertEqual(result['state'],'SUCCEEDED',result.get('error'))
+            self.assertEqual(self.calls[-1][2],{'value':5})
+            repeated=await client.post(route,json={'request_id':'trial_confirm','confirm_safety':True,'inputs':{'value':5}})
+            self.assertEqual(repeated.status_code,202,repeated.text)
+            self.assertEqual(repeated.json()['task_run_id'],identity)
+            conflict=await client.post(route,json={'request_id':'trial_confirm','confirm_safety':True,'inputs':{'value':6}})
+            self.assertEqual(conflict.status_code,409,conflict.text)
+            listed=await client.get('/studio/task-runs')
+            self.assertEqual(listed.json()['tasks'][0]['name'],'trial')
+            self.assertEqual((await client.get('/trees/definitions')).json()['definitions'],[])
+            self.assertFalse(self.store.list('tree_draft'))
+
+    async def test_connection_and_run_history_are_scoped_to_robot(self):
+        import httpx
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app),base_url='http://test',headers={'Authorization':'Bearer offline-test'}) as client:
+            saved=await client.put('/ros/connection',json={'domain_id':7,'namespace':'/robot_one'})
+            self.assertEqual(saved.status_code,200,saved.text)
+            self.assertEqual((await client.get('/ros/connection')).json()['domain_id'],7)
+            with patch.object(self.ros,'_discover',return_value={'connected':True,'topics':[{'name':'/robot_one/state','types':['std_msgs/msg/String']},{'name':'/other/state','types':['std_msgs/msg/String']}],'services':[],'actions':[]}) as discover:
+                discovered=await client.get('/ros/interfaces')
+                self.assertEqual(discovered.status_code,200,discovered.text)
+                self.assertEqual([item['name'] for item in discovered.json()['topics']],['/robot_one/state'])
+                discover.assert_called_once_with(7)
+            with patch.object(self.ros,'_execute',return_value={'state':'SUCCEEDED','response':{'data':'ok'}}):
+                sample=await client.get('/ros/message',params={'interface':'/robot_one/state','ros_type':'std_msgs/msg/String'})
+                self.assertEqual(sample.status_code,200,sample.text)
+                self.assertEqual(sample.json()['message'],{'data':'ok'})
+            invalid=await client.put('/ros/connection',json={'domain_id':7,'namespace':'invalid name'})
+            self.assertEqual(invalid.status_code,409,invalid.text)
+            self.store.put('hsm_session','foreign',{'id':'foreign','robot_system_id':'other','status':'STOPPED','definition':{'name':'Other'}})
+            self.assertEqual((await client.get('/studio/flow-runs')).json()['runs'],[])
+            self.assertEqual((await client.get('/studio/flow-runs/foreign')).status_code,409)
+            self.store.put('robot_selection','selected',{'system_id':'other'})
+            other=await client.get('/ros/connection')
+            self.assertNotEqual(other.json()['domain_id'],7)
+
     async def test_fifo_events_and_frozen_machine(self):
         spec={'initial':'root','variables':{},'states':[{'id':'root','initial':'a'},
               {'id':'a','parent':'root'},{'id':'b','parent':'root'},{'id':'c','parent':'root'}],

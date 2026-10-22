@@ -119,7 +119,7 @@ class RosOperations:
             result = await execution
             state = result['state']
             self._update(identity, state=state, stop_state='CONFIRMED',
-                         result={'output':result.get('output',{})} if state=='SUCCEEDED' else None,
+                         result={'output':result.get('output',{}),'extensions':{'response':result.get('response',{})}} if state=='SUCCEEDED' else None,
                          error=result.get('error') or {'code':'ros_task_failed','reason':'ROS 能力未成功完成','retryable':False} if state=='FAILED' else None)
         except Exception as exc:
             stop.set()

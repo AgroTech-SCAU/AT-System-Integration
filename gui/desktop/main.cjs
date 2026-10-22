@@ -22,7 +22,7 @@ try {
   app.exit(1)
 }
 if (url && dataDirectory) {
-  app.setName('AT Robot Studio')
+  app.setName('ATIL Robot Studio')
   fs.mkdirSync(dataDirectory, { recursive: true })
   app.setPath('userData', dataDirectory)
   app.setPath('sessionData', dataDirectory)
@@ -45,6 +45,7 @@ if (url && dataDirectory) {
     app.whenReady().then(async () => {
       Menu.setApplicationMenu(null)
       win = new BrowserWindow({
+        icon: path.join(__dirname, '../public/brand/association.png'),
         width: 1300, height: 900, minWidth: 640, minHeight: 480,
         frame: false, show: false, backgroundColor: '#0a0a10',
         webPreferences: { preload: path.join(__dirname, 'preload.cjs'),

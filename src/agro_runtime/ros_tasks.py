@@ -5,6 +5,7 @@
 import asyncio
 import copy
 import json
+import os
 import re
 import threading
 import time
@@ -142,6 +143,8 @@ class RosTasks:
     def __init__(self, store, robots):
         self.store, self.robots = store, robots
         self._context=None
+        self._domain=None
+        self._context_active=0
         self._context_lock=threading.Lock()
 
     def _robot(self):
@@ -183,12 +186,43 @@ class RosTasks:
         self.store.delete('ros_task', identity)
         return {'deleted': True}
 
+    def connection(self):
+        if self.store is None or self.robots is None:
+            return {'domain_id':None,'namespace':'/'}
+        key=self._robot()
+        return next((item for item in self.store.list('ros_connection') if item['id']==key),
+                    {'id':key,'domain_id':int(os.environ.get('ROS_DOMAIN_ID','0')),'namespace':'/'})
+
+    def save_connection(self, domain_id, namespace):
+        if not isinstance(domain_id,int) or isinstance(domain_id,bool) or not 0<=domain_id<=232:
+            fail('$.domain_id','invalid_domain','ROS 域需为 0 到 232 的整数')
+        if not isinstance(namespace,str) or not re.fullmatch(r'/(?:[A-Za-z_][A-Za-z0-9_]*(?:/[A-Za-z_][A-Za-z0-9_]*)*)?/?',namespace):
+            fail('$.namespace','invalid_namespace','命名空间需要以 / 开头，并使用 ROS 名称')
+        self.close()
+        return self.store.put('ros_connection',self._robot(),{'id':self._robot(),'domain_id':domain_id,'namespace':namespace.rstrip('/') or '/'})
+
+    def discover(self,connection=None):
+        connection=connection or self.connection()
+        result=self._discover(connection['domain_id'])
+        namespace=connection['namespace']
+        if namespace!='/':
+            for key in ('topics','services','actions'):
+                result[key]=[item for item in result[key] if item['name']==namespace or item['name'].startswith(namespace+'/')]
+        return {**result,'connection':connection}
+
+    def sample(self, interface, ros_type, domain_id=None):
+        definition=validate_task({'name':'观察消息','kind':'subscribe_wait','interface':interface,'ros_type':ros_type,
+                                 'payload':{},'condition':{'operator':'any'},'timeout_s':2,'qos_reliability':'best_effort'})
+        definition['_ros_domain']=domain_id
+        result=self._execute(definition,threading.Event(),None)
+        return {'received':result['state']=='SUCCEEDED','message':result.get('response'), 'state':result['state']}
+
     @staticmethod
-    def discover():
+    def _discover(domain_id=None):
         def lookup():
             rclpy, _, _, _ = _ros_modules()
             context = rclpy.context.Context()
-            rclpy.init(context=context)
+            rclpy.init(context=context, **({'domain_id':domain_id} if domain_id is not None else {}))
             node = None
             try:
                 node = rclpy.create_node('atil_interface_discovery', context=context)
@@ -238,6 +272,7 @@ class RosTasks:
 
     async def run(self, task_id, stop: threading.Event, feedback=None, *, definition=None, inputs=None):
         data = prepared_task(definition if definition is not None else self.get(task_id), inputs)
+        data['_ros_domain']=self.connection()['domain_id']
         result = await asyncio.to_thread(self._execute, data, stop, feedback)
         if isinstance(result, str):
             result = {'state':result,'response':data.get('payload',{})}
@@ -255,16 +290,28 @@ class RosTasks:
 
     def _execute(self, data, stop, feedback):
         with self._context_lock:
+            domain_id=data.pop('_ros_domain',None)
+            if self._context is not None and self._domain!=domain_id:
+                if self._context_active:fail('$.connection','connection_busy','当前环境仍有消息读取或任务，请稍后切换')
+                rclpy, _, _, _ = _ros_modules()
+                rclpy.shutdown(context=self._context)
+                self._context=None
             if self._context is None:
                 rclpy, _, _, _ = _ros_modules()
                 context = rclpy.context.Context()
-                rclpy.init(context=context)
+                rclpy.init(context=context, **({'domain_id':domain_id} if domain_id is not None else {}))
                 self._context = context
+                self._domain = domain_id
             context = self._context
-        return _run_task(data,stop,feedback,context=context)
+            self._context_active+=1
+        try:
+            return _run_task(data,stop,feedback,context=context)
+        finally:
+            with self._context_lock:self._context_active-=1
 
     def close(self):
         with self._context_lock:
+            if self._context_active:fail('$.connection','connection_busy','当前环境仍有消息读取或任务，请稍后切换')
             if self._context is not None:
                 rclpy, _, _, _ = _ros_modules()
                 rclpy.shutdown(context=self._context)
