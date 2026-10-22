@@ -212,6 +212,8 @@ class ConfigurationService:
                 fail('$.system','apply_not_stopped','应用需要停止态，且任务和设备停止均已确认')
             if any(o.state.value=='UNKNOWN' or o.stop_state.value=='UNCONFIRMED' or o.state.value in {'ACCEPTED','RUNNING','CANCELING'} for o in old.records.list_operations()):
                 fail('$.operations','unresolved_operation','存在未核对操作，不能应用')
+            if any(r['snapshot']['state'] in {'ACCEPTED','RUNNING','CANCELING','UNKNOWN'} or r['snapshot']['stop_state']=='UNCONFIRMED' for r in self.store.list('ros_operation')):
+                fail('$.operations','unresolved_operation','存在未核对 ROS 操作，不能应用')
             for name,descriptor in old.modules.items():
                 manager=old.managers[descriptor.manager]
                 measured=await asyncio.wait_for(manager.status(name,descriptor),descriptor.start_timeout_s)

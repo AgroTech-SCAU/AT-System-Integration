@@ -23,6 +23,9 @@ struct StampedPose {
 struct TargetList {
   std::vector<StampedPose> targets;
 };
+struct JsonValue {
+  Json value;
+};
 struct PickResult {
   Json value;
 };
@@ -33,6 +36,7 @@ std::ostream &operator<<(std::ostream &, const IntegerQuantity &);
 std::ostream &operator<<(std::ostream &, const StampedPose &);
 std::ostream &operator<<(std::ostream &, const TargetList &);
 std::ostream &operator<<(std::ostream &, const PickResult &);
+std::ostream &operator<<(std::ostream &, const JsonValue &);
 struct Transport {
   virtual ~Transport() = default;
   virtual Json request(const std::string &method, const std::string &path,
@@ -104,6 +108,7 @@ public:
 };
 } // namespace agro_bt
 namespace BT {
+template <> agro_bt::JsonValue convertFromString<agro_bt::JsonValue>(StringView);
 template <> agro_bt::Quantity convertFromString<agro_bt::Quantity>(StringView);
 template <>
 agro_bt::IntegerQuantity

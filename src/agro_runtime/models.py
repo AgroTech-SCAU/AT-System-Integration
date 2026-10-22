@@ -1,5 +1,6 @@
 """描述与执行共用的严格数据契约"""
 import math
+import json
 from enum import Enum
 from typing import Annotated, Literal
 
@@ -38,7 +39,7 @@ class ContractModel(BaseModel):
 
 
 class TypeDescriptor(ContractModel):
-    type: Literal['string', 'integer', 'number', 'boolean', 'stamped_pose', 'target_list', 'pick_result']
+    type: Literal['string', 'integer', 'number', 'boolean', 'stamped_pose', 'target_list', 'pick_result', 'json']
     unit: Nonempty | None = None
     minimum: Number | None = None
     maximum: Number | None = None
@@ -74,13 +75,18 @@ class TypeDescriptor(ContractModel):
 
 
 def scalar_error(spec, value, *, check_choices=True):
+    def valid_json(value):
+        try:
+            return len(json.dumps(value, allow_nan=False)) <= 262144
+        except (TypeError, ValueError):
+            return False
     types = {'string': lambda x: isinstance(x, str),
              'integer': lambda x: type(x) is int,
              'number': lambda x: type(x) is int or (type(x) is float and math.isfinite(x)),
              'boolean': lambda x: type(x) is bool,
              'stamped_pose': lambda x: isinstance(x, dict),
              'target_list': lambda x: isinstance(x, list),
-             'pick_result': lambda x: isinstance(x, dict)}
+             'pick_result': lambda x: isinstance(x, dict), 'json': valid_json}
     if not types[spec.type](value):
         return 'invalid_type', f'需要 {spec.type} 类型'
     if spec.type in {'number', 'integer'}:
@@ -94,7 +100,7 @@ def scalar_error(spec, value, *, check_choices=True):
 
 
 class ParameterDescriptor(TypeDescriptor):
-    type: Literal['string', 'integer', 'number', 'boolean']
+    type: Literal['string', 'integer', 'number', 'boolean', 'json']
     required: StrictBool = False
     default: JsonValue = None
     apply_policy: Literal['immediate', 'idle', 'restart']

@@ -337,3 +337,71 @@ body.guide-rail-active .tree-editor-grid>div:last-child{grid-column:1/-1}
 .tree-validation-feedback strong{white-space:nowrap}
 .tree-validation-feedback div{flex:1;min-width:200px}
 .tree-validation-feedback p{margin:3px 0;line-height:1.4}
+
+/* ROS 2 工作台沿用 SerialArm 的低对比深色面板、暖色焦点和克制动效 */
+.ros-library-grid{display:grid;grid-template-columns:minmax(220px,280px) minmax(0,1fr);align-items:start;gap:16px}
+.ros-task-list{border:1px solid var(--line);border-radius:14px;background:var(--card);padding:16px;position:sticky;top:12px;min-width:0;max-height:calc(100vh - 125px);display:flex;flex-direction:column}
+.ros-list-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:15px;font-size:13px}
+.ros-list-head span{color:var(--dim);font-size:11px}
+.ros-task-list>input{width:100%;min-width:0;margin-bottom:12px}
+.ros-task-items{min-height:100px;overflow-y:auto;display:flex;flex-direction:column;gap:5px}
+.ros-task-row{width:100%;display:flex;align-items:center;gap:11px;text-align:left;min-width:0;padding:12px 10px;background:transparent;border:1px solid transparent;border-radius:10px;color:var(--text);transition:background-color .16s ease,border-color .16s ease}
+.ros-task-row:hover{background:var(--hover)}
+.ros-task-row.active{background:var(--tint);border-color:color-mix(in srgb,var(--accent) 30%,var(--line))}
+.ros-task-icon{display:grid;place-items:center;border-radius:9px;flex:none;width:35px;height:35px;background:var(--subtle);color:var(--accent);font-size:19px}
+.ros-task-row>span:last-child{min-width:0}
+.ros-task-row strong,.ros-task-row small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ros-task-row strong{font-size:12px;margin-bottom:5px;font-weight:620}
+.ros-task-row small{font-size:10px;color:var(--dim)}
+.ros-empty{margin:auto 0;padding:35px 12px;text-align:center;color:var(--dim);line-height:1.9;font-size:12px}
+.ros-task-form{min-width:0}
+.ros-two-col{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px}
+.ros-json-editor{width:100%;min-width:0;font-size:12px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;line-height:1.7;resize:vertical;tab-size:2}
+.ros-payload-header{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin:14px 0 11px}
+.ros-payload-header strong{font-size:12px}
+.ros-mode-switch{display:flex;align-items:center;gap:3px;padding:3px;border:1px solid var(--line);border-radius:8px;background:var(--subtle)}
+.ros-mode-switch button{font-size:11px;min-height:27px;padding:5px 9px;border:0;background:transparent;color:var(--muted)}
+.ros-mode-switch button.active{background:var(--card);box-shadow:var(--shadow);color:var(--accent)}
+.ros-field-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:14px;border:1px solid var(--line);border-radius:11px;background:var(--subtle);max-height:380px;overflow-y:auto;margin-bottom:14px}
+.ros-field-form>.field{min-width:0;margin:0}
+.ros-task-guidance{font-size:12px;color:var(--muted);line-height:1.8;border-left:2px solid var(--accent);padding:9px 12px;margin:10px 0;background:var(--tint);border-radius:0 8px 8px 0}
+.ros-task-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;margin-top:18px}
+.ros-discovery{background:var(--subtle);border:1px solid var(--line);border-radius:10px;padding:12px;margin:3px 0 15px}
+.ros-discovery-status{font-size:11px;color:var(--muted);margin-bottom:9px}
+.ros-discovery select{width:100%}
+.ros-interface-tools{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:-1px 0 15px}
+.ros-interface-tools span{flex:1;min-width:170px;font-size:10px;color:var(--muted);line-height:1.8;overflow-wrap:anywhere}
+.ros-live-feedback{white-space:pre-wrap;overflow-wrap:anywhere;max-height:210px;overflow:auto;border:1px solid var(--line);padding:12px;border-radius:9px;font-size:11px;background:var(--subtle)}
+.ros-safety-confirm{display:flex;align-items:center;gap:12px;padding:13px 15px;margin:10px 0 15px;border:1px solid color-mix(in srgb,var(--accent) 24%,var(--line));border-radius:11px;background:var(--tint);cursor:pointer}
+.ros-safety-confirm input{width:17px;height:17px;flex:none;accent-color:var(--accent)}
+.ros-safety-confirm span{display:flex;flex-direction:column;gap:4px;min-width:0}
+.ros-safety-confirm strong{font-size:12px;font-weight:630}
+.ros-safety-confirm small{font-size:11px;color:var(--muted);line-height:1.7}
+.ros-stop-settings{border:1px solid color-mix(in srgb,var(--accent) 25%,var(--line));border-radius:12px;padding:14px;margin:8px 0 14px}
+.ros-stop-settings strong{font-size:12px}
+.ros-stop-settings p{font-size:11px;color:var(--muted);line-height:1.7}
+.hsm-lifecycle{display:grid;gap:9px;margin:14px 0}
+.hsm-phase{border:1px solid var(--line);background:var(--subtle);padding:13px;border-radius:11px}
+.hsm-phase-title{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px;margin-bottom:10px}
+.hsm-phase-title strong{font-size:12px;color:var(--text)}
+.hsm-phase-title span{font-size:10px;color:var(--dim)}
+.hsm-phase select{width:100%;min-width:0}
+.hsm-quick-link{display:flex;align-items:center;justify-content:space-between;gap:12px;color:var(--muted);font-size:11px;border:1px dashed var(--line);padding:10px;border-radius:9px}
+.hsm-canvas-scroll{min-height:340px;max-height:65vh}
+.hsm-canvas-node.selected rect{filter:drop-shadow(0 0 8px color-mix(in srgb,var(--accent) 16%,transparent))}
+.hsm-canvas-node{will-change:transform}
+.hsm-canvas-controls{display:flex;align-items:center;gap:6px}
+.hsm-canvas-controls span{min-width:42px;text-align:center;font-variant-numeric:tabular-nums;color:var(--muted)}
+.hsm-canvas-controls button{padding:6px 9px;min-height:29px}
+.hsm-canvas-scroll{cursor:grab;overscroll-behavior:contain}
+.hsm-canvas-scroll:active{cursor:grabbing}
+.page.page-spring{animation:atil-page-enter .18s ease-out both}
+.page.page-leaving{animation:atil-page-exit .12s ease-in both}
+@keyframes atil-page-enter{from{opacity:.6;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
+@keyframes atil-page-exit{from{opacity:1}to{opacity:.6}}
+.nav-item,.title-button,.robot-system-card,.overview-steps button,.saved-robot,.create-source,.library-pane button,.buttons button,.file-button,.task-workspace-switch button,.card{transition:background-color .16s ease,border-color .16s ease,box-shadow .18s ease}
+.nav-item:hover,.nav-item:active,.buttons button:not(:disabled):hover,.buttons button:not(:disabled):active,.task-workspace-switch button:hover,.task-workspace-switch button:active{transform:none}
+.nav-item[aria-current="page"]{animation:none}
+@media(max-width:950px){.ros-library-grid{grid-template-columns:1fr}.ros-task-list{position:static;max-height:320px}.ros-task-items{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}}
+@media(max-width:640px){.ros-two-col,.ros-field-form{grid-template-columns:1fr}.hsm-phase-title{flex-direction:column;gap:3px}}
+@media(prefers-reduced-motion:reduce){.page.page-spring,.page.page-leaving{animation:none}.ros-task-row{transition:none}}

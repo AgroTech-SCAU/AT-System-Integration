@@ -238,15 +238,15 @@ void Broker::work() {
           op->submitted = true;
           submit_call = true;
           method = "POST";
-          path = "/operations";
+          path = op->request.contains("ros_task_id") ? "/ros/operations" : "/operations";
           body = op->request;
         } else if (op->cancel_requested && !op->cancel_sent) {
           op->cancel_sent = true;
           method = "POST";
-          path = "/operations/" + op->operation_id + "/cancel";
+          path = (op->request.contains("ros_task_id") ? "/ros/operations/" : "/operations/") + op->operation_id + "/cancel";
         } else {
           method = "GET";
-          path = "/operations/" + op->operation_id;
+          path = (op->request.contains("ros_task_id") ? "/ros/operations/" : "/operations/") + op->operation_id;
         }
         break;
       }
@@ -415,6 +415,9 @@ std::ostream &operator<<(std::ostream &s, const TargetList &v) {
     j.push_back(t.value);
   return s << j.dump();
 }
+std::ostream &operator<<(std::ostream &s, const JsonValue &v) {
+  return s << v.value.dump();
+}
 std::ostream &operator<<(std::ostream &s, const PickResult &v) {
   return s << v.value.dump();
 }
@@ -458,6 +461,10 @@ agro_bt::TargetList convertFromString<agro_bt::TargetList>(StringView text) {
   for (const auto &t : j)
     result.targets.push_back({t});
   return result;
+}
+template <>
+agro_bt::JsonValue convertFromString<agro_bt::JsonValue>(StringView text) {
+  return {literal(text)};
 }
 template <>
 agro_bt::PickResult convertFromString<agro_bt::PickResult>(StringView text) {

@@ -98,7 +98,13 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     documents = TaskDocuments(runtime,store,assets)
     runtime.tasks.documents = documents
     from .state_machines import StateMachines
-    hsm = StateMachines(runtime,store,robot_systems,documents,tasks)
+    from .ros_tasks import RosTasks
+    ros_tasks = RosTasks(store,robot_systems)
+    documents.ros_tasks = ros_tasks
+    from .ros_operations import RosOperations
+    ros_operations = RosOperations(runtime, store, tasks, ros_tasks)
+    documents.ros_operations = ros_operations
+    hsm = StateMachines(runtime,store,robot_systems,documents,tasks,ros_tasks)
 
     async def authenticate(authorization: Annotated[str | None, Header()] = None):
         if authorization is None or not hmac.compare_digest(authorization.encode('utf-8'),
@@ -120,6 +126,9 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
             if task and not task.done():
                 await task
         await hsm.close()
+        await tasks.stop_all()
+        await ros_operations.close()
+        await asyncio.to_thread(ros_tasks.close)
         await runtime.aclose()
         store.db.close()
 
@@ -148,6 +157,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     app.state.diagnostics = diagnostics
     app.state.documents = documents
     app.state.hsm = hsm
+    app.state.ros_tasks = ros_tasks
     api = APIRouter(dependencies=[Depends(authenticate)])
     identity = {'application': 'AT-System-Integration',
                 'source_root': str(Path(__file__).resolve().parents[2]),
@@ -311,6 +321,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     @api.post('/system/start', status_code=202)
     async def start(body: LifecycleIntent | None = None):
+        if hsm.running():fail('$.machine','hsm_busy','先停止业务状态机再改变运行环境')
         body=body.model_dump() if body else {}
         if body.get('path') and Path(body['path']).resolve()!=runtime.config_path:
             fail('$.config_ref','snapshot_mismatch','启动路径与当前生效配置不一致')
@@ -363,6 +374,75 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
         event: str
         variables: dict = Field(default_factory=dict)
 
+    class StateMachineStart(BaseModel):
+        model_config = ConfigDict(extra='forbid')
+        mode: Literal['auto','managed','ros_only'] = 'auto'
+        confirm_safety: bool = False
+
+    class RosTaskSave(BaseModel):
+        model_config = ConfigDict(extra='forbid')
+        id: str | None = None
+        name: str
+        kind: Literal['service', 'action', 'publish_once', 'publish_periodic', 'subscribe_wait']
+        interface: str
+        ros_type: str
+        payload: dict = Field(default_factory=dict)
+        inputs: dict = Field(default_factory=dict)
+        outputs: dict = Field(default_factory=dict)
+        input_bindings: dict[str,str] = Field(default_factory=dict)
+        output_bindings: dict[str,str] = Field(default_factory=dict)
+        resources: list[dict] = Field(default_factory=list)
+        stop_payload: dict | None = None
+        condition: dict = Field(default_factory=dict)
+        success_condition: dict = Field(default_factory=dict)
+        qos_reliability: Literal['reliable','best_effort'] = 'reliable'
+        rate_hz: float = 5
+        timeout_s: float = 15
+
+    class RosOperationRequest(ExecutionRequest):
+        ros_task_id: str
+
+    @api.post('/ros/operations', status_code=202)
+    async def ros_operation_start(body: RosOperationRequest):
+        return await ros_operations.submit(body.model_dump(mode='json'))
+
+    @api.get('/ros/operations/{operation_id}')
+    async def ros_operation_status(operation_id: str):
+        return ros_operations.snapshot(operation_id)
+
+    @api.post('/ros/operations/{operation_id}/cancel', status_code=202)
+    async def ros_operation_cancel(operation_id: str):
+        return ros_operations.cancel(operation_id)
+
+    @api.get('/ros/tasks')
+    async def ros_task_list():
+        return {'tasks':ros_tasks.list()}
+
+    @api.post('/ros/tasks')
+    async def ros_task_save(body: RosTaskSave):
+        return ros_tasks.save(body.model_dump(exclude_none=True))
+
+    @api.delete('/ros/tasks/{task_id}')
+    async def ros_task_delete(task_id: str):
+        if hsm.running():
+            fail('$.ros','running','状态机运行期间不能删除 ROS 2 任务')
+        reference='ros:'+task_id
+        for machine in hsm.list():
+            if any(state.get(phase)==reference for state in machine['document']['states'] for phase in ('entry','do','exit')):
+                fail('$.ros','task_in_use','此任务仍被状态机引用，请先解除关联')
+        return ros_tasks.delete(task_id)
+
+    @api.get('/ros/interfaces')
+    async def ros_interfaces():
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(ros_tasks.discover), timeout=5)
+        except asyncio.TimeoutError:
+            fail('$.ros','discovery_timeout','ROS 2 接口发现超时，请检查 ROS_DOMAIN_ID 与网络')
+
+    @api.get('/ros/schema')
+    async def ros_schema(kind: str, ros_type: str):
+        return await asyncio.to_thread(ros_tasks.describe,kind,ros_type)
+
     @api.get('/state-machines')
     async def hsm_list():
         return {'machines':hsm.list()}
@@ -380,8 +460,8 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
         return {'session':hsm.status()}
 
     @api.post('/state-machines/{machine_id}/start',status_code=202)
-    async def hsm_start(machine_id: str):
-        return await hsm.start(machine_id)
+    async def hsm_start(machine_id: str,body: StateMachineStart):
+        return await hsm.start(machine_id,body.mode,body.confirm_safety)
 
     @api.post('/state-machines/event',status_code=202)
     async def hsm_event(body: StateMachineEvent):
@@ -549,8 +629,9 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     @api.post('/trees/drafts/{key}/publish')
     async def tree_publish(key: str,body: TreePublish):
-        if not robot_systems.active():
-            fail('$.system', 'configuration_not_active', '请先在系统搭建中应用当前机器人配置，再发布任务')
+        candidate=store.get('tree_draft',key)
+        if not robot_systems.active() and documents.requires_system(candidate['document']):
+            fail('$.system', 'configuration_not_active', '此行为树包含系统能力，请先应用当前机器人配置')
         async with runtime.transition:
             return documents.publish(key,body.revision,body.base_snapshot_id)
 
@@ -571,11 +652,18 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
         documents.definition_request(key,'preflight_check')
         return {'valid':True,'definition_id':key}
 
+    class TreeRunIntent(TaskIntent):
+        confirm_safety: bool = False
+
     @api.post('/trees/definitions/{key}/start',status_code=202)
-    async def definition_start(key: str,body: TaskIntent,owner: str = Depends(authenticate)):
+    async def definition_start(key: str,body: TreeRunIntent,owner: str = Depends(authenticate)):
         if hsm.running(): fail('$.machine','hsm_busy','状态机持有任务控制权，请从状态机发送事件')
+        robot=robot_systems.selected()
+        standalone=bool(robot and not robot.get('configured') and runtime.state=='STOPPED')
+        if standalone and not body.confirm_safety:
+            fail('$.safety','confirmation_required','启动 ROS 行为前需确认实体急停与通信失联保护')
         async with runtime.transition:
-            return await tasks.start_task(documents.definition_request(key,body.request_id),owner)
+            return await tasks.start_task(documents.definition_request(key,body.request_id),owner,standalone=standalone)
 
     if tutorial is not None:
         @api.post('/tutorial/session')

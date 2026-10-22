@@ -69,6 +69,8 @@ BT::PortInfo port(const Json &spec, BT::PortDirection direction) {
     return BT::CreatePort<StampedPose>(direction, "value").second;
   if (type == "target_list")
     return BT::CreatePort<TargetList>(direction, "value").second;
+  if (type == "json")
+    return BT::CreatePort<JsonValue>(direction, "value").second;
   if (type == "pick_result")
     return BT::CreatePort<PickResult>(direction, "value").second;
   throw std::runtime_error("unsupported_contract_type:" + type);
@@ -100,7 +102,9 @@ Json read_port(BT::TreeNode &node, const std::string &key, const Json &spec) {
     value = Json::array();
     for (const auto &p : input<TargetList>(node, key).targets)
       value.push_back(p.value);
-  } else if (type == "pick_result")
+  } else if (type == "json")
+    value = input<JsonValue>(node, key).value;
+  else if (type == "pick_result")
     value = input<PickResult>(node, key).value;
   else
     throw std::runtime_error("unsupported_contract_type");
@@ -131,7 +135,9 @@ void write_port(BT::TreeNode &node, const std::string &key, const Json &spec,
     for (const auto &p : value)
       targets.targets.push_back({p});
     result = node.setOutput(key, targets);
-  } else if (type == "pick_result")
+  } else if (type == "json")
+    result = node.setOutput(key, JsonValue{value});
+  else if (type == "pick_result")
     result = node.setOutput(key, PickResult{value});
   if (!result)
     throw std::runtime_error("output_port:" + key + ":" + result.error());
@@ -157,6 +163,9 @@ public:
       for (char c : config.path)
         node_id_ += (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ? c : '_';
     }
+    if (cap_.contains("ros_task_id")) {
+      backend_ = cap_.at("ros_task_id");
+    } else {
     auto role = config.input_ports.find("role"),
          backend = config.input_ports.find("backend_instance");
     require((role != config.input_ports.end()) !=
@@ -178,6 +187,7 @@ public:
           candidate.at("package_id") == cap_.at("package_id"))
         provided = true;
     require(provided, "backend_capability_missing:" + backend_);
+    }
     for (const auto &kind : {"input", "parameters"})
       for (auto item = cap_.at(kind).begin(); item != cap_.at(kind).end();
            ++item) {
@@ -224,15 +234,17 @@ public:
         }
       auto request_id =
           task_id_ + "_" + node_id_ + "_" + std::to_string(counter_++);
-      operation_ = broker_->submit(node_id_,
-                                   {{"capability_id", cap_.at("capability_id")},
+      Json request = {{"capability_id", cap_.at("capability_id")},
                                     {"backend_instance", backend_},
                                     {"input", inputs},
                                     {"parameters", parameters},
                                     {"request_id", request_id},
                                     {"task_run_id", task_id_},
                                     {"node_id", node_id_},
-                                    {"control", control_}});
+                                    {"control", control_}};
+      if (cap_.contains("ros_task_id"))
+        request["ros_task_id"] = cap_.at("ros_task_id");
+      operation_ = broker_->submit(node_id_, std::move(request));
       return BT::NodeStatus::RUNNING;
     } catch (const std::exception &e) {
       throw BT::RuntimeError("dispatch_validation_failed:", e.what());
@@ -375,6 +387,8 @@ void validate_value(const Json &spec, const Json &value) {
       require(value.contains("reason") && value.at("reason").is_string() &&
                   !value.at("reason").get<std::string>().empty(),
               "pick_reason_required");
+  } else if (type == "json") {
+    require(value.dump().size() <= 262144, "json_value_too_large");
   } else
     throw std::runtime_error("unsupported_contract_type:" + type);
   if (spec.contains("choices") && !spec["choices"].is_null()) {
@@ -426,6 +440,31 @@ Executor::Executor(Json registry, std::shared_ptr<Broker> broker, Json control,
                                                 shared, token, task_name, instance_ids);
           });
     }
+  for (const auto &task : registry_.value("ros_tasks", Json::array())) {
+    const auto id = task.at("id").get<std::string>();
+    require(is_identifier(id), "invalid_ros_task_id");
+    Json cap = {{"capability_id", "ros." + id}, {"ros_task_id", id},
+                {"input", task.value("inputs", Json::object())},
+                {"output", task.value("outputs", Json::object())},
+                {"parameters", Json::object()}};
+    BT::PortsList ports;
+    ports.insert(BT::InputPort<std::string>("node_id"));
+    for (const auto &kind : {"input", "output"})
+      for (auto item = cap.at(kind).begin(); item != cap.at(kind).end(); ++item) {
+        auto key = (std::string(kind) == "output" ? "out_" : "") + item.key();
+        require(!ports.count(key), "reserved_port_collision:" + key);
+        ports.insert({key, port(item.value(), std::string(kind) == "output"
+                                             ? BT::PortDirection::OUTPUT
+                                             : BT::PortDirection::INPUT)});
+      }
+    auto shared = broker_; auto token = control_; auto task_name = task_id_;
+    factory_.registerBuilder(
+        BT::TreeNodeManifest{BT::NodeType::ACTION, "RosTask_" + id, ports, {}},
+        [cap, shared, token, task_name, instance_ids](const std::string &name, const BT::NodeConfig &config) {
+          return std::make_unique<Capability>(name, config, cap, Json::object(),
+                                              shared, token, task_name, instance_ids);
+        });
+  }
   factory_.registerNodeType<ForEachTarget>("ForEachTarget");
   factory_.registerSimpleCondition("IsTrue",
                                    [](BT::TreeNode &node) {
@@ -526,6 +565,9 @@ void Executor::load_xml(const std::string &xml, const Json &initial) {
         targets.targets.push_back({p});
       }
       blackboard->set(item.key(), targets);
+    } else if (type == "json") {
+      validate_value({{"type", "json"}}, value);
+      blackboard->set(item.key(), JsonValue{value});
     } else if (type == "pick_result") {
       validate_value({{"type", "pick_result"}}, value);
       blackboard->set(item.key(), PickResult{value});
@@ -696,6 +738,7 @@ Json Executor::describe() const {
       else if (p.type() == typeid(StampedPose)) type = "stamped_pose";
       else if (p.type() == typeid(TargetList)) type = "target_list";
       else if (p.type() == typeid(PickResult)) type = "pick_result";
+      else if (p.type() == typeid(JsonValue)) type = "json";
       ports[item.first] = {{"direction", BT::toStr(p.direction())}, {"type", type},
         {"required", p.defaultValue().empty()}, {"default_xml", p.defaultValueString()},
         {"quantity", p.type() == typeid(Quantity) || p.type() == typeid(IntegerQuantity)}};
@@ -704,7 +747,7 @@ Json Executor::describe() const {
     int maximum = model.type == BT::NodeType::CONTROL ? -1 : minimum;
     nodes[entry.first] = {{"registration_id", entry.first}, {"category", BT::toStr(model.type)},
       {"minimum_children", minimum}, {"maximum_children", maximum}, {"ports", ports},
-      {"editable", editable.count(entry.first) != 0 || entry.first.rfind("Capability_", 0) == 0}};
+      {"editable", editable.count(entry.first) != 0 || (entry.first.rfind("Capability_", 0) == 0 || entry.first.rfind("RosTask_", 0) == 0)}};
   }
   return {{"nodes", nodes}};
 }

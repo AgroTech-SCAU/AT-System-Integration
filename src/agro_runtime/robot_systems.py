@@ -122,7 +122,7 @@ class RobotSystems:
         # All affected workspace records are removed in one transaction, so a
         # cancelled or failed deletion cannot leave a half-deleted project
         with self.store.db:
-            for kind in ("tree_draft", "plan", "state_machine"):
+            for kind in ("tree_draft", "plan", "state_machine", "ros_task"):
                 for row in self.store.list(kind):
                     if row.get("robot_system_id") == key:
                         self.store.db.execute(
@@ -229,6 +229,11 @@ class RobotSystems:
             if row.get('robot_system_id') == key
         ]
         state_machines.extend(copy.deepcopy(record.get('pending_state_machines', [])))
+        ros_tasks = [
+            {field:copy.deepcopy(value) for field,value in row.items() if field not in ('robot_system_id','revision')}
+            for row in self.store.list('ros_task')
+            if row.get('robot_system_id') == key
+        ]
         bundle = {
             "format": "agrotech.robot-system",
             "format_version": 1,
@@ -243,6 +248,7 @@ class RobotSystems:
             "task_drafts": drafts,
             "task_plans": plans,
             "state_machines": state_machines,
+            "ros_tasks": ros_tasks,
             "notes": "任务定义导入后仅作为草稿，需要重新校验及发布；设备运行状态与凭据不导出",
         }
         if len(encoded(bundle).encode("utf-8")) > 6 * 1024 * 1024:
@@ -268,6 +274,7 @@ class RobotSystems:
             "task_drafts",
             "task_plans",
             "state_machines",
+            "ros_tasks",
             "assets",
             "notes",
         }:
@@ -288,11 +295,13 @@ class RobotSystems:
         drafts = bundle.get("task_drafts", [])
         plans = bundle.get("task_plans", [])
         imported_machines = bundle.get("state_machines", [])
+        imported_ros_tasks = bundle.get("ros_tasks", [])
         if (
             not isinstance(descriptors, list)
             or not isinstance(drafts, list)
             or not isinstance(plans, list)
             or not isinstance(imported_machines,list) or len(imported_machines)>80
+            or not isinstance(imported_ros_tasks,list) or len(imported_ros_tasks)>100
             or not isinstance(transfer_assets, list)
             or len(transfer_assets) > 50
             or len(drafts) > 100
@@ -396,18 +405,36 @@ class RobotSystems:
                     "parameters": copy.deepcopy(item["parameters"]),
                 }
             )
-        # 导入不信任旧机器的已发布定义 ID，状态结构保留，动作引用必须重新关联
+        # 新项目使用新任务标识，原状态机引用同步重映射
+        from .ros_tasks import validate_task, IDENT as ROS_IDENT
+        clean_ros_tasks = []
+        ros_refmap = {}
+        for i, item in enumerate(imported_ros_tasks):
+            task = validate_task(item)
+            original = task.get('id')
+            if not isinstance(original,str) or not ROS_IDENT.fullmatch(original) or not original.startswith('ros_') or 'ros:'+original in ros_refmap:
+                fail(f'$.ros_tasks[{i}].id','invalid_id','导入的通信任务标识无效或重复')
+            identity = 'ros_' + uuid4().hex
+            ros_refmap['ros:'+original] = 'ros:'+identity
+            clean_ros_tasks.append({**task,'id':identity,'robot_system_id':key,'revision':1})
+        # 旧设备已发布 BT 不移植执行授权，引用改为待用户重新关联
         from .state_machines import validate as validate_state_machine
         clean_machines = []
         for i, item in enumerate(imported_machines):
             if not isinstance(item,dict) or not isinstance(item.get('document'),dict):
                 fail(f'$.state_machines[{i}]','invalid_machine','状态机工程结构无效')
             document = copy.deepcopy(item['document'])
+            needs_rebinding = False
             for state in document.get('states',[]):
                 if isinstance(state,dict):
                     for field in ('entry','do','exit'):
-                        state.pop(field,None)
-            document = validate_state_machine(document,())
+                        ref=state.get(field)
+                        if isinstance(ref,str) and ref in ros_refmap:
+                            state[field]=ros_refmap[ref]
+                        elif ref:
+                            state.pop(field,None)
+                            needs_rebinding=True
+            document = validate_state_machine(document,(),clean_ros_tasks)
             layout=item.get('layout') or {'positions':{}}
             positions=layout.get('positions',{}) if isinstance(layout,dict) else {}
             keys={state['id'] for state in document['states']}
@@ -417,7 +444,7 @@ class RobotSystems:
                 for key,point in positions.items()
             ):
                 fail(f'$.state_machines[{i}].layout','invalid_layout','画布布局无效')
-            clean_machines.append({'name':str(item.get('name') or '导入状态机')[:80], 'document': document, 'layout':{'positions':copy.deepcopy(positions)}, 'needs_tree_rebinding':True})
+            clean_machines.append({'name':str(item.get('name') or '导入状态机')[:80], 'document': document, 'layout':{'positions':copy.deepcopy(positions)}, 'needs_tree_rebinding':needs_rebinding})
         # 当前资产系统只认可内置模拟标定证据；未来真实标定须由独立校验器接入
         allowed_fixture = json.loads(
             (self.example / "assets" / "camera_to_arm.json").read_text(encoding="utf-8")
@@ -503,9 +530,11 @@ class RobotSystems:
             "pending_state_machines": clean_machines,
         }
         self.store.put("robot_system", key, record)
+        for item in clean_ros_tasks:
+            self.store.put('ros_task',item['id'],item)
         for machine in clean_machines:
             mid='machine_'+uuid4().hex
-            self.store.put('state_machine',mid,{'id':mid,'name':machine['name'],'document':machine['document'],'layout':machine.get('layout',{'positions':{}}),'revision':1,'robot_system_id':key,'needs_tree_rebinding':True})
+            self.store.put('state_machine',mid,{'id':mid,'name':machine['name'],'document':machine['document'],'layout':machine.get('layout',{'positions':{}}),'revision':1,'robot_system_id':key,'needs_tree_rebinding':machine['needs_tree_rebinding']})
         record.pop('pending_state_machines',None)
         self.store.put('robot_system',key,record)
         return record
@@ -548,6 +577,8 @@ class RobotSystems:
         self.store.put("robot_system", record["id"], record)
 
     def require_stopped(self):
+        if any(r['snapshot']['state'] in {'ACCEPTED','RUNNING','CANCELING','UNKNOWN'} or r['snapshot']['stop_state']=='UNCONFIRMED' for r in self.store.list('ros_operation')):
+            fail('$.operations','operation_not_stopped','ROS 操作停止未确认，不能切换系统')
         if self.context.state != "STOPPED":
             fail("$.system", "apply_not_stopped", "请先确认机器人系统已经停止")
         if any(

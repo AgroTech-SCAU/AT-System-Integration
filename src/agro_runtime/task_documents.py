@@ -1,5 +1,6 @@
 """实际节点注册驱动的 XML、类型流、子树与持久发布服务"""
 import copy
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -48,6 +49,7 @@ def literal(port,spec):
     if port['kind']=='blackboard_reference':
         return '{'+str(port['key'])+'}'
     value=port.get('value')
+    if spec.get('type')=='json':return 'json:'+encoded(value)
     if spec.get('quantity'):
         return 'json:'+encoded({'value':value,'unit':port.get('type',{}).get('unit',spec.get('unit','1'))})
     return value if isinstance(value,str) else ('json:' if isinstance(value,(dict,list)) else '')+encoded(value)
@@ -55,14 +57,52 @@ def literal(port,spec):
 
 class TaskDocuments:
     def __init__(self,context,store,assets):
-        self.context=context;self.store=store;self.assets=assets;self._models=None;self._model_key=None
+        self.context=context;self.store=store;self.assets=assets;self._models=None;self._model_key=None;self.ros_tasks=None;self._ros_override=None
+
+    @staticmethod
+    def requires_system(document):
+        return any(node['registration_id'].startswith('Capability_')
+                   for tree in document['trees'].values() for node in tree['nodes'].values())
+
+    def ros_definitions(self):
+        if self._ros_override is not None:
+            return copy.deepcopy(self._ros_override)
+        return self.ros_tasks.list() if self.ros_tasks and self.ros_tasks.robots.selected_id() else []
+
+    def registry_snapshot(self):
+        return {**self.context.snapshot(), 'ros_tasks': self.ros_definitions()}
+
+    @contextmanager
+    def frozen_ros(self, definitions):
+        previous = self._ros_override
+        self._ros_override = definitions
+        try:
+            yield
+        finally:
+            self._ros_override = previous
+
+    def _ros_models(self, nodes):
+        for task in self.ros_definitions():
+            name = 'RosTask_'+task['id']
+            if name not in nodes:
+                nodes[name] = {'registration_id':name, 'category':'ACTION', 'minimum_children':0,
+                               'maximum_children':0, 'editable':True, 'ports':{}}
+            model = nodes[name]
+            model.update(ros_task_id=task['id'], label=task['name'], description=task['name'],
+                         capability_id='ros.'+task['id'], resources=task.get('resources', []))
+            model['ports'] = {'node_id':{'type':'string','direction':'INPUT','required':False}}
+            for direction, key, prefix in (('INPUT','inputs',''), ('OUTPUT','outputs','out_')):
+                for port_name, spec in task.get(key, {}).items():
+                    model['ports'][prefix+port_name] = {**spec, 'direction':direction,
+                        'required': direction=='INPUT', 'quantity':spec['type'] in {'integer','number'}}
+        return nodes
 
     def engine(self,xml=None,blackboard=None,describe=False):
         executable=self.context.tasks.executable
         if not executable or not Path(executable).is_file() or not os.access(executable,os.X_OK):
             fail('$.task_engine','task_engine_unavailable','需要可执行的实际行为树引擎')
         with tempfile.TemporaryDirectory(prefix='agro-tree-') as directory:
-            root=Path(directory);(root/'registry.json').write_text(encoded(self.context.snapshot()))
+            root=Path(directory);(root/'registry.json').write_text(encoded(self.registry_snapshot()))
             args=[executable,'--registry',str(root/'registry.json')]
             if describe:
                 args+=['--describe-nodes']
@@ -94,9 +134,10 @@ class TaskDocuments:
                          'maximum_children':-1 if name in control else 1 if name in decorators else 0,
                          'ports':{},'editable':True}
                    for name in sorted(control|decorators|actions)}
+            self._ros_models(nodes)
             return {'nodes':nodes,'digest':digest(nodes),'system_snapshot_id':self.context.snapshot_id,
                     'offline_only':True}
-        key=(self.context.snapshot_id,hashlib.sha256(Path(executable).read_bytes()).hexdigest())
+        key=(self.context.snapshot_id,hashlib.sha256(Path(executable).read_bytes()).hexdigest(),digest(self.ros_definitions()))
         if self._model_key==key:return copy.deepcopy(self._models)
         models=self.engine(describe=True)
         nodes=models['nodes']
@@ -123,6 +164,7 @@ class TaskDocuments:
                 model['ports']['role']['required']=False;model['ports']['backend_instance']['required']=False
             for spec in model['ports'].values():
                 if spec['type'] in {'number','integer'}:spec.setdefault('unit','1')
+        self._ros_models(nodes)
         models['digest']=digest(nodes);models['system_snapshot_id']=self.context.snapshot_id
         self._models=copy.deepcopy(models);self._model_key=key
         return models
@@ -238,7 +280,7 @@ class TaskDocuments:
                 if identity in seen or identity not in tree['nodes']:fail('$.children','invalid_control_tree','节点缺失或控制环')
                 node=tree['nodes'][identity];attrs={k:v for k,v in node['attributes'].items() if k!='node_id'}
                 attrs['name']=identity
-                if node['registration_id'].startswith('Capability_'):attrs['node_id']=identity
+                if node['registration_id'].startswith(('Capability_','RosTask_')):attrs['node_id']=identity
                 specs=self.port_specs(node,document,models)
                 attrs.update({k:literal(v,specs.get(k,{})) for k,v in node['ports'].items()})
                 child=ET.SubElement(parent,node['registration_id'],attrs);mapping[identity]={'tree_id':tree_id,'editor_id':identity}
@@ -325,7 +367,7 @@ class TaskDocuments:
                     ports[name]=['reference',variables[key]]
                 else:ports[name]=['literal',value.get('value'),value.get('type',{}).get('unit')]
             attrs={k:v for k,v in node['attributes'].items() if k in {'role','backend_instance'}}
-            if node['registration_id'].startswith('Capability_'):
+            if node['registration_id'].startswith(('Capability_','RosTask_')):
                 stages.append(node)
             return [node['registration_id'],attrs,ports,[visit(c) for c in node['expanded_children']]]
         return visit(self.expanded(document)),stages
@@ -361,7 +403,7 @@ class TaskDocuments:
                 if not model or not model['editable']:error('unregistered_node','节点未注册或没有明确编辑语义',tree_id,identity)
                 elif len(node['children'])<model['minimum_children'] or model['maximum_children']>=0 and len(node['children'])>model['maximum_children']:
                     error('invalid_child_count','子节点数量不符合实际节点语义',tree_id,identity)
-                attrs={'ID'} if registration=='SubTree' else {'role','backend_instance','node_id'} if registration.startswith('Capability_') else set()
+                attrs={'ID'} if registration=='SubTree' else {'role','backend_instance','node_id'} if registration.startswith('Capability_') else {'node_id'} if registration.startswith('RosTask_') else set()
                 if set(node['attributes'])-attrs:error('unsupported_attribute','不允许脚本、隐式重映射或未知语义属性',tree_id,identity)
                 if registration.startswith('Capability_') and model:
                     role=node['attributes'].get('role');backend=node['attributes'].get('backend_instance')
@@ -631,8 +673,8 @@ class TaskDocuments:
         """Explicitly revalidate a draft against the currently active node catalog."""
         draft=self.store.get('tree_draft',key)
         self._check_ownership(draft)
-        if not self.assets.robot_systems or not self.assets.robot_systems.active():
-            fail('$.system','configuration_not_active','系统配置尚未应用，不能将离线草稿发布到当前系统')
+        if self.requires_system(draft['document']) and (not self.assets.robot_systems or not self.assets.robot_systems.active()):
+            fail('$.system','configuration_not_active','此行为树包含系统能力，请先应用机器人配置')
         models=self.describe_nodes()
         if models.get('offline_only'):
             fail('$.task_engine','task_engine_unavailable','需要先安装并检查行为树执行器')
@@ -673,15 +715,20 @@ class TaskDocuments:
         else:
             manifest={'kind':draft['policy'],'assets':{},'parameters':draft['document']['inputs'],'max_targets':8,'max_recovery_attempts':0,'timeout_ms':30000}
         (root/'task.task.json').write_text(encoded(manifest));(root/'task.task.json').chmod(0o400)
-        definition={'id':key_definition,'draft_id':key,'revision':revision,'system_snapshot_id':self.context.snapshot_id,'model_digest':checked['model_digest'],'document':draft['document'],'layout':draft['layout'],'xml':compiled['xml'],'xml_sha256':checked['xml_sha256'],'manifest':manifest,'parameters':draft['parameters'],'node_mapping':checked['node_mapping'],'blackboard':checked['blackboard'],'task_ref':str(xml),'immutable':True,'robot_system_id':draft.get('robot_system_id')}
+        definition={'id':key_definition,'draft_id':key,'revision':revision,'system_snapshot_id':self.context.snapshot_id,'model_digest':checked['model_digest'],'document':draft['document'],'layout':draft['layout'],'xml':compiled['xml'],'xml_sha256':checked['xml_sha256'],'manifest':manifest,'parameters':draft['parameters'],'node_mapping':checked['node_mapping'],'blackboard':checked['blackboard'],'task_ref':str(xml),'immutable':True,'robot_system_id':draft.get('robot_system_id'),'ros_tasks':self.ros_definitions()}
         definition['digest']=digest({k:v for k,v in definition.items() if k not in {'id','layout','task_ref'}})
         (root/'definition.json').write_text(encoded(definition));(root/'definition.json').chmod(0o400)
         self.store.put('tree_definition',key_definition,definition);draft['published']=key_definition;self.store.put('tree_draft',key,draft)
         return definition
 
-    def definition_request(self,key,request_id):
-        from .tasks import TaskStart
+    def definition_request(self,key,request_id,parameters=None):
         definition=self.store.get('tree_definition',key)
+        with self.frozen_ros(definition.get('ros_tasks', [])):
+            return self._definition_request(definition, request_id, parameters)
+
+    def _definition_request(self,definition,request_id,parameters=None):
+        from .tasks import TaskStart
+        key=definition['id']
         self._check_ownership(definition)
         if definition['system_snapshot_id']!=self.context.snapshot_id or definition['model_digest']!=self.describe_nodes()['digest']:fail('$.definition','snapshot_conflict','发布定义与当前实际系统或节点模型不一致')
         path=Path(definition['task_ref']).resolve()
@@ -689,7 +736,7 @@ class TaskDocuments:
         if hashlib.sha256(path.read_bytes()).hexdigest()!=definition['xml_sha256']:fail('$.definition','definition_checksum_mismatch','不可变 XML 摘要已改变')
         checked=self.validate_tree(definition['document'],definition['manifest']['kind'],definition['parameters'])
         if not checked['valid']:fail('$.definition','definition_invalid',encoded(checked['diagnostics']))
-        return TaskStart(task_ref=str(path),parameters=definition['parameters'],request_id=request_id)
+        return TaskStart(task_ref=str(path),parameters=definition['parameters'] if parameters is None else parameters,request_id=request_id)
 
     def frozen_definition(self,path):
         for definition in self.store.list('tree_definition'):

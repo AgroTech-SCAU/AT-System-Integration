@@ -1,5 +1,5 @@
 import {useState} from 'react'
-import {Field,Panel} from '../../components/Foundation'
+import {Field} from '../../components/Foundation'
 import {Parameters,type Json} from '../shared'
 
 const TYPES=[{value:'string',label:'字符串'},{value:'number',label:'小数'},{value:'integer',label:'整数'},{value:'boolean',label:'布尔值'}]
@@ -42,10 +42,10 @@ export default function TaskInputs({specs,values,disabled,onChange}:Props){
    modify(key,{default:n})
   }else modify(key,{default:raw})
  }
- return <Panel title="任务参数" subtitle="每个任务独立定义参数，不需要选择模板">
+ return <section><h3>任务参数</h3>
   <div className="task-input-add"><Field label="新参数标识"><input disabled={disabled} value={name} placeholder="如 target_speed" onChange={e=>{setName(e.target.value);setError('')}} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();add()}}}/></Field><button type="button" className="primary" disabled={disabled} onClick={add}>添加参数</button></div>
   {error&&<p className="error" role="alert">{error}</p>}
-  {!entries.length&&<p className="muted">当前任务没有参数，可以直接编辑行为树或添加参数</p>}
+  {!entries.length&&<p className="muted">未声明任务参数</p>}
   <div className="task-input-list">{entries.map(([key,spec])=><div className="task-input-card" key={key}>
     <div className="task-input-title"><strong>{key}</strong><button disabled={disabled} onClick={()=>remove(key)}>删除</button></div>
     <div className="task-input-fields">
@@ -58,5 +58,5 @@ export default function TaskInputs({specs,values,disabled,onChange}:Props){
     </div>
   </div>)}</div>
   {!!entries.length&&<><h3>运行时参数</h3><Parameters specs={specs} value={values} onChange={next=>onChange(specs,next)}/></>}
- </Panel>
+ </section>
 }
