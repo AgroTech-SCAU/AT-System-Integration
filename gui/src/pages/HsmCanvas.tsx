@@ -47,7 +47,7 @@ export default function HsmCanvas({states,transitions,layout,selected,onSelect,o
  const [connection,setConnection]=useState<Connection|null>(null),[dragging,setDragging]=useState(false)
  const [renaming,setRenaming]=useState<string|null>(null),[name,setName]=useState(''),[externalOpen,setExternalOpen]=useState(false)
  const scopeId=scope||states.find(s=>!s.parent)?.id||''
- const [collapsed,setCollapsed]=useState<Set<string>>(new Set()),[dropTarget,setDropTarget]=useState('')
+ const [collapsed,setCollapsed]=useState<Set<string>>(()=>new Set(states.filter(state=>state.parent&&states.some(parent=>parent.id===state.parent&&parent.parent)).map(state=>state.id))),[dropTarget,setDropTarget]=useState('')
  const menuAnchor=useRef<HTMLSpanElement>(null)
  const [menu,setMenu]=useState<{x:number;y:number;point:{x:number;y:number};state?:string;edge?:number;parent?:string}|null>(null)
  const nested=nestedHsmLayout(states,scopeId,layout.positions,collapsed,preview)
@@ -70,13 +70,13 @@ export default function HsmCanvas({states,transitions,layout,selected,onSelect,o
  },[visible,updateView])
  const fitRef=useRef(fit);fitRef.current=fit
  const zoomAt=(factor:number,clientX?:number,clientY?:number,direct=false)=>{
-  const bounds=surface.current?.getBoundingClientRect();if(!bounds)return
+  const bounds=surface.current?.getBoundingClientRect();if(!bounds||!visible.length)return
   const x=clientX===undefined?bounds.width/2:clientX-bounds.left,y=clientY===undefined?bounds.height/2:clientY-bounds.top,current=camera.current(),scale=clamp(current.scale*factor,.25,2)
   updateView({x:x-(x-current.x)/current.scale*scale,y:y-(y-current.y)/current.scale*scale,scale},direct)
  }
  useEffect(()=>{if(!surface.current)return;let first=true;const observer=new ResizeObserver(([entry])=>{setSize({width:entry.contentRect.width,height:entry.contentRect.height});if(first&&entry.contentRect.width&&entry.contentRect.height){first=false;if(!views.current[scopeId])fitRef.current()}});observer.observe(surface.current);return()=>observer.disconnect()},[scopeId])
  useEffect(()=>{setRenaming(null);setExternalOpen(false);setConnection(null);setMenu(null);const saved=views.current[scopeId];if(saved)updateView(saved);else requestAnimationFrame(()=>fitRef.current());return()=>{views.current[scopeId]=viewRef.current}},[scopeId,updateView])
- useEffect(()=>{const element=surface.current;if(!element)return;const wheel=(event:WheelEvent)=>{if((event.target as Element).closest('button,input,[role=menu]'))return;event.preventDefault();setMenu(null);const unit=event.deltaMode===1?16:event.deltaMode===2?element.clientHeight:1;zoomAt(Math.exp(-clamp(event.deltaY*unit,-150,150)*.0025),event.clientX,event.clientY,true)};element.addEventListener('wheel',wheel,{passive:false});return()=>element.removeEventListener('wheel',wheel)},[updateView])
+ useEffect(()=>{const element=surface.current;if(!element)return;const wheel=(event:WheelEvent)=>{if((event.target as Element).closest('button,input,[role=menu]'))return;event.preventDefault();if(!visible.length)return;const unit=event.deltaMode===1?16:event.deltaMode===2?element.clientHeight:1;zoomAt(Math.exp(-clamp(event.deltaY*unit,-150,150)*.0025),event.clientX,event.clientY,true)};element.addEventListener('wheel',wheel,{passive:false});return()=>element.removeEventListener('wheel',wheel)},[updateView,visible.length])
  useEffect(()=>()=>{if(frame.current!==null)cancelAnimationFrame(frame.current)},[])
  const beginRename=(state:State)=>{if(!onRename)return;renameCanceled.current=false;setName(state.label);setRenaming(state.id)}
  const finishRename=()=>{if(renaming&&!renameCanceled.current&&name.trim())onRename?.(renaming,name.trim());setRenaming(null)}
@@ -88,7 +88,7 @@ export default function HsmCanvas({states,transitions,layout,selected,onSelect,o
   event.stopPropagation();setMenu(null);capture(event)
   if(connection&&event.button===0&&!space.current){completeConnection(connection,state.id);return}
   if(space.current||event.button===1){const v=viewRef.current;drag.current={kind:'pan',x:v.x,y:v.y,px:event.clientX,py:event.clientY};setDragging(true);return}
-  onSelect(state.id);if(readOnly)return;const p=localPoint(event.clientX,event.clientY),box=boxRef.current[state.id],parent=boxRef.current[box.parent||'']
+  onSelect(state.id);if(readOnly)return;const p=localPoint(event.clientX,event.clientY),box=boxRef.current[state.id],parent=boxRef.current[box.parent||''];if(p.y>box.y+43)return
   drag.current={kind:'node',id:state.id,px:p.x,py:p.y,moved:false,localX:box.x-(parent?parent.x+24:0),localY:box.y-(parent?parent.y+132:0)}
  }
  const portDown=(event:PointerEvent<SVGCircleElement>,id:string,side:Side)=>{
@@ -99,7 +99,7 @@ export default function HsmCanvas({states,transitions,layout,selected,onSelect,o
   drag.current={kind:'connect',id,side,px:p.x,py:p.y,moved:false};setConnection({id,side,...p});onSelect(id)
  }
  const blankDown=(event:PointerEvent<SVGSVGElement>)=>{
-  if(event.button!==0&&event.button!==1)return
+  if(event.button!==0&&event.button!==1||!visible.length)return
   setMenu(null);setConnection(null);capture(event);const v=viewRef.current;drag.current={kind:'pan',x:v.x,y:v.y,px:event.clientX,py:event.clientY};setDragging(true)
  }
  const move=(event:PointerEvent<SVGSVGElement>)=>{
@@ -147,10 +147,10 @@ export default function HsmCanvas({states,transitions,layout,selected,onSelect,o
    if(event.key==='F2'){event.preventDefault();const state=states.find(s=>s.id===selected);if(state)beginRename(state)}
    if(event.key==='Escape'){drag.current=null;setConnection(null);setPreview(null);setDragging(false);setExternalOpen(false);setMenu(null)}
   }} onKeyUp={event=>{if(event.code==='Space')space.current=false}} onBlur={()=>{space.current=false}}>
-   <svg ref={svg} className="wb-graph" width={size.width} height={size.height} role="group" aria-label={t("{0}的子状态", {0: owner?.label||t("状态机")})} onPointerDown={blankDown} onPointerMove={move} onPointerUp={event=>finish(event)} onPointerCancel={event=>finish(event,true)} onContextMenu={event=>showMenu(event)} onDoubleClick={event=>{if(!readOnly&&(event.target===svg.current||(event.target as Element).classList.contains('wb-scope-body'))){const p=localPoint(event.clientX,event.clientY);createAt(p,containingState(p)?.id)}}}>
+   <svg ref={svg} className="wb-graph" width={size.width} height={size.height} role="group" aria-label={t("{0}的子状态", {0: owner?.label||t("状态机")})} onPointerDown={blankDown} onPointerMove={move} onPointerUp={event=>finish(event)} onPointerCancel={event=>finish(event,true)} onContextMenu={event=>showMenu(event)} onDoubleClick={event=>{event.preventDefault()}}>
     <defs><marker id={marker+'-arrow'} markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M1 1 L7 4 L1 7"/></marker></defs>
     <motion.g style={{x:camera.x,y:camera.y,scale:camera.scale,originX:0,originY:0,transformBox:"view-box"}}>
-     <g className="wb-scope-frame"><rect className="wb-scope-body" x="0" y="0" width={scopeWidth} height={scopeHeight} rx="12"/><text className="wb-scope-title" x="18" y="28">{owner?.label||t("状态机")}</text><text className="wb-scope-kind" x={scopeWidth-16} y="28" textAnchor="end">{owner?.parent?t("复合状态"):t("根状态")} · {t("{0} 个子状态",{0:states.filter(state=>state.parent===scopeId).length})}</text><path d={`M0 42 H${scopeWidth}`}/></g>
+     {visible.length>0&&<g className="wb-scope-frame"><rect className="wb-scope-body" x="0" y="0" width={scopeWidth} height={scopeHeight} rx="12"/><text className="wb-scope-title" x="18" y="28">{owner?.label||t("状态机")}</text><text className="wb-scope-kind" x={scopeWidth-16} y="28" textAnchor="end">{owner?.parent?t("复合状态"):t("根状态")} · {t("{0} 个子状态",{0:states.filter(state=>state.parent===scopeId).length})}</text><path d={`M0 42 H${scopeWidth}`}/></g>}
      {visible.filter(state=>boxes[state.id].expanded).map(state=>{const b=boxes[state.id];return <rect x={b.x} y={b.y} width={b.width} height={b.height} key={'background'+state.id} className={'wb-container-bg'+(activePath.includes(state.id)?' is-live':'')} rx="9"/>})}
      {visible.filter(state=>boxes[state.id].expanded&&state.initial&&boxes[state.initial]).map(state=>{const b=boxes[state.initial!];return <g className="wb-initial" key={'initial'+state.id}><circle cx={b.x-17} cy={b.y+56} r="3"/><path d={`M${b.x-13} ${b.y+56} H${b.x-4}`} markerEnd={`url(#${marker}-arrow)`}/></g>})}
      {initial&&<g className="wb-initial" aria-label={t("初始状态")}><circle cx={initial[0]-32} cy={initial[1]+H/2} r="4"/><path d={`M${initial[0]-27} ${initial[1]+H/2} H${initial[0]-5}`} markerEnd={`url(#${marker}-arrow)`}/></g>}
@@ -166,7 +166,7 @@ export default function HsmCanvas({states,transitions,layout,selected,onSelect,o
 
      {visible.map(state=>{
       const p=positions[state.id],box=boxes[state.id],width=box.width,height=box.height,children=states.filter(s=>s.parent===state.id),live=activePath.includes(state.id),task=state.do?taskLabels[state.do]||t("关联行为"):children.length?t("{0} 个子状态", {0: children.length}):t("添加状态行为")
-      return <g key={state.id} className={'wb-node'+(selected===state.id&&selectedTransition==null?' is-selected':'')+(preview?.id===state.id?' is-dragging':'')+(live?' is-live':'')+(connection?.target===state.id||dropTarget===state.id?' is-target':'')+(box.expanded?' is-composite':'')} transform={`translate(${p[0]} ${p[1]})`} role="button" tabIndex={0} aria-label={t("状态 {0}", {0: state.label})} onPointerDown={event=>nodeDown(event,state)} onContextMenu={event=>showMenu(event,state.id)} onDoubleClick={event=>{event.stopPropagation();if(children.length)onEnter?.(state.id);else beginRename(state)}} onKeyDown={event=>{if(event.key==='Enter'){event.preventDefault();onSelect(state.id);if(children.length)onEnter?.(state.id)}if(event.key==='F2'){event.preventDefault();beginRename(state)}}}>
+      return <g key={state.id} className={'wb-node'+(selected===state.id&&selectedTransition==null?' is-selected':'')+(preview?.id===state.id?' is-dragging':'')+(live?' is-live':'')+(connection?.target===state.id||dropTarget===state.id?' is-target':'')+(box.expanded?' is-composite':'')} transform={`translate(${p[0]} ${p[1]})`} role="button" tabIndex={0} aria-label={t("状态 {0}", {0: state.label})} onPointerDown={event=>nodeDown(event,state)} onContextMenu={event=>showMenu(event,state.id)} onDoubleClick={event=>{event.stopPropagation();onEnter?.(state.id)}} onKeyDown={event=>{if(event.key==='Enter'){event.preventDefault();onSelect(state.id);if(children.length)onEnter?.(state.id)}if(event.key==='F2'){event.preventDefault();beginRename(state)}}}>
        <rect className="wb-node-body" width={width} height={height} rx="9"/>{box.expanded&&<rect className="wb-container-handle" width={width} height="112" rx="9"/>}
        <rect className="wb-node-separator" x="12" y="43" width={width-24} height=".6"/>
        <g className="wb-node-glyph" transform="translate(13 13)">{children.length?<><rect width="13" height="13" rx="3"/><path d="M3 5 H10 M3 8 H7"/></>:<rect width="13" height="13" rx="4"/>}</g>
@@ -181,11 +181,11 @@ export default function HsmCanvas({states,transitions,layout,selected,onSelect,o
      })}
     </motion.g>
    </svg>
-   {!visible.length&&<div className="wb-canvas-empty"><span className="wb-empty-glyph">＋</span><strong>{t("在这里组织状态")}</strong><span>{t("双击画布添加状态")}</span>{!readOnly&&<button onClick={()=>onCreate?.(80,90)}>{t("添加第一个状态")}</button>}</div>}
-   <div className="wb-canvas-tools"><button onClick={()=>zoomAt(1/1.15)} aria-label={t("缩小画布")} title={t("缩小 −")}>−</button><button className="wb-zoom-value" onClick={()=>{const bounds=surface.current?.getBoundingClientRect();if(bounds)zoomAt(1/view.scale)}} title={t("恢复实际大小")}>{Math.round(view.scale*100)}%</button><button onClick={()=>zoomAt(1.15)} aria-label={t("放大画布")} title={t("放大 +")}>＋</button><span/><button onClick={fit} title={t("适合画布 0")}>{t("适合")}</button>{!readOnly&&<button onClick={()=>{onReset();requestAnimationFrame(()=>fitRef.current())}}>{t("整理")}</button>}</div>
+   {!visible.length&&<div className="wb-canvas-empty"><span className="wb-empty-glyph">＋</span><strong>{t("在这里组织状态")}</strong><span>{t("添加第一个状态，配置进入、期间与离开行为")}</span>{!readOnly&&<button onClick={()=>onCreate?.(80,90)}>{t("添加第一个状态")}</button>}</div>}
+   {visible.length>0&&<div className="wb-canvas-tools"><button onClick={()=>zoomAt(1/1.15)} aria-label={t("缩小画布")} title={t("缩小 −")}>−</button><button className="wb-zoom-value" onClick={()=>{const bounds=surface.current?.getBoundingClientRect();if(bounds)zoomAt(1/view.scale)}} title={t("恢复实际大小")}>{Math.round(view.scale*100)}%</button><button onClick={()=>zoomAt(1.15)} aria-label={t("放大画布")} title={t("放大 +")}>＋</button><span/><button onClick={fit} title={t("适合画布 0")}>{t("适合")}</button>{!readOnly&&<button onClick={()=>{onReset();requestAnimationFrame(()=>fitRef.current())}}>{t("整理")}</button>}</div>}
    <div className="wb-canvas-hint">{readOnly?t("单击状态查看详情 · 拖动画布平移"):connection?t("选择另一状态的连接点 · Esc 取消"):visible.length?t("左键拖动 · 滚轮缩放 · 右键菜单"):''}</div>
    <span ref={menuAnchor} className="wb-context-anchor" style={{left:menu?.x||0,top:menu?.y||0}} aria-hidden="true"/>
-   <AnimatePresence>{menu&&menuAnchor.current&&<AnchoredPopover anchor={menuAnchor.current} onClose={()=>setMenu(null)} label={t("画布菜单")} role="menu" className="wb-context-menu" align="start">
+   <AnimatePresence>{menu&&menuAnchor.current&&<AnchoredPopover anchor={menuAnchor.current} positionKey={`${menu.x}:${menu.y}`} onClose={()=>setMenu(null)} label={t("画布菜单")} role="menu" className="wb-context-menu" align="start">
     {menuState?<><small>{menuState.label}</small>{!readOnly&&<><button role="menuitem" onClick={()=>menuAction(()=>onCreateIn?.(menuState.id))}>{t("添加子状态")}</button><button role="menuitem" onClick={()=>menuAction(()=>beginRename(menuState))}>{t("重命名状态")}</button>{menuState.parent&&<button role="menuitem" disabled={states.find(state=>state.id===menuState.parent)?.initial===menuState.id} onClick={()=>menuAction(()=>onMakeInitial?.(menuState.id))}>{t("设为初始子状态")}</button>}</>}{states.some(state=>state.parent===menuState.id)&&<><button role="menuitem" onClick={()=>menuAction(()=>toggleChildren(menuState.id))}>{collapsed.has(menuState.id)?t("展开子状态"):t("折叠子状态")}</button><button role="menuitem" onClick={()=>menuAction(()=>onEnter?.(menuState.id))}>{t("进入子状态")}</button></>}{!readOnly&&onDelete&&menuState.parent&&<button role="menuitem" className="is-danger" onClick={()=>menuAction(()=>onDelete(menuState.id))}>{t("删除状态")}</button>}</>:menu.edge!==undefined?<><button role="menuitem" onClick={()=>menuAction(()=>onSelectTransition?.(menu.edge!))}>{t("编辑转换")}</button>{!readOnly&&onDeleteTransition&&<button role="menuitem" className="is-danger" onClick={()=>menuAction(()=>onDeleteTransition(menu.edge!))}>{t("删除转换")}</button>}</>:<>{!readOnly&&<button role="menuitem" onClick={()=>menuAction(()=>createAt(menu.point,menu.parent))}>{menu.parent?t("添加子状态"):t("添加状态")}</button>}<button role="menuitem" onClick={()=>menuAction(fit)}>{t("适合画布")}</button>{!readOnly&&<button role="menuitem" onClick={()=>menuAction(()=>{onReset();requestAnimationFrame(()=>fitRef.current())})}>{t("整理状态")}</button>}</>}
    </AnchoredPopover>}</AnimatePresence>
    {externalEdges.length>0&&<div className="wb-external-edges"><button aria-expanded={externalOpen} onClick={()=>setExternalOpen(!externalOpen)}>↗ {t("{0} 条跨层转换",{0:externalEdges.length})}</button>{externalOpen&&<div className="wb-external-menu">{externalEdges.map(({edge,index})=><button key={index} onClick={()=>{onSelectTransition?.(index);setExternalOpen(false)}}><span>{edge.event}</span><small>{states.find(s=>s.id===edge.source)?.label} → {states.find(s=>s.id===edge.target)?.label}</small></button>)}</div>}</div>}

@@ -381,7 +381,6 @@ class TaskDocuments:
             for issue in exc.issues:error(issue.code,issue.reason,port=issue.path)
             return {'valid':False,'diagnostics':diagnostics,'sources':[]}
         if document['readonly']:error('readonly_xml','保留未支持的原始 XML，不允许发布')
-        if document['model_digest']!=models['digest']:error('node_model_changed','实际系统节点契约已改变，请重新加载并核对')
         trees=document['trees']
         if document['main_tree_id'] not in trees:error('unknown_main_tree','执行根树不存在')
         if len(trees)>32 or sum(len(t['nodes']) for t in trees.values())>1000:error('tree_too_large','文档超过树或节点数量上限')
@@ -659,6 +658,19 @@ class TaskDocuments:
         policy='general' if template=='tomato_picker' else template
         return self.store.put('tree_draft',key,{'id':key,'revision':1,'layout_revision':1,'policy':policy,'base_snapshot_id':self.context.snapshot_id,'document':document,'layout':LayoutDocument().model_dump(mode='json'),'parameters':{},'validation':None,'published':None,'robot_system_id':self.assets.robot_systems.selected_id() if self.assets.robot_systems else None})
 
+    def copy_behavior(self, reference, name):
+        original = self.store.get('tree_draft' if reference.startswith('draft_') else 'tree_definition', reference)
+        self._check_ownership(original)
+        document, layout = copy.deepcopy(original['document']), copy.deepcopy(original['layout'])
+        layout.setdefault('labels', {})[document['trees'][document['main_tree_id']]['root_id']] = name
+        identity = 'draft_' + uuid4().hex
+        record = {'id': identity, 'revision': 1, 'layout_revision': 1,
+                  'policy': original.get('policy', original.get('manifest', {}).get('kind', 'general')),
+                  'base_snapshot_id': self.context.snapshot_id, 'document': document, 'layout': layout,
+                  'parameters': copy.deepcopy(original['parameters']), 'validation': None, 'published': None,
+                  'robot_system_id': original.get('robot_system_id')}
+        return self.store.put('tree_draft', identity, record)
+
     def save(self,key,revision,layout_revision,document,layout,parameters):
         draft=self.store.get('tree_draft',key)
         self._check_ownership(draft)
@@ -674,11 +686,7 @@ class TaskDocuments:
         """Explicitly revalidate a draft against the currently active node catalog."""
         draft=self.store.get('tree_draft',key)
         self._check_ownership(draft)
-        if self.requires_system(draft['document']) and (not self.assets.robot_systems or not self.assets.robot_systems.active()):
-            fail('$.system','configuration_not_active','此行为树包含系统能力，请先应用机器人配置')
         models=self.describe_nodes()
-        if models.get('offline_only'):
-            fail('$.task_engine','task_engine_unavailable','需要先安装并检查行为树执行器')
         document=copy.deepcopy(draft['document'])
         if document['readonly']:
             fail('$.document','readonly_xml','不支持的 XML 不能自动迁移')
@@ -693,7 +701,7 @@ class TaskDocuments:
     def validate_draft(self,key):
         draft=self.store.get('tree_draft',key)
         self._check_ownership(draft)
-        validation=self.validate_tree(draft['document'],draft['policy'],draft['parameters'])
+        validation=self.validate_tree(draft['document'],draft['policy'],draft['parameters'],engine=not self.describe_nodes().get('offline_only'))
         validation['revision']=draft['revision'];draft['validation']=validation
         self.store.put('tree_draft',key,draft);return validation
 
@@ -701,8 +709,14 @@ class TaskDocuments:
         draft=self.store.get('tree_draft',key)
         self._check_ownership(draft)
         if revision!=draft['revision']:fail('$.revision','revision_conflict','发布草稿已改变')
-        if base_snapshot_id!=self.context.snapshot_id or draft['base_snapshot_id']!=base_snapshot_id:fail('$.base_snapshot_id','snapshot_conflict','系统配置已改变，请核对新草稿')
-        checked=self.validate_draft(key)
+        if self.requires_system(draft['document']) and (base_snapshot_id!=self.context.snapshot_id or draft['base_snapshot_id']!=base_snapshot_id):fail('$.base_snapshot_id','snapshot_conflict','系统配置已改变，请核对草稿中的系统能力')
+        if self.describe_nodes().get('offline_only'):
+            fail('$.task_engine','task_engine_unavailable','执行环境缺少行为树引擎，设计内容已保留')
+        task_ids = {node['registration_id'][8:] for tree in draft['document']['trees'].values()
+                    for node in tree['nodes'].values() if node['registration_id'].startswith('RosTask_')}
+        frozen_tasks = [self.ros_tasks.freeze(identity) for identity in sorted(task_ids)] if self.ros_tasks else []
+        with self.frozen_ros(frozen_tasks):
+            checked=self.validate_draft(key)
         if not checked['valid']:fail('$.tree','tree_publish_rejected',encoded(checked['diagnostics']))
         compiled=self.serialize_xml(draft['document']);key_definition='definition_'+uuid4().hex
         root=self.store.root/'plans'/key_definition;root.mkdir(parents=True)
@@ -716,11 +730,18 @@ class TaskDocuments:
         else:
             manifest={'kind':draft['policy'],'assets':{},'parameters':draft['document']['inputs'],'max_targets':8,'max_recovery_attempts':0,'timeout_ms':30000}
         (root/'task.task.json').write_text(encoded(manifest));(root/'task.task.json').chmod(0o400)
-        definition={'id':key_definition,'draft_id':key,'revision':revision,'system_snapshot_id':self.context.snapshot_id,'model_digest':checked['model_digest'],'document':draft['document'],'layout':draft['layout'],'xml':compiled['xml'],'xml_sha256':checked['xml_sha256'],'manifest':manifest,'parameters':draft['parameters'],'node_mapping':checked['node_mapping'],'blackboard':checked['blackboard'],'task_ref':str(xml),'immutable':True,'robot_system_id':draft.get('robot_system_id'),'ros_tasks':self.ros_definitions()}
+        definition={'id':key_definition,'draft_id':key,'revision':revision,'system_snapshot_id':self.context.snapshot_id,'model_digest':checked['model_digest'],'document':draft['document'],'layout':draft['layout'],'xml':compiled['xml'],'xml_sha256':checked['xml_sha256'],'manifest':manifest,'parameters':draft['parameters'],'node_mapping':checked['node_mapping'],'blackboard':checked['blackboard'],'task_ref':str(xml),'immutable':True,'robot_system_id':draft.get('robot_system_id'),'ros_tasks':frozen_tasks}
         definition['digest']=digest({k:v for k,v in definition.items() if k not in {'id','layout','task_ref'}})
         (root/'definition.json').write_text(encoded(definition));(root/'definition.json').chmod(0o400)
         self.store.put('tree_definition',key_definition,definition);draft['published']=key_definition;self.store.put('tree_draft',key,draft)
         return definition
+
+    def prepare_behavior(self, reference):
+        if reference.startswith('draft_'):
+            draft = self.store.get('tree_draft', reference)
+            return self.publish(reference, draft['revision'], self.context.snapshot_id)
+        self.definition_request(reference, 'behavior_preflight')
+        return copy.deepcopy(self.store.get('tree_definition', reference))
 
     def definition_request(self,key,request_id,parameters=None):
         definition=self.store.get('tree_definition',key)
@@ -731,7 +752,9 @@ class TaskDocuments:
         from .tasks import TaskStart
         key=definition['id']
         self._check_ownership(definition)
-        if definition['system_snapshot_id']!=self.context.snapshot_id or definition['model_digest']!=self.describe_nodes()['digest']:fail('$.definition','snapshot_conflict','发布定义与当前实际系统或节点模型不一致')
+        for task in definition.get('ros_tasks', []):
+            self.ros_tasks.verify_support(task)
+        if self.requires_system(definition['document']) and definition['system_snapshot_id']!=self.context.snapshot_id:fail('$.definition','snapshot_conflict','系统配置已改变，请重新检查行为中的能力绑定')
         path=Path(definition['task_ref']).resolve()
         if not path.is_relative_to((self.store.root/'plans'/key).resolve()):fail('$.definition','invalid_definition_path','定义路径不在受控目录')
         if hashlib.sha256(path.read_bytes()).hexdigest()!=definition['xml_sha256']:fail('$.definition','definition_checksum_mismatch','不可变 XML 摘要已改变')

@@ -14,6 +14,31 @@ export const blankMachine=(t:(text:string)=>string=text=>text):MachineSnapshot=>
 export const snapshotOf=(machine:SavedMachine):MachineSnapshot=>({title:machine.name,document:structuredClone(machine.document),layout:structuredClone(machine.layout||{positions:{}})})
 export const fingerprint=(snapshot:MachineSnapshot)=>JSON.stringify(snapshot)
 
+export function statePath(document:MachineDocument,identity:string){
+ const path:string[]=[],seen=new Set<string>()
+ let state=document.states.find(item=>item.id===identity)
+ while(state&&!seen.has(state.id)){
+  seen.add(state.id);path.unshift(state.id)
+  state=document.states.find(item=>item.id===state?.parent)
+ }
+ return path
+}
+
+export function transitionPlan(document:MachineDocument,edge:Transition,activePath?:string[]){
+ const leaf=(identity:string)=>{
+  const seen=new Set<string>()
+  let state=document.states.find(item=>item.id===identity)
+  while(state?.initial&&!seen.has(state.id)){seen.add(state.id);state=document.states.find(item=>item.id===state?.initial)}
+  return state?.id||identity
+ }
+ const source=activePath?.includes(edge.source)?activePath:statePath(document,leaf(edge.source))
+ if(edge.source===edge.target)return {exited:[],retained:source,entered:[]}
+ const target=statePath(document,leaf(edge.target))
+ let common=0
+ while(common<Math.min(source.length,target.length)&&source[common]===target[common])common++
+ return {exited:source.slice(common).reverse(),retained:source.slice(0,common),entered:target.slice(common)}
+}
+
 export function descendants(document:MachineDocument,id:string){
  const result=new Set([id])
  let added=true

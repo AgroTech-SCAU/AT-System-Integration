@@ -40,13 +40,28 @@ def installed_schema(kind, ros_type):
 
 
 class InterfaceLibrary:
-    def __init__(self, store):
+    def __init__(self, store, project_id=None):
         self.store = store
+        self.project_id = project_id
+
+    def configuration(self):
+        return next((item for item in self.store.list('interface_catalog') if item['id'] == self.project_id),
+                    {'id': self.project_id, 'schema_ids': [], 'sources': [], 'base_path': '', 'choices': {}})
 
     def saved(self):
-        return self.store.list('ros_schema') if self.store else []
+        records = self.store.list('ros_schema') if self.store else []
+        if self.project_id:
+            active = set(self.configuration()['schema_ids'])
+            return [item for item in records if item.get('project_id') == self.project_id and item.get('id') in active]
+        return [item for item in records if not item.get('project_id')]
 
     def catalog(self):
+        if self.project_id:
+            primary = self.configuration().get('primary_types')
+            return {'types': [{'ros_type': item['ros_type'], 'source': item.get('source', 'imported'),
+                               'schema_id': item['id'], 'dependency': primary is not None and item['ros_type'] not in primary}
+                              for item in self.saved()],
+                    'configuration': self.configuration()}
         types = {item['ros_type']: {'ros_type': item['ros_type'], 'source': item.get('source', 'cached')}
                  for item in self.saved()}
         for prefix in os.environ.get('AMENT_PREFIX_PATH', '').split(os.pathsep):
@@ -71,12 +86,18 @@ class InterfaceLibrary:
                     continue
         return {'types': sorted(types.values(), key=lambda item: item['ros_type'])}
 
-    def describe(self, kind, ros_type):
+    def describe(self, kind, ros_type, schema_id=None):
         if not isinstance(ros_type, str) or not TYPE.fullmatch(ros_type):
             fail('$.ros_type','invalid_type','接口类型格式无效')
         expected = 'srv' if kind == 'service' else 'action' if kind == 'action' else 'msg'
         if ros_type.split('/')[1] != expected:
             fail('$.ros_type','kind_mismatch','接口类型与通信方式不匹配')
+        if self.project_id:
+            records = self.saved() if not schema_id else [self.store.get('ros_schema', schema_id)]
+            saved = next((item for item in records if item['ros_type'] == ros_type and item.get('project_id') == self.project_id), None)
+            if saved:
+                return {**saved['schema'], 'source': saved.get('source', 'imported'), 'schema_id': saved['id']}
+            fail('$.ros_type', 'type_not_found', '当前工程缺少接口定义，请在接口资源中添加工作区或导入定义文件')
         try:
             result = installed_schema(kind, ros_type)
         except (ImportError, AttributeError, ModuleNotFoundError, ValueError):
@@ -107,8 +128,52 @@ class InterfaceLibrary:
             if ros_type in definitions:
                 fail('$.files','duplicate_definition','导入文件中存在重复接口类型')
             definitions[ros_type] = content
+        schemas = self.compile(definitions)
+        if self.project_id:
+            records = self.persist(definitions, schemas, 'imported')
+            active = {item['ros_type']: item['id'] for item in self.saved()}
+            active.update({item['ros_type']: item['id'] for item in records})
+            configuration = self.configuration()
+            self.store.put('interface_catalog', self.project_id, {**configuration, 'schema_ids': list(active.values()),
+                'primary_types': sorted(set(configuration.get('primary_types', [])) | set(definitions))})
+            return {'types': [{'ros_type': item['ros_type'], 'source': 'imported', 'schema_id': item['id']} for item in records]}
+        self.store.put_many('ros_schema', [(_identity(ros_type), {'ros_type':ros_type,'schema':schema,'source':'imported'})
+                                            for ros_type, schema in schemas.items()])
+        return {'types':[{'ros_type':key,'source':'imported'} for key in schemas]}
+
+    def persist(self, definitions, schemas, source, origins=None):
+        available = {}
+        for item in self.saved():
+            available.update(item.get('definitions', {}))
+        available.update(definitions)
+        records = []
+        for ros_type, schema in schemas.items():
+            closure = {}
+            def collect(identity):
+                if identity in closure or identity not in available:
+                    return
+                closure[identity] = available[identity]
+                package = identity.split('/')[0]
+                for line in available[identity].splitlines():
+                    fields = _without_comment(line).strip().split()
+                    if len(fields) < 2 or fields[0] == '---':
+                        continue
+                    base = re.sub(r'\[.*\]$', '', fields[0])
+                    if re.sub(r'<=\d+$', '', base) in PRIMITIVES or base.startswith(('string', 'wstring')):
+                        continue
+                    nested = base if '/msg/' in base else base.replace('/', '/msg/', 1) if '/' in base else package + '/msg/' + base
+                    collect(nested)
+            collect(ros_type)
+            fingerprint = hashlib.sha256(json.dumps([schema, closure], sort_keys=True).encode()).hexdigest()
+            identity = _identity(self.project_id + ':' + ros_type + ':' + fingerprint)
+            records.append((identity, {'id': identity, 'project_id': self.project_id, 'ros_type': ros_type,
+                                      'schema': schema, 'definition': definitions.get(ros_type),
+                                      'definitions': closure, 'source': (origins or {}).get(ros_type, source)}))
+        return self.store.put_many('ros_schema', records)
+
+    def compile(self, definitions, allow_partial=False, saved_definitions=True):
         schemas, visiting, budget = {}, set(), [0, 0]
-        saved = {item['ros_type']:item['schema'] for item in self.saved()}
+        saved = {item['ros_type']:item['schema'] for item in self.saved()} if saved_definitions else {}
 
         def resolve(ros_type):
             if ros_type in schemas:
@@ -116,6 +181,8 @@ class InterfaceLibrary:
             if ros_type not in definitions:
                 if ros_type in saved:
                     return saved[ros_type]
+                if self.project_id:
+                    fail('$.files','missing_dependency','缺少依赖接口，请添加对应工作区：'+ros_type)
                 try:
                     return installed_schema('publish_once',ros_type)
                 except (ImportError, AttributeError, ModuleNotFoundError, ValueError):
@@ -145,11 +212,19 @@ class InterfaceLibrary:
             schemas[ros_type] = schema
             return schema
 
+        diagnostics = []
         for ros_type in definitions:
-            resolve(ros_type)
-        self.store.put_many('ros_schema', [(_identity(ros_type), {'ros_type':ros_type,'schema':schema,'source':'imported'})
-                                            for ros_type, schema in schemas.items()])
-        return {'types':[{'ros_type':key,'source':'imported'} for key in schemas]}
+            try:
+                resolve(ros_type)
+            except Exception as exc:
+                from .errors import ContractValidationError
+                if not allow_partial or not isinstance(exc, ContractValidationError):
+                    raise
+                diagnostics.extend({'ros_type': ros_type, 'code': issue.code, 'reason': issue.reason} for issue in exc.issues)
+            finally:
+                visiting.clear()
+                budget[:] = [0, 0]
+        return (schemas, diagnostics) if allow_partial else schemas
 
 
 def _without_comment(line):
@@ -203,7 +278,8 @@ def _section(text, package, resolve, budget):
             length = int(array[3]) if array[3] and not array[2] else 0
             if length > 256:
                 fail('$.files','array_too_large','固定长度数组最多支持 256 个表单元素')
-            value = [scalar() for _ in range(length)]
+            element = scalar()
+            value = [copy.deepcopy(element) for _ in range(length)]
         else:
             value = scalar()
         if default:

@@ -31,14 +31,15 @@ def validate_task(raw):
     if not isinstance(name, str) or not 1 <= len(name.strip()) <= 80:
         fail('$.name', 'invalid_name', '填写任务名称')
     interface = data.get('interface', '')
-    if not isinstance(interface, str) or not interface.startswith('/') or len(interface) > 240 or ' ' in interface:
+    if not isinstance(interface, str) or interface and (not interface.startswith('/') or len(interface) > 240 or ' ' in interface):
         fail('$.interface', 'invalid_interface', '填写以 / 开头的 ROS 2 接口名称')
     ros_type = data.get('ros_type', '')
-    if not isinstance(ros_type, str) or not re.fullmatch(r'[A-Za-z][\w]*/(msg|srv|action)/[A-Za-z]\w*', ros_type):
+    if not isinstance(ros_type, str) or ros_type and not re.fullmatch(r'[A-Za-z][\w]*/(msg|srv|action)/[A-Za-z]\w*', ros_type):
         fail('$.ros_type', 'invalid_type', '填写完整消息类型，如 std_msgs/msg/String')
     expected = 'srv' if kind == 'service' else 'action' if kind == 'action' else 'msg'
-    if ros_type.split('/')[1] != expected:
+    if ros_type and ros_type.split('/')[1] != expected:
         fail('$.ros_type', 'kind_mismatch', '接口类型与通信方式不匹配')
+    data['ros_type'] = ros_type
     payload = data.get('payload', {})
     if not isinstance(payload, dict):
         fail('$.payload', 'invalid_payload', '请求内容必须是 JSON 对象')
@@ -155,13 +156,25 @@ class RosTasks:
 
     def list(self):
         key = self._robot()
-        return [t for t in self.store.list('ros_task') if t.get('robot_system_id') == key]
+        return [self._bound(task) for task in self.store.list('ros_task') if task.get('robot_system_id') == key]
+
+    def _bound(self, task):
+        binding = next((item for item in self.store.list('ros_binding')
+                        if item['task_id'] == task['id'] and item['robot_system_id'] == self._robot()), None)
+        return {**task, 'interface': binding['interface'] if binding else task.get('interface', '')}
+
+    def bind(self, identity, interface):
+        task = self.get(identity)
+        validate_task({**task, 'interface': interface})
+        key = self._robot() + '_' + identity
+        return self.store.put('ros_binding', key, {'id': key, 'task_id': identity,
+                              'robot_system_id': self._robot(), 'interface': interface})
 
     def get(self, identity):
         task = self.store.get('ros_task', identity)
         if task.get('robot_system_id') != self._robot():
             fail('$.task', 'ownership', '任务不属于当前机器人')
-        return task
+        return self._bound(task)
 
     def save(self, raw):
         data = validate_task(raw)
@@ -179,11 +192,24 @@ class RosTasks:
         if old and old.get('robot_system_id') != key:
             fail('$.task', 'ownership', '任务不属于当前机器人')
         data.update(id=identity, robot_system_id=key, revision=old['revision'] + 1 if old else 1)
-        return self.store.put('ros_task', identity, data)
+        from .ros_interfaces import InterfaceLibrary
+        try:
+            if not data['ros_type']:
+                fail('$.ros_type', 'type_not_found', '任务尚未选择接口类型')
+            schema = InterfaceLibrary(self.store, key).describe(data['kind'], data['ros_type'], data.get('schema_id'))
+            data['schema_id'] = schema['schema_id']
+        except ContractValidationError as exc:
+            if data.get('schema_id') or any(issue.code != 'type_not_found' for issue in exc.issues):
+                raise
+        interface = data.pop('interface', self._bound(old)['interface'] if old else '')
+        self.store.put('ros_task', identity, data)
+        self.bind(identity, interface)
+        return self.get(identity)
 
     def delete(self, identity):
         self.get(identity)
         self.store.delete('ros_task', identity)
+        self.store.delete('ros_binding', self._robot() + '_' + identity)
         return {'deleted': True}
 
     def connection(self):
@@ -245,15 +271,61 @@ class RosTasks:
                 rclpy.shutdown(context=context)
         return lookup()
 
-    def describe(self, kind, ros_type):
+    def describe(self, kind, ros_type, schema_id=None):
         if kind not in KINDS:
             fail('$.kind', 'invalid_kind', '通信方式无效')
         from .ros_interfaces import InterfaceLibrary
-        return InterfaceLibrary(self.store).describe(kind, ros_type)
+        return InterfaceLibrary(self.store, self._robot()).describe(kind, ros_type, schema_id)
+
+    def freeze(self, identity):
+        data = self.get(identity)
+        if not data.get('interface'):
+            fail('$.task.' + identity, 'missing_endpoint', '任务尚未绑定机器人端点：' + data['name'])
+        expected = self.describe(data['kind'], data['ros_type'], data.get('schema_id'))
+        data['schema_id'] = expected['schema_id']
+        data['interface_schema'] = {name: value for name, value in expected.items() if name not in ('source', 'schema_id')}
+        self.verify_support(data)
+        data['_ros_domain'] = self.connection()['domain_id']
+        return copy.deepcopy(data)
+
+    def verify_support(self, data):
+        from .ros_interfaces import InterfaceLibrary, PRIMITIVES, installed_schema
+        identity = data['id']
+        expected = data.get('interface_schema') or self.describe(data['kind'], data['ros_type'], data.get('schema_id'))
+        schemas = {data['ros_type']: expected}
+        if data.get('schema_id'):
+            record = self.store.get('ros_schema', data['schema_id'])
+            if record.get('project_id') != self._robot():
+                fail('$.task.' + identity, 'ownership', '任务接口定义不属于当前工程')
+            schemas.update(InterfaceLibrary(self.store, self._robot()).compile(record['definitions'], saved_definitions=False))
+        def normalized(value, package):
+            if isinstance(value, dict):
+                return {name: normalized(item, package) for name, item in value.items()}
+            if isinstance(value, str):
+                aliases = {'boolean': 'bool', 'float': 'float32', 'double': 'float64', 'octet': 'byte', 'char': 'uint8'}
+                value = re.sub(r'(?:bounded_)?sequence<(.+?)(?:,\s*(\d+))?>', lambda match: match[1] + ('[<=' + match[2] + ']' if match[2] else '[]'), value)
+                value = re.sub(r'\b(boolean|float|double|octet|char)\b', lambda match: aliases[match[0]], value)
+                value = re.sub(r'(w?string)<(\d+)>', r'\1<=\2', value)
+                value = value.replace('/msg/', '/').replace(' ', '')
+                base = value.split('[', 1)[0]
+                if '/' not in base and base not in PRIMITIVES and not re.fullmatch(r'w?string(?:<=\d+)?', base):
+                    value = package + '/' + value
+                return value
+            return value
+        for ros_type, schema in schemas.items():
+            kind = {'srv': 'service', 'action': 'action', 'msg': 'publish_once'}[ros_type.split('/')[1]]
+            try:
+                actual = installed_schema(kind, ros_type)
+            except (ImportError, AttributeError, ValueError):
+                fail('$.task.' + identity, 'missing_type_support', '执行环境缺少接口类型支持：' + ros_type)
+            for field in ('field_types', 'output_field_types', 'feedback_field_types'):
+                package = ros_type.split('/')[0]
+                if normalized(schema.get(field, {}), package) != normalized(actual.get(field, {}), package):
+                    fail('$.task.' + identity, 'type_support_mismatch', '执行环境接口与任务定义不一致：' + data['name'] + ' / ' + ros_type)
 
     async def run(self, task_id, stop: threading.Event, feedback=None, *, definition=None, inputs=None):
         data = prepared_task(definition if definition is not None else self.get(task_id), inputs)
-        data['_ros_domain']=self.connection()['domain_id']
+        data.setdefault('_ros_domain', self.connection()['domain_id'])
         result = await asyncio.to_thread(self._execute, data, stop, feedback)
         if isinstance(result, str):
             result = {'state':result,'response':data.get('payload',{})}

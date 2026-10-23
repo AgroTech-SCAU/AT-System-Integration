@@ -404,8 +404,9 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
         name: str
         icon: Literal['navigation','arm','vision','operations','mechanical','electrical'] = 'navigation'
         kind: Literal['service', 'action', 'publish_once', 'publish_periodic', 'subscribe_wait']
-        interface: str
+        interface: str = ''
         ros_type: str
+        schema_id: str | None = None
         payload: dict = Field(default_factory=dict)
         inputs: dict = Field(default_factory=dict)
         outputs: dict = Field(default_factory=dict)
@@ -421,6 +422,15 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     class RosOperationRequest(ExecutionRequest):
         ros_task_id: str
+
+    class BehaviorCopy(BaseModel):
+        model_config = ConfigDict(extra='forbid')
+        name: str = Field(min_length=1, max_length=80)
+
+    @api.post('/ros/tasks/{task_id}/copy')
+    async def ros_task_copy(task_id: str, body: BehaviorCopy):
+        original = ros_tasks.get(task_id)
+        return ros_tasks.save({**original, 'id': None, 'name': body.name})
 
     @api.post('/ros/operations', status_code=202)
     async def ros_operation_start(body: RosOperationRequest):
@@ -477,7 +487,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     @api.post('/ros/tasks')
     async def ros_task_save(body: RosTaskSave):
-        return ros_tasks.save(body.model_dump(exclude_none=True))
+        return ros_tasks.save(body.model_dump(exclude_none=True, exclude_unset=True))
 
     @api.delete('/ros/tasks/{task_id}')
     async def ros_task_delete(task_id: str):
@@ -518,7 +528,35 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     @api.get('/ros/interface-types')
     async def ros_interface_types():
         from .ros_interfaces import InterfaceLibrary
-        return InterfaceLibrary(store).catalog()
+        return InterfaceLibrary(store, ros_tasks._robot()).catalog()
+
+    class InterfaceSourceRequest(BaseModel):
+        sources: list[dict] = Field(min_length=1, max_length=16)
+        base_path: str = ''
+        choices: dict[str, str] = Field(default_factory=dict)
+        digest: str = ''
+
+    @api.post('/ros/interface-sources/preview')
+    async def interface_source_preview(body: InterfaceSourceRequest):
+        from .interface_sources import InterfaceSources
+        return InterfaceSources(store, ros_tasks._robot()).preview(body.sources, body.base_path, body.choices)
+
+    @api.put('/ros/interface-sources')
+    async def interface_source_apply(body: InterfaceSourceRequest):
+        from .interface_sources import InterfaceSources
+        return InterfaceSources(store, ros_tasks._robot()).apply(body.sources, body.base_path, body.choices, body.digest)
+
+    class RosBindingSave(BaseModel):
+        interface: str = ''
+
+    @api.get('/ros/bindings')
+    async def ros_bindings():
+        return {'bindings': [{'task_id': item['id'], 'name': item['name'], 'interface': item.get('interface', ''),
+                              'ros_type': item['ros_type'], 'kind': item['kind']} for item in ros_tasks.list()]}
+
+    @api.put('/ros/bindings/{task_id}')
+    async def ros_binding_save(task_id: str, body: RosBindingSave):
+        return ros_tasks.bind(task_id, body.interface)
 
     class RosInterfaceFile(BaseModel):
         name: str = Field(max_length=160)
@@ -531,11 +569,11 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     @api.post('/ros/interface-types/import')
     async def ros_interface_import(body: RosInterfaceImport):
         from .ros_interfaces import InterfaceLibrary
-        return InterfaceLibrary(store).import_files(body.package, [item.model_dump() for item in body.files])
+        return InterfaceLibrary(store, ros_tasks._robot()).import_files(body.package, [item.model_dump() for item in body.files])
 
     @api.get('/ros/schema')
-    async def ros_schema(kind: str, ros_type: str):
-        return ros_tasks.describe(kind,ros_type)
+    async def ros_schema(kind: str, ros_type: str, schema_id: str | None = None):
+        return ros_tasks.describe(kind,ros_type,schema_id)
 
     @api.get('/state-machines')
     async def hsm_list():
@@ -714,6 +752,14 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     @api.get('/trees/drafts')
     async def tree_drafts():
         return {'drafts':[item for item in store.list('tree_draft') if robot_systems.selected_id() and item.get('robot_system_id') == robot_systems.selected_id() and not item.get('test_only')]}
+
+    @api.get('/trees/behaviors')
+    async def tree_behaviors():
+        return {'definitions': hsm.definitions()}
+
+    @api.post('/trees/behaviors/{key}/copy')
+    async def tree_behavior_copy(key: str, body: BehaviorCopy):
+        return documents.copy_behavior(key, body.name)
 
     @api.post('/trees/drafts')
     async def tree_create(body: TreeCreate):

@@ -301,7 +301,7 @@ class TaskManager:
     def preflight(self, request):
         return self._freeze(parse(TaskStart, request))
 
-    async def start_task(self, request, owner, *, standalone=False):
+    async def start_task(self, request, owner, *, standalone=False, control_token=None):
         request = parse(TaskStart, request)
         fingerprint = _digest(request.model_dump(mode='json'))
         async with self._lock:
@@ -313,14 +313,20 @@ class TaskManager:
             if not self.executable or not Path(self.executable).is_file() or not os.access(self.executable, os.X_OK) or not self.endpoint or not self.session_secret:
                 fail('$.task_engine', 'task_engine_unavailable', 'Agent 未配置可用的 C++ 执行器与本机会话入口')
             ready=self.runtime.state=='STOPPED' if standalone else self.runtime.accepting
-            if not ready or self.runtime.engine.control.mode != RobotMode.STANDBY:
+            expected_mode = RobotMode.AUTO if control_token else RobotMode.STANDBY
+            if control_token:
+                self.runtime.engine.control.validate_control(control_token, [])
+            if not ready or self.runtime.engine.control.mode != expected_mode:
                 fail('$.system', 'task_not_ready', '任务启动需要可用的执行环境且处于待命模式')
-            if any(s['state'] in ACTIVE or s['state']=='UNKNOWN' or not s['stop_confirmed'] for s in self.store.list()):
+            if any(status['state']=='UNKNOWN' or not status['stop_confirmed'] and status['state'] not in ACTIVE or
+                   status['state'] in ACTIVE and (not control_token or status.get('control_group') != control_token.owner)
+                   for status in self.store.list()):
                 fail('$.task', 'task_busy', '已有任务执行中、停止未确认或未知结果待核对')
             snapshot = self.preflight(request)
             if standalone and any(node.tag.startswith('Capability_') for node in ET.fromstring(snapshot['xml']).iter()):
                 fail('$.tree','system_required','此行为树包含需要已就绪系统的能力')
             snapshot['standalone_ros']=standalone
+            snapshot['shared_control'] = control_token is not None
             identity = 'task_' + uuid4().hex
             directory = self.directory / identity
             directory.mkdir()
@@ -345,18 +351,22 @@ class TaskManager:
             if validation.returncode:
                 fail('$.task_ref', 'tree_validation_failed', stdout.decode(errors='replace')[:4000])
             ready=self.runtime.state=='STOPPED' if standalone else self.runtime.accepting
-            if not ready or self.runtime.engine.control.mode != RobotMode.STANDBY:
+            if control_token:
+                self.runtime.engine.control.validate_control(control_token, [])
+            if not ready or self.runtime.engine.control.mode != expected_mode:
                 fail('$.system', 'task_not_ready', '校验期间系统或控制状态已改变')
             snapshot_id, _ = SnapshotStore(self.directory / 'snapshots').save(snapshot)
             status = {'task_run_id': identity, 'request_id': request.request_id, 'snapshot_id': snapshot_id,
                       'system_snapshot_id': self.runtime.snapshot_id, 'state': 'ACCEPTED', 'tree_state': 'IDLE',
                       'stop_confirmed': True, 'cancel_requested': False, 'error': None, 'business_result': None,
                       'nodes': [], 'process_identity': None}
+            if control_token:
+                status['control_group'] = control_token.owner
             self.store.reserve(request.request_id, identity, fingerprint, snapshot, status)
             token = None
             process = None
             try:
-                token = self.runtime.engine.control.begin_task(owner,lease_s=65.0) if standalone else self.runtime.take_control('AUTO', owner, lease_s=65.0)
+                token = control_token or (self.runtime.engine.control.begin_task(owner,lease_s=65.0) if standalone else self.runtime.take_control('AUTO', owner, lease_s=65.0))
                 token_path = directory / 'control.json'
                 token_path.write_text(token.model_dump_json())
                 token_path.chmod(0o600)
@@ -393,7 +403,7 @@ class TaskManager:
                 status.update(state=state, stop_confirmed=stopped, error=error)
                 self.store.save(identity, status)
                 self.store.event(identity, {'type':'task_start_failed','state':state,'error':error})
-                if stopped and token and self.runtime.engine.control._epoch == token.control_epoch:
+                if stopped and token and not control_token and self.runtime.engine.control._epoch == token.control_epoch:
                     self.runtime.engine.control.set_mode(RobotMode.STANDBY)
                 for name in ('control.json','session.token'):
                     (directory/name).unlink(missing_ok=True)
@@ -521,7 +531,7 @@ class TaskManager:
                         'attempts':sum(self._stage(identity,o['node_id'])=='grip' for o in related), 'operation_ids':[o['operation_id'] for o in related]})
             self.store.save(identity, status)
             self.store.event(identity, {'type':'task_finished','state':status['state'],'business_result':status['business_result']})
-            if stopped and self.runtime.engine.control.mode == RobotMode.AUTO and self.runtime.engine.control._epoch == epoch:
+            if stopped and not self.store.snapshot(identity).get('shared_control') and self.runtime.engine.control.mode == RobotMode.AUTO and self.runtime.engine.control._epoch == epoch:
                 self.runtime.engine.control.set_mode(RobotMode.STANDBY)
             for name in ('control.json', 'session.token'):
                 (self.directory / identity / name).unlink(missing_ok=True)

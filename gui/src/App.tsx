@@ -247,7 +247,7 @@ export default function App() {
           <p className="nav-caption">{text.application}</p>
           <button className="nav-item" aria-label={text.settings} title={text.settings} aria-current={workspace === 'settings' ? 'page' : undefined} onClick={() => navigate('settings')}>{workspace==='settings'&&<motion.span className="navigation-selection" layoutId="main-navigation" transition={springs.quick}/>}<Icon name="settings" /><span>{text.settings}</span></button>
 
-          <div className="runtime-card"><span className={`dot ${observation ? 'live' : ''}`} />{observation ? text.connected : text.offline}<small>{t("本地运行环境")}</small><small>{selectedRobot?.name||t("未选择机器人系统")}</small></div>
+          <div className="runtime-card"><span className={`dot ${observation ? 'live' : ''}`} />{observation ? text.connected : text.offline}<small>{t("Studio 服务")}</small><small>{selectedRobot?.name||t("未选择机器人系统")}</small></div>
         </aside>
         <section className="content-wrap">
           <div className="top-status"><span className="breadcrumb">{text.subtitle} / {text[workspace]}</span><span className="pill">{text.localOnly}</span><span className="pill"><span className={`dot ${observation ? 'live' : ''}`} />{observation ? text.connected : text.offline}</span></div>

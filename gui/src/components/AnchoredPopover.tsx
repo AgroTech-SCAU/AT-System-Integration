@@ -2,9 +2,9 @@ import {motion, useIsPresent} from 'motion/react'
 import {springs, fade} from '../motion'
 import {useLayoutEffect, useRef, type ReactNode} from 'react'
 
-export function AnchoredPopover({anchor, children, onClose, label, className = '', role = 'dialog', columns = 1, align = 'end'}: {
+export function AnchoredPopover({anchor, children, onClose, label, className = '', role = 'dialog', columns = 1, align = 'end', positionKey}: {
   anchor: HTMLElement; children: ReactNode; onClose: () => void; label: string
-  className?: string; role?: 'dialog' | 'menu' | 'listbox'; columns?: number; align?: 'start' | 'end'
+  className?: string; role?: 'dialog' | 'menu' | 'listbox'; columns?: number; align?: 'start' | 'end'; positionKey?: string
 }) {
   const panel = useRef<HTMLDivElement>(null)
   const present=useIsPresent()
@@ -23,24 +23,34 @@ export function AnchoredPopover({anchor, children, onClose, label, className = '
     const initial = node.querySelector<HTMLElement>('[aria-selected="true"], [aria-checked="true"]')
       || node.querySelector<HTMLElement>('button:not(:disabled)')
     initial?.focus()
+    const dismiss = (event: globalThis.PointerEvent) => {
+      if (role === 'menu' && event.button === 0 && !node.contains(event.target as Node) && !anchor.contains(event.target as Node)) onClose()
+    }
+    document.addEventListener('pointerdown', dismiss, true)
+    const escape = (event: KeyboardEvent) => {
+      if (role === 'menu' && event.key === 'Escape') {event.preventDefault(); onClose()}
+    }
+    document.addEventListener('keydown', escape)
     window.addEventListener('resize', position)
     window.addEventListener('scroll', position, true)
     return () => {
       window.removeEventListener('resize', position)
       window.removeEventListener('scroll', position, true)
+      document.removeEventListener('pointerdown', dismiss, true)
+      document.removeEventListener('keydown', escape)
       if (node.contains(document.activeElement) || document.activeElement === document.body) anchor.focus()
     }
-  }, [anchor, align])
+  }, [anchor, align, positionKey])
 
-  return <motion.div initial={{opacity:0,scale:.985,y:-2}} animate={{opacity:1,scale:1,y:0}} exit={{opacity:0,scale:.99,y:-1,transition:fade}} transition={springs.quick} ref={panel} aria-hidden={!present} popover="auto" role={role} aria-label={label} className={`studio-popover ${className}`}
+  return <motion.div initial={{opacity:0,scale:.985,y:-2}} animate={{opacity:1,scale:1,y:0}} exit={{opacity:0,scale:.99,y:-1,transition:fade}} transition={springs.quick} ref={panel} aria-hidden={!present} popover={role==='menu'?'manual':'auto'} role={role} aria-label={label} className={`studio-popover ${className}`}
     onToggle={event => {if (present && event.newState === 'closed') onClose()}}
     onBlur={() => requestAnimationFrame(() => {
       const node = panel.current
-      if (present && node && !node.contains(document.activeElement)) onClose()
+      if (role !== 'menu' && present && node && !node.contains(document.activeElement)) onClose()
     })}
     onKeyDown={event => {
       if (event.key === 'Escape') {event.preventDefault(); event.stopPropagation(); onClose(); return}
-      if (event.key === 'Tab') {onClose(); return}
+      if (event.key === 'Tab') {if (role !== 'menu') onClose(); return}
       const buttons = Array.from(panel.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') || [])
       const index = buttons.indexOf(document.activeElement as HTMLButtonElement)
       const step = {ArrowRight: 1, ArrowLeft: -1, ArrowDown: columns, ArrowUp: -columns}[event.key]
