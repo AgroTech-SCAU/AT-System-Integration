@@ -57,6 +57,8 @@ class Diagnostic(TreeModel):
 class TreeCreate(TreeModel):
     xml: StrictStr | None = Field(default=None,max_length=1048576)
     template: Literal['general','tomato_picker','simulation_inspection']='general'
+    name: StrictStr | None = Field(default=None,min_length=1,max_length=80)
+    owner: dict[StrictStr,StrictStr] | None = None
 
 class TreeSave(TreeModel):
     revision: StrictInt
@@ -64,6 +66,7 @@ class TreeSave(TreeModel):
     document: TreeDocument
     layout: LayoutDocument
     parameters: dict[Identifier,JsonValue] = Field(default_factory=dict)
+    name: StrictStr | None = Field(default=None,min_length=1,max_length=80)
 
 class TreePublish(TreeModel):
     revision: StrictInt

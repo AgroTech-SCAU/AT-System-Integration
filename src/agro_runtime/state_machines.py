@@ -17,7 +17,7 @@ IDENT = re.compile(r'^[a-z][a-z0-9_]{0,63}$')
 ACTIVE = {'ACCEPTED', 'RUNNING', 'CANCELING'}
 
 
-def validate(spec, definitions=(), ros_tasks=()):
+def validate(spec, definitions=(), ros_tasks=(), *, ready=True):
     if not isinstance(spec, dict):
         fail('$.machine', 'invalid_machine', '状态机必须是对象')
     states = spec.get('states')
@@ -34,7 +34,7 @@ def validate(spec, definitions=(), ros_tasks=()):
         ids.add(key)
         for field in ('entry', 'do', 'exit'):
             reference = s.get(field)
-            if reference and (not isinstance(reference, str) or reference not in refs | ros_refs):
+            if reference and (not isinstance(reference, str) or ready and reference not in refs | ros_refs):
                 fail('$.states.'+key+'.'+field, 'unknown_task', '请选择工程内已保存的任务或行为树')
     by_id = {s['id']: s for s in states}
     roots = [s for s in states if not s.get('parent')]
@@ -49,27 +49,29 @@ def validate(spec, definitions=(), ros_tasks=()):
             visited.add(p)
             p = by_id[p].get('parent')
         children = [n['id'] for n in states if n.get('parent') == s['id']]
-        if children and s.get('initial') not in children:
+        if ready and children and s.get('initial') not in children:
             fail('$.states.'+s['id']+'.initial', 'initial_required', '包含子状态时需要指定初始子状态')
         if not children and s.get('initial'):
             fail('$.states.'+s['id']+'.initial', 'invalid_initial', '叶状态不能指定初始子状态')
     if spec.get('initial') != roots[0]['id']:
         fail('$.initial', 'invalid_initial', '初始状态必须指向根状态')
-    signatures = set()
+    fallbacks = set()
     for edge in edges:
         if not isinstance(edge, dict) or edge.get('source') not in ids or edge.get('target') not in ids:
             fail('$.transitions', 'unknown_state', '转换源状态或目标状态不存在')
         event = edge.get('event')
-        if not isinstance(event, str) or not IDENT.fullmatch(event):
+        if not isinstance(event, str) or ready and not IDENT.fullmatch(event):
             fail('$.transitions', 'invalid_event', '事件标识应使用小写字母数字下划线')
         key = edge['source'], event
-        if key in signatures:
-            fail('$.transitions', 'ambiguous_event', '同一状态下的相同事件只能有一条转换')
-        signatures.add(key)
         guard = edge.get('guard') or {}
-        if not isinstance(guard, dict) or guard.get('operator', 'always') not in ('always','equals','not_equals','greater','less'):
+        if not isinstance(guard, dict) or guard.get('operator', 'always') not in ('always','otherwise','equals','not_equals','greater','less'):
             fail('$.transitions.guard', 'invalid_guard', 'Guard 操作不支持')
-        if guard.get('operator', 'always') != 'always' and (not isinstance(guard.get('key'), str) or not IDENT.fullmatch(guard['key'])):
+        fallback = guard.get('operator', 'always') in ('always', 'otherwise')
+        if fallback:
+            if ready and key in fallbacks:
+                fail('$.transitions', 'ambiguous_fallback', '同一状态同一事件只能设置一个其他情况分支')
+            fallbacks.add(key)
+        if ready and not fallback and (not isinstance(guard.get('key'), str) or not IDENT.fullmatch(guard['key'])):
             fail('$.transitions.guard', 'invalid_guard', 'Guard 变量名称无效')
     variables = spec.get('variables', {})
     if not isinstance(variables, dict) or len(variables) > 64 or any(not IDENT.fullmatch(k) for k in variables):
@@ -78,6 +80,16 @@ def validate(spec, definitions=(), ros_tasks=()):
         if len(json.dumps(variables, allow_nan=False)) > 262144: raise ValueError()
     except (ValueError, TypeError):
         fail('$.variables', 'invalid_variables', '变量必须为有限 JSON 数据且不超过 256 KiB')
+    if ready:
+        for edge in edges:
+            guard = edge.get('guard') or {}
+            operator = guard.get('operator', 'always')
+            if operator in ('always', 'otherwise'):
+                continue
+            if guard.get('key') not in variables:
+                fail('$.transitions.guard', 'unknown_variable', '转换条件需要选择已声明的变量')
+            if operator in ('greater', 'less') and (type(variables[guard['key']]) not in (int, float) or type(guard.get('value')) not in (int, float)):
+                fail('$.transitions.guard', 'invalid_comparison', '大小比较需要数值变量和数值比较值')
     for state in states:
         bindings = state.get('bindings', {})
         if not isinstance(bindings, dict) or set(bindings)-{'entry','do','exit'}:
@@ -86,7 +98,7 @@ def validate(spec, definitions=(), ros_tasks=()):
             if not isinstance(slots, dict) or set(slots)-{'inputs','outputs'}:
                 fail('$.bindings', 'invalid_bindings', '行为绑定仅支持输入和输出')
             for mapping in slots.values():
-                if not isinstance(mapping, dict) or any(not isinstance(k,str) or not IDENT.fullmatch(k) or v not in variables for k,v in mapping.items()):
+                if not isinstance(mapping, dict) or any(not isinstance(k,str) or not IDENT.fullmatch(k) or not isinstance(v,str) or ready and v not in variables for k,v in mapping.items()):
                     fail('$.bindings', 'invalid_bindings', '行为端口需要绑定已声明的状态机变量')
     return copy.deepcopy(spec)
 
@@ -123,9 +135,8 @@ class StateMachines:
         return [s for s in self.store.list('state_machine') if s.get('robot_system_id') == key]
 
     def definitions(self):
-        key = self._robot()
-        return [item for kind in ('tree_draft', 'tree_definition') for item in self.store.list(kind)
-                if item.get('robot_system_id') == key and not item.get('test_only')]
+        self._robot()
+        return self.documents.behaviors()
 
     def ros_definitions(self):
         return self.ros_tasks.list() if self.ros_tasks else []
@@ -138,7 +149,7 @@ class StateMachines:
         previous = next((m for m in self.list() if m['id'] == identity),None)
         if previous and previous['robot_system_id'] != key:
             fail('$.robot', 'ownership', '状态机不属于当前机器人')
-        spec = validate(value.get('document'),self.definitions(),self.ros_definitions())
+        spec = validate(value.get('document'),self.definitions(),self.ros_definitions(),ready=False)
         layout = value.get('layout') or {}
         positions = layout.get('positions', {}) if isinstance(layout, dict) else None
         valid_ids = {state['id'] for state in spec['states']}
@@ -163,6 +174,38 @@ class StateMachines:
         if machine.get('robot_system_id') != self._robot():
             fail('$.machine','ownership','状态机不属于当前机器人')
         return machine
+
+    def check(self, identity):
+        machine = self.get(identity)
+        definitions = self.definitions()
+        spec = validate(machine['document'], definitions, self.ros_definitions())
+        trees = {item['id']: item for item in definitions}
+        tasks, checked = [], set()
+        for state in spec['states']:
+            for phase in ('entry', 'do', 'exit'):
+                reference = state.get(phase)
+                if not reference or reference in checked:
+                    continue
+                checked.add(reference)
+                if reference.startswith('ros:'):
+                    tasks.append(reference[4:])
+                    continue
+                tree = trees[reference]
+                frozen = tree.get('ros_tasks')
+                if frozen is not None:
+                    tasks.extend(frozen)
+                    with self.documents.frozen_ros(frozen):
+                        result = self.documents.validate_tree(tree['document'], tree.get('policy', 'general'), tree.get('parameters'), engine=False)
+                else:
+                    result = self.documents.validate_tree(tree['document'], tree.get('policy', 'general'), tree.get('parameters'), engine=False)
+                    tasks.extend(node['registration_id'][8:] for subtree in tree['document']['trees'].values()
+                                 for node in subtree['nodes'].values() if node['registration_id'].startswith('RosTask_'))
+                if not result['valid']:
+                    reasons = ' · '.join(item['reason'] for item in result.get('diagnostics', []) if item.get('severity') == 'error')
+                    fail('$.states.' + state['id'] + '.' + phase, 'behavior_incomplete', reasons or '状态行为尚未配置完整')
+        if self.ros_tasks:
+            self.ros_tasks.validate_task_workspaces(tasks)
+        return {'valid': True, 'behaviors': len(checked), 'message': '流程结构、行为依赖与接口定义检查通过'}
 
     def running(self):
         return self._session is not None and self._session.get('status') in ('RUNNING','ENTERING','TRANSITIONING','STOPPING')
@@ -201,12 +244,27 @@ class StateMachines:
     def _guard(self, edge, values):
         guard = edge.get('guard') or {}
         operator = guard.get('operator','always')
-        if operator == 'always': return True
+        if operator in ('always', 'otherwise'): return True
         left, right = values.get(guard.get('key')), guard.get('value')
         if operator == 'equals': return left == right
         if operator == 'not_equals': return left != right
         if type(left) not in (int,float) or type(right) not in (int,float): return False
         return left > right if operator == 'greater' else left < right
+
+    def _matching_transition(self, name, path, values):
+        # Conditions retain document order within one event group; its fallback
+        # consumes the event before it can bubble to the next ancestor
+        for owner in reversed(path):
+            candidates = [edge for edge in self._spec['transitions'] if edge['source'] == owner and edge['event'] == name]
+            fallback = None
+            for edge in candidates:
+                if (edge.get('guard') or {}).get('operator', 'always') in ('always', 'otherwise'):
+                    fallback = edge
+                elif self._guard(edge, values):
+                    return edge
+            if fallback:
+                return fallback
+        return None
 
     def _bindings(self, state_id, phase):
         state = next((s for s in self._spec['states'] if s['id']==state_id), {})
@@ -415,6 +473,8 @@ class StateMachines:
                 route = self._path(owner, by_id)
                 if any(edge['event'] == name and edge['source'] in route for edge in self._spec['transitions']):
                     await self.event(name, {}, source=owner, instance_id=instance['id'])
+                elif name == 'failed':
+                    self._unhandled_failure(owner)
             except asyncio.CancelledError:
                 return
             except Exception as exc:
@@ -425,9 +485,18 @@ class StateMachines:
                 self._do_watchers[owner] = asyncio.create_task(watch(owner, reference))
         await asyncio.sleep(0)
 
+    def _unhandled_failure(self, owner):
+        instance = self._behaviors.get((owner, 'do'), {})
+        pending = [item for item in self._session.get('attention', []) if item['state_id'] != owner]
+        pending.append({'state_id': owner, 'instance_id': instance.get('id'),
+                        'reference': instance.get('reference'), 'event': 'failed',
+                        'reason': instance.get('error') or '状态期间行为失败，当前没有可处理的失败转换'})
+        self._persist(attention=pending)
+
     async def start(self,identity,mode='auto',confirm_safety=False):
         async with self._lock:
             if self.running():fail('$.machine','running','已有状态机正在运行')
+            self.check(identity)
             machine=self.get(identity)
             spec=validate(machine['document'],self.definitions(),self.ros_definitions())
             robot=self.robots.selected()
@@ -456,6 +525,11 @@ class StateMachines:
                         dependencies[ref]=self.documents.prepare_behavior(ref)
                         if mode=='ros_only' and self.documents.requires_system(dependencies[ref]['document']):
                             fail('$.tree','system_required','此行为树包含需要已就绪系统的能力，请先应用机器人配置')
+            if self.ros_tasks:
+                task_set = []
+                for ref, dependency in dependencies.items():
+                    task_set.extend([dependency] if ref.startswith('ros:') else dependency.get('ros_tasks', []))
+                self.ros_tasks.validate_task_workspaces(task_set)
             self._behaviors.clear()
             self._do_watchers.clear()
             self._control_token = None
@@ -466,7 +540,7 @@ class StateMachines:
             sid='session_'+uuid4().hex
             self._stop_requested=False
             self._session={'id':sid,'machine_id':identity,'robot_system_id':self._robot(),'execution_mode':'ROS_ONLY' if mode=='ros_only' else 'MANAGED','status':'ENTERING', 'active':None,'path':[], 'events':[], 'variables':spec.get('variables',{}),'task_run_id':None, 'ros_task_id':None,'ros_feedback':None, 'action':None, 'error':None,'sequence':len(self.store.list('hsm_session'))+1,'pending_events':0,'definition':copy.deepcopy(machine),'dependencies':dependencies,'do_policy':'active_path','behaviors':[]}
-            self._persist()
+            self._persist(attention=[])
             self._runner=asyncio.create_task(self._enter(spec))
             return self.status()
 
@@ -522,12 +596,15 @@ class StateMachines:
                 updated[k]=v
             path=self._session['path']
             event_path = self._path(source, by_id) if source else path
-            matching=next((e for key in reversed(event_path) for e in spec['transitions'] if e['source']==key and e['event']==name and self._guard(e,updated)),None)
+            matching=self._matching_transition(name,event_path,updated)
             if not matching:
+                if source and name == 'failed':
+                    self._unhandled_failure(source)
+                    return self.status()
                 fail('$.event','no_transition','当前状态无满足 Guard 的事件转换')
             current=self._session['active']
             if matching['source'] == matching['target']:
-                self._persist(variables=updated, events=self._session['events'][-49:] + [{'event':name,'source':current,'target':current,'origin':source}])
+                self._persist(variables=updated, attention=[item for item in self._session.get('attention', []) if item['state_id'] != source], events=self._session['events'][-49:] + [{'event':name,'source':current,'target':current,'origin':source}])
                 return self.status()
             destination=self._leaf(matching['target'],by_id)
             target_path=self._path(destination,by_id)
@@ -552,7 +629,8 @@ class StateMachines:
                 events=self._session['events'][-49:]+[{'event':name,'source':current,'target':destination,
                     'origin':source,'handled_by':matching['source'],'exited':list(reversed(path[common:])),
                     'retained':path[:common],'entered':target_path[common:]}]
-                self._persist(status='RUNNING',active=destination,path=target_path,events=events,action=None)
+                self._persist(status='RUNNING',active=destination,path=target_path,events=events,action=None,
+                              attention=[item for item in self._session.get('attention', []) if item['state_id'] in path[:common] and item['state_id'] != source])
                 await self._launch_do(by_id)
                 return self.status()
             except Exception as exc:

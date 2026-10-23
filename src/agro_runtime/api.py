@@ -530,6 +530,34 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
         from .ros_interfaces import InterfaceLibrary
         return InterfaceLibrary(store, ros_tasks._robot()).catalog()
 
+    @api.get('/ros/interface-workspaces')
+    async def interface_workspaces():
+        from .interface_sources import InterfaceWorkspaces
+        return InterfaceWorkspaces(store, ros_tasks._robot()).catalog()
+
+    @api.post('/ros/interface-workspaces')
+    async def interface_workspace_create(body: dict):
+        from .interface_sources import InterfaceWorkspaces
+        return InterfaceWorkspaces(store, ros_tasks._robot()).save(body)
+
+    class InterfaceWorkspaceResolve(BaseModel):
+        workspace_ids: list[str] = Field(default_factory=list, max_length=64)
+
+    @api.post('/ros/interface-workspaces/resolve')
+    async def interface_workspace_resolve(body: InterfaceWorkspaceResolve):
+        from .interface_sources import InterfaceWorkspaces
+        return InterfaceWorkspaces(store, ros_tasks._robot()).resolve(body.workspace_ids)
+
+    @api.put('/ros/interface-workspaces/{workspace_id}')
+    async def interface_workspace_update(workspace_id: str, body: dict):
+        from .interface_sources import InterfaceWorkspaces
+        return InterfaceWorkspaces(store, ros_tasks._robot()).save(body, workspace_id)
+
+    @api.delete('/ros/interface-workspaces/{workspace_id}')
+    async def interface_workspace_delete(workspace_id: str):
+        from .interface_sources import InterfaceWorkspaces
+        return InterfaceWorkspaces(store, ros_tasks._robot()).delete(workspace_id)
+
     class InterfaceSourceRequest(BaseModel):
         sources: list[dict] = Field(min_length=1, max_length=16)
         base_path: str = ''
@@ -620,6 +648,10 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     @api.post('/state-machines/{machine_id}/start',status_code=202)
     async def hsm_start(machine_id: str,body: StateMachineStart):
         return await hsm.start(machine_id,body.mode,body.confirm_safety)
+
+    @api.post('/state-machines/{machine_id}/check')
+    async def hsm_check(machine_id: str):
+        return hsm.check(machine_id)
 
     @api.post('/state-machines/event',status_code=202)
     async def hsm_event(body: StateMachineEvent):
@@ -737,7 +769,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     @api.post('/trees/validate')
     async def tree_preview(body: TreeValidate):
-        return documents.validate_tree(body.document.model_dump(mode='json'),body.policy,body.parameters,engine=False)
+        return documents.validate_tree(body.document.model_dump(mode='json'),body.policy,body.parameters,engine=False,editing=True)
 
     @api.get('/trees/models')
     async def tree_models():
@@ -751,7 +783,19 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     @api.get('/trees/drafts')
     async def tree_drafts():
-        return {'drafts':[item for item in store.list('tree_draft') if robot_systems.selected_id() and item.get('robot_system_id') == robot_systems.selected_id() and not item.get('test_only')]}
+        return {'drafts':[item for item in documents.behaviors() if item['id'].startswith('draft_')]}
+
+    @api.get('/trees/library')
+    async def tree_library():
+        return {'behaviors': documents.behavior_library()}
+
+    @api.patch('/trees/behaviors/{key}')
+    async def tree_behavior_rename(key: str, body: BehaviorCopy):
+        return documents.rename_behavior(key, body.name)
+
+    @api.delete('/trees/behaviors/{key}')
+    async def tree_behavior_delete(key: str):
+        return documents.delete_behavior(key)
 
     @api.get('/trees/behaviors')
     async def tree_behaviors():
@@ -763,7 +807,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     @api.post('/trees/drafts')
     async def tree_create(body: TreeCreate):
-        return documents.create(body.xml,body.template)
+        return documents.create(body.xml,body.template,body.name,body.owner)
 
     @api.get('/trees/drafts/{key}')
     async def tree_get(key: str):
@@ -773,7 +817,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     @api.put('/trees/drafts/{key}')
     async def tree_save(key: str,body: TreeSave):
-        return documents.save(key,body.revision,body.layout_revision,body.document.model_dump(mode='json'),body.layout.model_dump(mode='json'),body.parameters)
+        return documents.save(key,body.revision,body.layout_revision,body.document.model_dump(mode='json'),body.layout.model_dump(mode='json'),body.parameters,body.name)
 
     @api.post('/trees/drafts/{key}/rebase')
     async def tree_rebase(key: str):
@@ -803,7 +847,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     @api.get('/trees/definitions')
     async def definitions():
-        return {'definitions':[item for item in store.list('tree_definition') if robot_systems.selected_id() and item.get('robot_system_id') == robot_systems.selected_id() and not item.get('test_only')]}
+        return {'definitions':[item for item in documents.behaviors() if not item['id'].startswith('draft_')]}
 
     @api.get('/trees/definitions/{key}')
     async def definition_get(key: str):

@@ -1,5 +1,5 @@
 import type {Json} from '../shared'
-export interface EditorValue {document:Json;layout:Json;parameters:Json}
+export interface EditorValue {document:Json;layout:Json;parameters:Json;name?:string}
 export interface Fragment {root:string;nodes:Json;labels:Json;positions:Json;portModels:Json;treeDefinitions?:Json}
 export function nodeId(){return 'node_'+crypto.randomUUID().replaceAll('-','')}
 export function clone(value:EditorValue){return structuredClone(value)}
@@ -107,7 +107,7 @@ export function restoreSubtrees(document:Json,fragment:Fragment):Fragment{
  return copied
 }
 export function translateBranch(tree:Json,id:string,layout:Json,x:number,y:number){
- const locations={...positions(tree),...layout.positions},origin=locations[id]
+ const locations={...positions(tree),...positions(tree,layout.collapsed||[]),...layout.positions},origin=locations[id]
  if(!origin)return
  for(const descendant of descendants(tree,id)){
   const point=locations[descendant]

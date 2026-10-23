@@ -13,6 +13,8 @@ export const activeStatus=(value?:string)=>['ENTERING','RUNNING','TRANSITIONING'
 export const blankMachine=(t:(text:string)=>string=text=>text):MachineSnapshot=>({title:t("我的状态机"),document:{initial:'workflow',states:[{id:'workflow',label:t("工作流程")}],transitions:[],variables:{}},layout:{positions:{}}})
 export const snapshotOf=(machine:SavedMachine):MachineSnapshot=>({title:machine.name,document:structuredClone(machine.document),layout:structuredClone(machine.layout||{positions:{}})})
 export const fingerprint=(snapshot:MachineSnapshot)=>JSON.stringify(snapshot)
+export const isFallback=(edge:Transition)=>!edge.guard?.operator||['always','otherwise'].includes(edge.guard.operator)
+export const eventBranches=(document:MachineDocument,edge:Transition)=>document.transitions.map((item,index)=>({edge:item,index})).filter(({edge:item})=>item.source===edge.source&&item.event===edge.event).sort((a,b)=>Number(isFallback(a.edge))-Number(isFallback(b.edge)))
 
 export function statePath(document:MachineDocument,identity:string){
  const path:string[]=[],seen=new Set<string>()
@@ -69,14 +71,16 @@ export function diagnoseMachine(snapshot:MachineSnapshot,references:Set<string>,
   if(children.length&&!children.some(s=>s.id===state.initial))issues.push({message:t("{0} 需要初始子状态", {0: state.label}),stateId:state.id})
   for(const phase of ['entry','do','exit'] as const){if(state[phase]&&!references.has(state[phase]!))issues.push({message:t("{0} 的 {1} 任务已不可用", {0: state.label, 1: phase==='entry'?'Entry':phase==='do'?'Do':'Exit'}),stateId:state.id});for(const mapping of Object.values(state.bindings?.[phase]||{})){for(const variable of Object.values(mapping)){if(!(variable in document.variables))issues.push({message:t("{0} 的 {1} 绑定变量 {2} 已不存在", {0: state.label, 1: phase, 2: variable}),stateId:state.id})}}}
  }
- const signatures=new Set<string>()
+ const fallbacks=new Set<string>()
  document.transitions.forEach((edge,edgeIndex)=>{
   const signature=edge.source+':'+edge.event
   if(!isIdentifier(edge.event))issues.push({message:t("事件标识需以小写字母开头，仅包含字母、数字和下划线"),edgeIndex})
-  if(signatures.has(signature))issues.push({message:t("同一状态的 {0} 事件存在重复转换", {0: edge.event}),edgeIndex})
-  signatures.add(signature)
+  if(isFallback(edge)){
+   if(fallbacks.has(signature))issues.push({message:t("{0} 只能设置一个其他情况分支",{0:edge.event}),edgeIndex})
+   fallbacks.add(signature)
+  }
   if(!ids.has(edge.source)||!ids.has(edge.target))issues.push({message:t("转换连接的状态不存在"),edgeIndex})
-  if(edge.guard?.operator&&edge.guard.operator!=='always'){
+  if(edge.guard?.operator&&!isFallback(edge)){
    if(!edge.guard.key||!(edge.guard.key in document.variables))issues.push({message:t("{0} 需要选择有效变量", {0: edge.event||t("转换")}),edgeIndex})
    if(['greater','less'].includes(edge.guard.operator)&&(typeof document.variables[edge.guard.key||'']!=='number'||typeof edge.guard.value!=='number'))issues.push({message:t("{0} 的大小比较需要数值变量和数值比较值", {0: edge.event||t("转换")}),edgeIndex})
   }

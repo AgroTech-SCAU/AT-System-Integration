@@ -29,3 +29,12 @@
 .wb-behavior-status{display:grid;gap:6px;margin-top:10px}
 .wb-behavior-status details{padding:8px 10px;border:1px solid var(--border);border-radius:8px}
 .wb-behavior-status summary{display:flex;justify-content:space-between;gap:12px;font-size:12px;cursor:pointer}
+.hsm-workbench .wb-branch-item{display:flex;align-items:center;gap:4px;border-radius:6px;margin-top:5px}
+.hsm-workbench .wb-branch-item.is-current{background:var(--tint)}
+.hsm-workbench .wb-branch-item>button{flex:1;min-width:0;display:grid;gap:3px;justify-content:start;text-align:left;font-size:11px;padding:7px}
+.hsm-workbench .wb-branch-item small{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:155px}
+.hsm-workbench .wb-branch-item>div{display:flex;padding-right:3px}
+.hsm-workbench .wb-branch-item>div>button{min-width:23px;padding:3px;font-size:13px}
+.hsm-workbench .wb-attention{display:grid;justify-items:start;gap:4px;width:100%;padding:10px 12px;margin-top:8px;border:1px solid color-mix(in srgb,var(--accent) 40%,var(--line));border-radius:7px;background:var(--tint);text-align:left;font-size:11px}
+.hsm-workbench .wb-attention strong{color:var(--accent)}
+.hsm-workbench .wb-attention small{color:var(--muted)}

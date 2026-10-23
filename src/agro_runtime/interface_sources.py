@@ -1,12 +1,14 @@
 import hashlib
 import json
 import os
+import copy
 from pathlib import Path
 import re
 import xml.etree.ElementTree as ET
+from uuid import uuid4
 
 from .errors import fail
-from .ros_interfaces import InterfaceLibrary, TYPE
+from .ros_interfaces import InterfaceLibrary, TYPE, interface_file_definitions, normalized_definition
 
 
 class InterfaceSources:
@@ -115,7 +117,7 @@ class InterfaceSources:
         for package, candidates in sorted(packages.items()):
             selected = next((candidate for candidate in candidates if candidate['path'] == choices.get(package)), None)
             if selected is None:
-                fingerprints = {json.dumps(candidate['definitions'], sort_keys=True) for candidate in candidates}
+                fingerprints = {json.dumps({name: normalized_definition(name, value) for name, value in candidate['definitions'].items()}, sort_keys=True) for candidate in candidates}
                 if len(fingerprints) > 1:
                     conflicts.append({'package': package, 'sources': [candidate['path'] for candidate in candidates]})
                     continue
@@ -157,3 +159,169 @@ class InterfaceSources:
                          'primary_types': sorted(set(result['primary_types']) | {item['ros_type'] for item in retained})}
         self.store.put('interface_catalog', self.project_id, configuration)
         return {**self.library.catalog(), 'diagnostics': result['diagnostics'], 'affected_tasks': result['affected_tasks']}
+
+
+class InterfaceWorkspaces:
+    """Named, independently stored design resources; selection belongs to each task."""
+
+    def __init__(self, store, project_id):
+        self.store, self.project_id = store, project_id
+        self.library = InterfaceLibrary(store, project_id)
+
+    def migrate(self):
+        configuration = self.library.configuration()
+        if configuration.get('workspaces_migrated'):
+            return
+        saved = self.library.saved()
+        definitions = {}
+        for item in saved:
+            definitions.update(item.get('definitions', {}))
+        workspace_ids = []
+        if definitions:
+            identity = 'workspace_' + hashlib.sha256(self.project_id.encode()).hexdigest()[:24]
+            record = {'id': identity, 'project_id': self.project_id, 'name': '原工程接口',
+                      'mode': 'files', 'path': '', 'definitions': definitions, 'diagnostics': [],
+                      'legacy_sources': configuration.get('sources', [])}
+            self.store.put('interface_workspace', identity, record)
+            workspace_ids.append(identity)
+            for task in self.store.list('ros_task'):
+                if task.get('robot_system_id') == self.project_id and 'workspace_ids' not in task and task.get('schema_id'):
+                    self.store.put('ros_task', task['id'], {**task, 'workspace_ids': workspace_ids})
+        self.store.put('interface_catalog', self.project_id, {**configuration, 'workspaces_migrated': True,
+                                                            'default_workspace_ids': workspace_ids})
+
+    def records(self):
+        self.migrate()
+        return [item for item in self.store.list('interface_workspace') if item.get('project_id') == self.project_id]
+
+    def get(self, identity):
+        record = next((item for item in self.records() if item['id'] == identity), None)
+        if record is None:
+            fail('$.workspace_ids', 'unknown_workspace', '接口工作区不存在或不属于当前机器人')
+        return record
+
+    @staticmethod
+    def conflicting_types(left, right):
+        a, b = left['definitions'], right['definitions']
+        for record in (left, right):
+            if '_normalized' not in record:
+                record['_normalized'] = {name: normalized_definition(name, content) for name, content in record['definitions'].items()}
+        return sorted(name for name in a.keys() & b.keys() if left['_normalized'][name] != right['_normalized'][name])
+
+    def summary(self, record, records=None):
+        records = self.records() if records is None else records
+        conflicts = []
+        for other in records:
+            if other['id'] != record['id']:
+                types = self.conflicting_types(record, other)
+                if types:
+                    conflicts.append({'id': other['id'], 'name': other['name'], 'types': types})
+        used_tasks = {task['id'] for task in self.store.list('ros_task')
+                      if task.get('robot_system_id') == self.project_id and record['id'] in task.get('workspace_ids', [])}
+        for definition in self.store.list('tree_definition'):
+            if definition.get('robot_system_id') == self.project_id and not definition.get('archived'):
+                used_tasks.update(task['id'] for task in definition.get('ros_tasks', []) if record['id'] in task.get('workspace_ids', []))
+        return {key: copy.deepcopy(record.get(key)) for key in ('id', 'name', 'mode', 'path', 'diagnostics')} | {
+            'interface_count': len(record['definitions']), 'conflicts_with': conflicts,
+            'used_by': len(used_tasks)}
+
+    def catalog(self):
+        records = self.records()
+        available = {item['id'] for item in records}
+        defaults = [identity for identity in self.library.configuration().get('default_workspace_ids', []) if identity in available]
+        if not defaults and len(records) == 1:
+            defaults = [records[0]['id']]
+        return {'workspaces': [self.summary(item, records) for item in records], 'default_workspace_ids': defaults}
+
+    def save(self, raw, identity=None):
+        if not isinstance(raw, dict):
+            fail('$.workspace', 'invalid_workspace', '接口工作区配置无效')
+        records = self.records()
+        old = self.get(identity) if identity else None
+        if not old and len(records) >= 64:
+            fail('$.workspace', 'too_many_workspaces', '当前机器人最多保存 64 个接口工作区')
+        mode = raw.get('mode', old['mode'] if old else 'source')
+        if mode not in ('source', 'installed', 'files'):
+            fail('$.mode', 'invalid_source', '选择源码工作区、安装目录或接口文件')
+        path = raw.get('path', old.get('path', '') if old else '')
+        if not isinstance(path, str):
+            fail('$.path', 'invalid_source', '工作区路径必须是文本')
+        default_name = raw.get('package', '') if mode == 'files' else Path(path.strip()).name
+        name = raw.get('name', old['name'] if old else default_name)
+        if not isinstance(name, str) or not 1 <= len(name.strip()) <= 80:
+            fail('$.name', 'invalid_name', '填写工作区名称，最多 80 个字符')
+        if any(item['id'] != identity and item['name'] == name.strip() for item in records):
+            fail('$.name', 'duplicate_name', '接口工作区名称已存在')
+        refresh = not old or raw.get('refresh') or mode != old['mode'] or path != old.get('path', '') or 'files' in raw
+        if refresh:
+            if mode == 'files':
+                if 'files' in raw:
+                    definitions = interface_file_definitions(raw.get('package'), raw['files'])
+                elif old and old['mode'] == 'files':
+                    definitions = old['definitions']
+                else:
+                    fail('$.files', 'invalid_files', '请选择需要导入的接口文件')
+                _, diagnostics = self.library.compile(definitions, allow_partial=True, saved_definitions=False)
+                path = ''
+            else:
+                result, definitions, _, _ = InterfaceSources(self.store, self.project_id).scan([{'path': path, 'mode': mode}])
+                if result['conflicts']:
+                    fail('$.path', 'source_conflict', '此目录内存在冲突接口包，请分别添加具体工作区目录')
+                diagnostics = result['diagnostics']
+                path = result['sources'][0]['path']
+        else:
+            definitions, diagnostics = old['definitions'], old.get('diagnostics', [])
+        record = {'id': identity or 'workspace_' + uuid4().hex, 'project_id': self.project_id,
+                  'name': name.strip(), 'mode': mode, 'path': path, 'definitions': definitions, 'diagnostics': diagnostics}
+        self.store.put('interface_workspace', record['id'], record)
+        return self.summary(record)
+
+    def delete(self, identity):
+        record = self.get(identity)
+        if self.summary(record)['used_by']:
+            fail('$.workspace', 'workspace_in_use', '工作区已被任务使用，请先调整任务的接口工作区选择')
+        self.store.delete('interface_workspace', identity)
+        return {'deleted': True}
+
+    def selection(self, workspace_ids):
+        if not isinstance(workspace_ids, list) or len(workspace_ids) > 64 or any(not isinstance(identity, str) for identity in workspace_ids):
+            fail('$.workspace_ids', 'invalid_workspaces', '接口工作区选择必须是标识列表')
+        if len(set(workspace_ids)) != len(workspace_ids):
+            fail('$.workspace_ids', 'duplicate_workspace', '接口工作区不能重复选择')
+        records = {item['id']: item for item in self.records()}
+        if any(identity not in records for identity in workspace_ids):
+            fail('$.workspace_ids', 'unknown_workspace', '接口工作区不存在或不属于当前机器人')
+        return [records[identity] for identity in workspace_ids]
+
+    def resolve(self, workspace_ids):
+        selected = self.selection(workspace_ids)
+        definitions, owners, conflicts = {}, {}, []
+        for record in selected:
+            for name, content in record['definitions'].items():
+                owners.setdefault(name, []).append(record)
+                if name not in definitions:
+                    definitions[name] = content
+        for name, records in owners.items():
+            fingerprints = {json.dumps(normalized_definition(name, record['definitions'][name]), sort_keys=True) for record in records}
+            if len(fingerprints) > 1:
+                conflicts.append({'ros_type': name, 'workspace_ids': [item['id'] for item in records],
+                                  'workspace_names': [item['name'] for item in records]})
+        result = {'workspace_ids': workspace_ids, 'types': [], 'conflicts': conflicts, 'diagnostics': []}
+        if conflicts:
+            return result
+        schemas, diagnostics = self.library.compile(definitions, allow_partial=True, saved_definitions=False)
+        origins = {name: ' · '.join(item['name'] for item in records) for name, records in owners.items()}
+        records = self.library.persist(definitions, schemas, 'workspace', origins, workspace_ids)
+        result['types'] = [{'ros_type': item['ros_type'], 'schema_id': item['id'], 'source': item['source'],
+                            'workspace_ids': [record['id'] for record in owners[item['ros_type']]], 'dependency': False}
+                           for item in sorted(records, key=lambda item: item['ros_type'])]
+        result['diagnostics'] = diagnostics + [issue for item in selected for issue in item.get('diagnostics', [])
+                                               if issue.get('code') in ('invalid_package', 'unreadable_definition', 'idl_not_supported', 'no_definitions')]
+        return result
+
+    def require_resolved(self, workspace_ids):
+        result = self.resolve(workspace_ids)
+        if result['conflicts']:
+            conflict = result['conflicts'][0]
+            fail('$.workspace_ids', 'workspace_conflict', '所选工作区接口冲突：' + ' / '.join(conflict['workspace_names']) + ' · ' + conflict['ros_type'])
+        return result

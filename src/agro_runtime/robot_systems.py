@@ -261,6 +261,8 @@ class RobotSystems:
             if row.get('robot_system_id') == key
         ]
         state_machines.extend(copy.deepcopy(record.get('pending_state_machines', [])))
+        from .interface_sources import InterfaceWorkspaces
+        interface_workspaces = InterfaceWorkspaces(self.store, key).records()
         ros_tasks = [
             {field:copy.deepcopy(value) for field,value in row.items() if field not in ('robot_system_id','revision')}
             for row in self.store.list('ros_task')
@@ -308,6 +310,9 @@ class RobotSystems:
             "task_plans": plans,
             "state_machines": state_machines,
             "ros_tasks": ros_tasks,
+            "interface_workspaces": [{**{field: copy.deepcopy(item[field]) for field in ('id', 'name', 'definitions')},
+                                      'mode': 'files', 'path': ''}
+                                     for item in interface_workspaces],
             "interface_definitions": [{field: value for field, value in item.items() if field not in ('project_id', 'source')}
                                       for item in schemas],
             "interface_selection": [item['id'] for item in schemas if item['id'] in catalog_record.get('schema_ids', [])],
@@ -339,6 +344,7 @@ class RobotSystems:
             "ros_tasks",
             "interface_definitions",
             "interface_selection",
+            "interface_workspaces",
             "assets",
             "notes",
         }:
@@ -504,6 +510,28 @@ class RobotSystems:
             fail('$.interface_definitions', 'invalid_definitions', '工程接口定义清单无效')
         schema_refmap, clean_schemas = {}, []
         library = InterfaceLibrary(self.store, key)
+        transfer_workspaces = bundle.get('interface_workspaces', [])
+        if not isinstance(transfer_workspaces, list) or len(transfer_workspaces) > 64:
+            fail('$.interface_workspaces', 'invalid_workspaces', '工程接口工作区清单无效')
+        workspace_refmap, clean_workspaces, workspace_names = {}, [], set()
+        for item in transfer_workspaces:
+            if not isinstance(item, dict) or not isinstance(item.get('id'), str) or item['id'] in workspace_refmap:
+                fail('$.interface_workspaces', 'invalid_workspaces', '接口工作区标识无效或重复')
+            name, mode, path = item.get('name'), item.get('mode'), item.get('path', '')
+            if not isinstance(name, str) or not 1 <= len(name.strip()) <= 80 or name.strip() in workspace_names or mode not in ('source', 'installed', 'files') or not isinstance(path, str):
+                fail('$.interface_workspaces', 'invalid_workspaces', '接口工作区名称或来源无效')
+            definitions = item.get('definitions')
+            if not isinstance(definitions, dict) or len(definitions) > 3000 or any(
+                not isinstance(ros_type, str) or not TYPE.fullmatch(ros_type) or not isinstance(content, str) or len(content.encode()) > 262144
+                for ros_type, content in definitions.items()
+            ):
+                fail('$.interface_workspaces', 'invalid_definitions', '接口工作区需要包含原生接口定义')
+            _, diagnostics = library.compile(definitions, allow_partial=True, saved_definitions=False)
+            identity = 'workspace_' + uuid4().hex
+            workspace_refmap[item['id']] = identity
+            workspace_names.add(name.strip())
+            clean_workspaces.append({'id': identity, 'project_id': key, 'name': name.strip(), 'mode': mode,
+                                     'path': path, 'definitions': definitions, 'diagnostics': diagnostics})
         for item in transfer_schemas:
             if not isinstance(item, dict) or not isinstance(item.get('id'), str) or item['id'] in schema_refmap:
                 fail('$.interface_definitions', 'invalid_definitions', '接口定义标识无效或重复')
@@ -515,13 +543,21 @@ class RobotSystems:
                 fail('$.interface_definitions', 'invalid_definitions', '工程需要包含原生接口定义及依赖')
             schemas = library.compile(definitions, saved_definitions=False)
             ros_type = item.get('ros_type')
-            if ros_type not in schemas or schemas[ros_type] != item.get('schema'):
+            supplied = item.get('schema')
+            expected = {name: value for name, value in schemas.get(ros_type, {}).items()
+                        if not name.endswith('_schemas') or isinstance(supplied, dict) and name in supplied}
+            if ros_type not in schemas or expected != supplied:
                 fail('$.interface_definitions', 'schema_mismatch', '接口字段与原生定义不一致')
             identity = _identity(key + ':' + item['id'])
             schema_refmap[item['id']] = identity
             clean_schemas.append({'id': identity, 'project_id': key, 'ros_type': ros_type, 'schema': schemas[ros_type],
                                   'definitions': definitions, 'definition': definitions[ros_type], 'source': 'imported'})
         for task in clean_ros_tasks:
+            workspace_ids = task.get('workspace_ids', [])
+            if any(identity not in workspace_refmap for identity in workspace_ids):
+                fail('$.interface_workspaces', 'missing_workspace', '任务引用的接口工作区未包含在工程中：' + task['name'])
+            if 'interface_workspaces' in bundle:
+                task['workspace_ids'] = [workspace_refmap[identity] for identity in workspace_ids]
             if task.get('schema_id'):
                 if task['schema_id'] not in schema_refmap:
                     fail('$.interface_definitions', 'missing_definition', '任务缺少所引用的接口定义：' + task['name'])
@@ -654,8 +690,11 @@ class RobotSystems:
             self.store.put('tree_draft', draft['id'], {**draft, 'revision': 1, 'layout_revision': 1,
                 'base_snapshot_id': self.context.snapshot_id, 'validation': None, 'published': None, 'robot_system_id': key})
         self.store.put_many('ros_schema', [(item['id'], item) for item in clean_schemas])
+        self.store.put_many('interface_workspace', [(item['id'], item) for item in clean_workspaces])
         self.store.put('interface_catalog', key, {'id': key, 'schema_ids': list(selected_schemas.values()),
-            'sources': [], 'base_path': '', 'choices': {}, 'primary_types': list(selected_schemas)})
+            'sources': [], 'base_path': '', 'choices': {}, 'primary_types': list(selected_schemas),
+            'workspaces_migrated': 'interface_workspaces' in bundle,
+            'default_workspace_ids': [clean_workspaces[0]['id']] if len(clean_workspaces) == 1 else []})
         for item in clean_ros_tasks:
             endpoint = item.pop('interface', '')
             self.store.put('ros_task',item['id'],item)

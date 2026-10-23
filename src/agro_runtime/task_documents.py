@@ -165,6 +165,9 @@ class TaskDocuments:
             for spec in model['ports'].values():
                 if spec['type'] in {'number','integer'}:spec.setdefault('unit','1')
         self._ros_models(nodes)
+        for name in {'ForEachTarget','HasTarget','PickSucceeded','MakePickResult','SelectTarget','TargetsFromPose'}:
+            if name in nodes:
+                nodes[name]['library_hidden'] = True
         models['digest']=digest(nodes);models['system_snapshot_id']=self.context.snapshot_id
         self._models=copy.deepcopy(models);self._model_key=key
         return models
@@ -372,16 +375,24 @@ class TaskDocuments:
             return [node['registration_id'],attrs,ports,[visit(c) for c in node['expanded_children']]]
         return visit(self.expanded(document)),stages
 
-    def validate_tree(self,document,policy='general',parameters=None,engine=True):
+    def validate_tree(self,document,policy='general',parameters=None,engine=True,editing=False):
         diagnostics=[];sources=[];models=self.describe_nodes();parameters=parameters or {}
-        def error(code,reason,tree=None,node=None,port=None):
-            diagnostics.append({'severity':'error','code':code,'reason':reason,'tree_id':tree,'editor_id':node,'port':port})
+        def error(code,reason,tree=None,node=None,port=None,pending=False):
+            diagnostics.append({'severity':'warning' if editing and pending else 'error','code':code,'reason':reason,'tree_id':tree,'editor_id':node,'port':port})
         try:document=parse(TreeDocument,document).model_dump(mode='json')
         except ContractValidationError as exc:
             for issue in exc.issues:error(issue.code,issue.reason,port=issue.path)
             return {'valid':False,'diagnostics':diagnostics,'sources':[]}
         if document['readonly']:error('readonly_xml','保留未支持的原始 XML，不允许发布')
         trees=document['trees']
+        task_ids = {node['registration_id'][8:] for tree in trees.values() for node in tree['nodes'].values()
+                    if node['registration_id'].startswith('RosTask_')}
+        if self.ros_tasks and task_ids:
+            try:
+                tasks = [task for task in self._ros_override if task['id'] in task_ids] if self._ros_override is not None else sorted(task_ids)
+                self.ros_tasks.validate_task_workspaces(tasks)
+            except ContractValidationError as exc:
+                for issue in exc.issues:error(issue.code,issue.reason)
         if document['main_tree_id'] not in trees:error('unknown_main_tree','执行根树不存在')
         if len(trees)>32 or sum(len(t['nodes']) for t in trees.values())>1000:error('tree_too_large','文档超过树或节点数量上限')
         all_ids=set()
@@ -400,8 +411,10 @@ class TaskDocuments:
                 all_ids.add(identity)
                 registration=node['registration_id'];model=models['nodes'].get(registration)
                 if not model or not model['editable']:error('unregistered_node','节点未注册或没有明确编辑语义',tree_id,identity)
-                elif len(node['children'])<model['minimum_children'] or model['maximum_children']>=0 and len(node['children'])>model['maximum_children']:
-                    error('invalid_child_count','子节点数量不符合实际节点语义',tree_id,identity)
+                elif len(node['children'])<model['minimum_children']:
+                    error('invalid_child_count','添加执行内容后即可使用',tree_id,identity,pending=True)
+                elif model['maximum_children']>=0 and len(node['children'])>model['maximum_children']:
+                    error('invalid_child_count','子节点数量超过当前节点允许范围',tree_id,identity)
                 attrs={'ID'} if registration=='SubTree' else {'role','backend_instance','node_id'} if registration.startswith('Capability_') else {'node_id'} if registration.startswith('RosTask_') else set()
                 if set(node['attributes'])-attrs:error('unsupported_attribute','不允许脚本、隐式重映射或未知语义属性',tree_id,identity)
                 if registration.startswith('Capability_') and model:
@@ -443,7 +456,7 @@ class TaskDocuments:
                     if spec.get('required') and port not in node['ports'] and port not in {'role','backend_instance','node_id'}:
                         # 角色参数独立提供节点未覆盖的缺省值
                         role=self.context.bound.roles.get(node['attributes'].get('role'))
-                        if not role or not port.startswith('param_') or port[6:] not in role.parameters:error('required_port','缺少必填端口',tree_id,identity,port)
+                        if not role or not port.startswith('param_') or port[6:] not in role.parameters:error('required_port','请填写必填输入',tree_id,identity,port,pending=True)
                 for child in node['children']:
                     if child in parents:error('multiple_parents','节点只能有一个控制父节点',tree_id,child)
                     parents[child]=identity;structure(child,depth+1)
@@ -640,7 +653,71 @@ class TaskDocuments:
         if self.assets.robot_systems and record.get('robot_system_id') != self.assets.robot_systems.selected_id():
             fail('$.robot_system_id','different_robot_system','此任务定义属于其他机器人系统')
 
-    def create(self,xml=None,template='general'):
+    @staticmethod
+    def behavior_name(record):
+        document = record['document']
+        root = document['trees'][document['main_tree_id']]['root_id']
+        return record.get('name') or record.get('layout', {}).get('labels', {}).get(root) or document['main_tree_id']
+
+    def behaviors(self):
+        robot = self.assets.robot_systems.selected_id() if self.assets.robot_systems else None
+        drafts = [item for item in self.store.list('tree_draft') if item.get('robot_system_id') == robot]
+        archived = {item['id'] for item in drafts if item.get('archived')}
+        records = [item for item in drafts + self.store.list('tree_definition')
+                   if robot and item.get('robot_system_id') == robot and not item.get('archived')
+                   and item.get('draft_id') not in archived and not item.get('test_only')]
+        return [{**item, 'name': self.behavior_name(item)} for item in records]
+
+    def behavior_library(self):
+        records = self.behaviors()
+        draft_ids = {item['id'] for item in records if item['id'].startswith('draft_')}
+        return [{**item, 'uses': self.behavior_uses(item['id'])}
+                for item in records if not item.get('draft_id') or item['draft_id'] not in draft_ids]
+
+    def behavior_uses(self, reference):
+        aliases = {reference}
+        aliases.update(item['id'] for item in self.store.list('tree_definition') if item.get('draft_id') == reference)
+        robot = self.assets.robot_systems.selected_id() if self.assets.robot_systems else None
+        result = []
+        for machine in self.store.list('state_machine'):
+            if machine.get('robot_system_id') != robot:
+                continue
+            for state in machine['document']['states']:
+                for phase in ('entry', 'do', 'exit'):
+                    if state.get(phase) in aliases:
+                        result.append({'machine_id': machine['id'], 'machine_name': machine['name'],
+                                       'state_id': state['id'], 'state_name': state['label'], 'phase': phase})
+        return result
+
+    def rename_behavior(self, reference, name):
+        kind = 'tree_draft' if reference.startswith('draft_') else 'tree_definition'
+        record = self.store.get(kind, reference)
+        self._check_ownership(record)
+        if record.get('archived'):
+            fail('$.behavior','behavior_deleted','行为树已删除')
+        name = name.strip()
+        if not name or len(name) > 80:
+            fail('$.name','invalid_name','行为树名称需要 1 至 80 个字符')
+        if kind != 'tree_draft':
+            fail('$.behavior','immutable_behavior','请复制此行为树后修改名称')
+        return self.store.put(kind, reference, {**record, 'name': name, 'revision': record['revision'] + 1})
+
+    def delete_behavior(self, reference):
+        record = self.store.get('tree_draft' if reference.startswith('draft_') else 'tree_definition', reference)
+        self._check_ownership(record)
+        uses = self.behavior_uses(reference)
+        if uses:
+            fail('$.behavior','behavior_in_use','行为树仍被状态使用，请先解除关联')
+        kind = 'tree_draft' if reference.startswith('draft_') else 'tree_definition'
+        # Keep saved execution snapshots available to historical run records
+        self.store.put(kind, reference, {**record, 'archived': True})
+        return {'deleted': reference}
+
+    def create(self,xml=None,template='general',name=None,owner=None):
+        if name is not None and not name.strip():
+            fail('$.name','invalid_name','请输入行为树名称')
+        if owner and (set(owner) - {'machine_id','state_id','phase'} or owner.get('phase') not in {'entry','do','exit'}):
+            fail('$.owner','invalid_owner','状态行为来源无效')
         if template=='tomato_picker' and not self.assets.template_enabled():
             fail('$.template', 'template_not_imported', '先在总览导入并选择番茄采摘机器人示例')
         if xml is None:
@@ -656,31 +733,34 @@ class TaskDocuments:
         key='draft_'+uuid4().hex
         # 模板只用于生成初始内容，之后按照通用任务策略自由编辑
         policy='general' if template=='tomato_picker' else template
-        return self.store.put('tree_draft',key,{'id':key,'revision':1,'layout_revision':1,'policy':policy,'base_snapshot_id':self.context.snapshot_id,'document':document,'layout':LayoutDocument().model_dump(mode='json'),'parameters':{},'validation':None,'published':None,'robot_system_id':self.assets.robot_systems.selected_id() if self.assets.robot_systems else None})
+        return self.store.put('tree_draft',key,{'id':key,'name':(name or '未命名行为树').strip(),'owner':owner,'revision':1,'layout_revision':1,'policy':policy,'base_snapshot_id':self.context.snapshot_id,'document':document,'layout':LayoutDocument().model_dump(mode='json'),'parameters':{},'validation':None,'published':None,'robot_system_id':self.assets.robot_systems.selected_id() if self.assets.robot_systems else None})
 
     def copy_behavior(self, reference, name):
         original = self.store.get('tree_draft' if reference.startswith('draft_') else 'tree_definition', reference)
         self._check_ownership(original)
+        if not name.strip() or len(name.strip()) > 80:
+            fail('$.name','invalid_name','行为树名称需要 1 至 80 个字符')
         document, layout = copy.deepcopy(original['document']), copy.deepcopy(original['layout'])
-        layout.setdefault('labels', {})[document['trees'][document['main_tree_id']]['root_id']] = name
         identity = 'draft_' + uuid4().hex
-        record = {'id': identity, 'revision': 1, 'layout_revision': 1,
+        record = {'id': identity, 'name': name.strip(), 'owner': None, 'revision': 1, 'layout_revision': 1,
                   'policy': original.get('policy', original.get('manifest', {}).get('kind', 'general')),
                   'base_snapshot_id': self.context.snapshot_id, 'document': document, 'layout': layout,
                   'parameters': copy.deepcopy(original['parameters']), 'validation': None, 'published': None,
                   'robot_system_id': original.get('robot_system_id')}
         return self.store.put('tree_draft', identity, record)
 
-    def save(self,key,revision,layout_revision,document,layout,parameters):
+    def save(self,key,revision,layout_revision,document,layout,parameters,name=None):
         draft=self.store.get('tree_draft',key)
         self._check_ownership(draft)
+        if draft.get('archived'):fail('$.behavior','behavior_deleted','行为树已删除')
+        if name is not None and not name.strip():fail('$.name','invalid_name','请输入行为树名称')
         if draft['document']['readonly'] and digest(document)!=digest(draft['document']):fail('$.document','readonly_xml','只读导入不能覆盖执行语义，请保留原 XML')
         if revision!=draft['revision'] or layout_revision!=draft['layout_revision']:fail('$.revision','revision_conflict','树或布局已被其他页面修改，请重新加载')
         document=parse(TreeDocument,document).model_dump(mode='json');layout=parse(LayoutDocument,layout).model_dump(mode='json')
         semantic_changed=digest(document)!=digest(draft['document']) or parameters!=draft['parameters']
         if semantic_changed:document['revision']=draft['document']['revision']+1
         layout['revision']=draft['layout_revision']+1
-        return self.store.put('tree_draft',key,{**draft,'revision':revision+1,'layout_revision':layout_revision+1,'document':document,'layout':layout,'parameters':parameters,'validation':None if semantic_changed else draft['validation']})
+        return self.store.put('tree_draft',key,{**draft,'name':name.strip() if name is not None else self.behavior_name(draft),'revision':revision+1,'layout_revision':layout_revision+1,'document':document,'layout':layout,'parameters':parameters,'validation':None if semantic_changed else draft['validation']})
 
     def rebase_draft(self,key):
         """Explicitly revalidate a draft against the currently active node catalog."""
@@ -708,6 +788,7 @@ class TaskDocuments:
     def publish(self,key,revision,base_snapshot_id):
         draft=self.store.get('tree_draft',key)
         self._check_ownership(draft)
+        if draft.get('archived'):fail('$.behavior','behavior_deleted','行为树已删除')
         if revision!=draft['revision']:fail('$.revision','revision_conflict','发布草稿已改变')
         if self.requires_system(draft['document']) and (base_snapshot_id!=self.context.snapshot_id or draft['base_snapshot_id']!=base_snapshot_id):fail('$.base_snapshot_id','snapshot_conflict','系统配置已改变，请核对草稿中的系统能力')
         if self.describe_nodes().get('offline_only'):
@@ -731,6 +812,8 @@ class TaskDocuments:
             manifest={'kind':draft['policy'],'assets':{},'parameters':draft['document']['inputs'],'max_targets':8,'max_recovery_attempts':0,'timeout_ms':30000}
         (root/'task.task.json').write_text(encoded(manifest));(root/'task.task.json').chmod(0o400)
         definition={'id':key_definition,'draft_id':key,'revision':revision,'system_snapshot_id':self.context.snapshot_id,'model_digest':checked['model_digest'],'document':draft['document'],'layout':draft['layout'],'xml':compiled['xml'],'xml_sha256':checked['xml_sha256'],'manifest':manifest,'parameters':draft['parameters'],'node_mapping':checked['node_mapping'],'blackboard':checked['blackboard'],'task_ref':str(xml),'immutable':True,'robot_system_id':draft.get('robot_system_id'),'ros_tasks':frozen_tasks}
+        definition['name'] = self.behavior_name(draft)
+        definition['owner'] = draft.get('owner')
         definition['digest']=digest({k:v for k,v in definition.items() if k not in {'id','layout','task_ref'}})
         (root/'definition.json').write_text(encoded(definition));(root/'definition.json').chmod(0o400)
         self.store.put('tree_definition',key_definition,definition);draft['published']=key_definition;self.store.put('tree_draft',key,draft)

@@ -29,10 +29,11 @@ export function hsmConnectionPath(a:{x:number;y:number;width:number},b:{x:number
  return {path:`M${x1} ${y1} H${x1+20} Q${x1+32} ${y1} ${x1+32} ${y1-12} V${top+12} Q${x1+32} ${top} ${x1+20} ${top} H${x2-20} Q${x2-32} ${top} ${x2-32} ${top+12} V${y2-12} Q${x2-32} ${y2} ${x2-20} ${y2} H${x2}`,x:(x1+x2)/2,y:top-3}
 }
 
-export default function HsmCanvas({states,transitions,layout,selected,onSelect,onMove,onReset,scope,selectedTransition,onSelectTransition,onConnect,onCreate,onRename,onEnter,onOpenPhase,onReparent,onCreateIn,onDelete,onDeleteTransition,onMakeInitial,readOnly=false,activePath=[],taskLabels={}}:{
+export default function HsmCanvas({states,transitions,layout,selected,onSelect,onMove,onReset,scope,reveal,selectedTransition,onSelectTransition,onConnect,onCreate,onRename,onEnter,onOpenPhase,onReparent,onCreateIn,onDelete,onDeleteTransition,onMakeInitial,readOnly=false,activePath=[],taskLabels={}}:{
  states:State[];transitions:Edge[];layout:HsmLayout;selected:string;scope?:string;selectedTransition?:number|null;activePath?:string[];taskLabels?:Record<string,string>
  onSelect:(id:string)=>void;onMove:(id:string,x:number,y:number)=>void;onReset:()=>void
  readOnly?:boolean
+ reveal?:{id:string;nonce:number}
  onReparent?:(id:string,parent:string)=>void
  onCreateIn?:(parent:string,x?:number,y?:number)=>void;onDelete?:(id:string)=>void;onDeleteTransition?:(index:number)=>void;onMakeInitial?:(id:string)=>void
  onSelectTransition?:(index:number)=>void;onConnect?:(source:string,target:string)=>void;onCreate?:(x:number,y:number)=>void;onRename?:(id:string,label:string)=>void;onEnter?:(id:string)=>void;onOpenPhase?:(id:string,phase:'entry'|'do'|'exit')=>void
@@ -76,6 +77,13 @@ export default function HsmCanvas({states,transitions,layout,selected,onSelect,o
  }
  useEffect(()=>{if(!surface.current)return;let first=true;const observer=new ResizeObserver(([entry])=>{setSize({width:entry.contentRect.width,height:entry.contentRect.height});if(first&&entry.contentRect.width&&entry.contentRect.height){first=false;if(!views.current[scopeId])fitRef.current()}});observer.observe(surface.current);return()=>observer.disconnect()},[scopeId])
  useEffect(()=>{setRenaming(null);setExternalOpen(false);setConnection(null);setMenu(null);const saved=views.current[scopeId];if(saved)updateView(saved);else requestAnimationFrame(()=>fitRef.current());return()=>{views.current[scopeId]=viewRef.current}},[scopeId,updateView])
+ useEffect(()=>{
+  if(!reveal)return
+  setCollapsed(previous=>{const next=new Set(previous);let item=states.find(state=>state.id===reveal.id);for(let depth=0;item?.parent&&depth<states.length;depth++){next.delete(item.parent);item=states.find(state=>state.id===item?.parent)}return next})
+  let frame=0
+  frame=requestAnimationFrame(()=>{frame=requestAnimationFrame(()=>{const box=boxRef.current[reveal.id],bounds=surface.current?.getBoundingClientRect();if(!box||!bounds){fitRef.current();return}const scale=clamp(Math.min(camera.current().scale,(bounds.width-72)/box.width,(bounds.height-72)/box.height),.25,1.3);updateView({x:bounds.width/2-(box.x+box.width/2)*scale,y:bounds.height/2-(box.y+box.height/2)*scale,scale})})})
+  return()=>cancelAnimationFrame(frame)
+ },[reveal?.nonce,reveal?.id,scopeId,updateView])
  useEffect(()=>{const element=surface.current;if(!element)return;const wheel=(event:WheelEvent)=>{if((event.target as Element).closest('button,input,[role=menu]'))return;event.preventDefault();if(!visible.length)return;const unit=event.deltaMode===1?16:event.deltaMode===2?element.clientHeight:1;zoomAt(Math.exp(-clamp(event.deltaY*unit,-150,150)*.0025),event.clientX,event.clientY,true)};element.addEventListener('wheel',wheel,{passive:false});return()=>element.removeEventListener('wheel',wheel)},[updateView,visible.length])
  useEffect(()=>()=>{if(frame.current!==null)cancelAnimationFrame(frame.current)},[])
  const beginRename=(state:State)=>{if(!onRename)return;renameCanceled.current=false;setName(state.label);setRenaming(state.id)}

@@ -290,7 +290,7 @@ export default function App() {
           {client && <>
             {workspace === 'overview' && selectedRobot && <RobotConnection key={selectedRobot.id} robotId={selectedRobot.id} client={client} observation={observation} language={settings.language} changed={refreshProjects} onNavigate={navigate}/>}
             {workspace === 'system' && selectedRobot && <RosTaskLibrary key={selectedRobot.id} robotId={selectedRobot.id} client={client} observation={observation} language={settings.language} changed={refreshProjects} onNavigate={navigate}/>}
-             {workspace === 'editor' && canEditRobot && <><TaskWorkspace key={selectedRobot?.id} client={client} observation={observation} language={settings.language} changed={() => observe(client)} configured={canUseRobot} onNavigate={navigate} /></>}
+             {workspace === 'editor' && canEditRobot && <><TaskWorkspace key={selectedRobot?.id} robotId={selectedRobot?.id} client={client} observation={observation} language={settings.language} changed={() => observe(client)} configured={canUseRobot} onNavigate={navigate} /></>}
              {(workspace === 'runtime'||workspace==='records') && canEditRobot && <RuntimeConsole key={selectedRobot?.id} client={client} observation={observation} language={settings.language} changed={() => observe(client)} onNavigate={navigate} initialHistory={workspace==='records'}/>}
           </>}
 

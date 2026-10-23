@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('agroDesktop', Object.freeze({
   copyReport: taskId => ipcRenderer.invoke('agro:report', taskId, 'copy'),
   exportReport: taskId => ipcRenderer.invoke('agro:report', taskId, 'export'),
   connectLocal: () => ipcRenderer.invoke('agro:local-session'),
+  chooseInterfaceFolder: () => ipcRenderer.invoke('agro:interface-folder'),
   openRobotProject: () => ipcRenderer.invoke('agro:project-open'),
   saveRobotProject: bundle => ipcRenderer.invoke('agro:project-save', bundle),
   minimize: () => ipcRenderer.invoke('agro:window', 'minimize'),

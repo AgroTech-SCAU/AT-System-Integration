@@ -1,7 +1,7 @@
 import {motion} from 'motion/react'
 import {springs, fade} from '../motion'
 import {useLocale} from '../locale'
-import {useRef,useState} from 'react'
+import {useEffect,useRef,useState} from 'react'
 import TaskEditor from './TaskEditor'
 import StateMachineEditor from './StateMachineEditor'
 import RosTaskLibrary from './RosTaskLibrary'
@@ -14,17 +14,23 @@ type Surface='hsm'|'tree'|'ros'
 type TaskRequest={kind:'ros'|'tree';reference?:string;stateId:string;stateLabel:string;phase:'entry'|'do'|'exit';machineId?:string}
 const phases={entry:'进入',do:'持续',exit:'退出'}
 
-export default function TaskWorkspace(props:PageProps & {robotExampleId?:string|null;configured:boolean;onNavigate:(page:Workspace)=>void}){
+type Props=PageProps & {robotId?:string;robotExampleId?:string|null;configured:boolean;onNavigate:(page:Workspace)=>void}
+export default function TaskWorkspace(props:Props){return <TaskWorkspaceContent key={props.robotId||'none'} {...props}/>}
+function TaskWorkspaceContent(props:Props){
  const {t}=useLocale()
-
-  const [tab,setTab]=useState<Surface>('hsm')
-  const [context,setContext]=useState<TaskRequest|null>(null)
-  const [requestKey,setRequestKey]=useState(0)
+  const storageKey='atil.composer.'+(props.robotId||'none')
+  const [restored]=useState<{tab?:Surface;context?:TaskRequest|null;requestKey?:number}>(()=>{try{return JSON.parse(sessionStorage.getItem(storageKey)||'{}')}catch{return {}}})
+  const [tab,setTab]=useState<Surface>(['hsm','tree','ros'].includes(restored.tab||'')?restored.tab!:'hsm')
+  const [context,setContext]=useState<TaskRequest|null>(restored.context||null)
+  const [requestKey,setRequestKey]=useState(restored.requestKey||0)
+  const [browseKey,setBrowseKey]=useState(0)
   const region=useRef<HTMLDivElement>(null)
+  useEffect(()=>{sessionStorage.setItem(storageKey,JSON.stringify({tab,context,requestKey}))},[storageKey,tab,context,requestKey])
   function select(next:Surface){
-    if(tab===next)return
+    if(tab===next){if(next==='tree'){setContext(null);setBrowseKey(key=>key+1)}return}
     if((tab==='tree'||tab==='ros')&&!window.dispatchEvent(new Event('agro:studio:leave-task',{cancelable:true})))return
     setTab(next);setContext(null)
+    if(next==='tree')setBrowseKey(key=>key+1)
     if(next==='hsm')window.dispatchEvent(new Event('agro:hsm:refresh'))
   }
   function openTask(request:TaskRequest){setContext(request);setRequestKey(key=>key+1);setTab(request.kind)}
@@ -51,6 +57,6 @@ export default function TaskWorkspace(props:PageProps & {robotExampleId?:string|
     {context&&<div className="studio-binding-context"><div className="studio-route"><button onClick={back} title={t("返回状态编排")}><Icon name="arrow-left"/>{t("状态编排")}</button><Icon name="chevron-right"/><span title={context.stateLabel}>{context.stateLabel}</span><Icon name="chevron-right"/><strong>{t(phases[context.phase])}</strong></div><span className="studio-binding-hint">{t("为当前状态阶段选择或创建任务")}</span></div>}
     <motion.div initial={false} animate={{opacity:tab==='hsm'?1:0,x:tab==='hsm'?0:-10}} transition={{...springs.spatial,opacity:fade}} className="studio-surface" hidden={tab!=='hsm'}><StateMachineEditor {...props} onOpenRos={()=>select('ros')} onOpenTask={openTask}/></motion.div>
     <motion.div initial={false} animate={{opacity:tab==='ros'?1:0,x:tab==='ros'?0:10}} transition={{...springs.spatial,opacity:fade}} className="studio-surface" hidden={tab!=='ros'}><RosTaskLibrary {...props} onCancelOpen={()=>{setTab('hsm');setContext(null)}} requestedTask={context?.kind==='ros'?context.reference:undefined} requestKey={context?.kind==='ros'?requestKey:undefined} contextLabel={context?.kind==='ros'?contextLabel:undefined} onBound={context?.kind==='ros'?bind:undefined} onBack={context?.kind==='ros'?back:undefined}/></motion.div>
-    <motion.div initial={false} animate={{opacity:tab==='tree'?1:0,x:tab==='tree'?0:10}} transition={{...springs.spatial,opacity:fade}} className="studio-surface" hidden={tab!=='tree'}><TaskEditor {...props} requestedDefinition={context?.kind==='tree'?context.reference:undefined} requestKey={context?.kind==='tree'?requestKey:undefined} contextLabel={context?.kind==='tree'?contextLabel:undefined} onBound={context?.kind==='tree'?bind:undefined} onBack={context?.kind==='tree'?back:undefined}/></motion.div>
+    <motion.div initial={false} animate={{opacity:tab==='tree'?1:0,x:tab==='tree'?0:10}} transition={{...springs.spatial,opacity:fade}} className="studio-surface" hidden={tab!=='tree'}><TaskEditor {...props} browseKey={browseKey} requestedDefinition={context?.kind==='tree'?context.reference:undefined} requestKey={context?.kind==='tree'?requestKey:undefined} owner={context?.kind==='tree'?{machine_id:context.machineId,state_id:context.stateId,phase:context.phase}:undefined} contextLabel={context?.kind==='tree'?contextLabel:undefined} onRememberReference={reference=>setContext(previous=>previous?.kind==='tree'?{...previous,reference}:previous)} onBound={context?.kind==='tree'?bind:undefined} onBack={context?.kind==='tree'?back:undefined}/></motion.div>
   </div>
 }

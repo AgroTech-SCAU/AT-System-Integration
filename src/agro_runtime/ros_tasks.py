@@ -24,6 +24,10 @@ def validate_task(raw):
     if not isinstance(raw, dict):
         fail('$.task', 'invalid_task', 'ROS 2 任务必须是对象')
     data = copy.deepcopy(raw)
+    if 'workspace_ids' in data:
+        workspace_ids = data['workspace_ids']
+        if not isinstance(workspace_ids, list) or len(workspace_ids) > 64 or any(not isinstance(identity, str) for identity in workspace_ids) or len(set(workspace_ids)) != len(workspace_ids):
+            fail('$.workspace_ids', 'invalid_workspaces', '接口工作区选择必须是不重复的标识列表')
     kind = data.get('kind')
     if not isinstance(kind, str) or kind not in KINDS:
         fail('$.kind', 'invalid_kind', '选择话题发布、话题订阅、服务或动作')
@@ -106,8 +110,64 @@ def field_value(value, path):
     return copy.deepcopy(value)
 
 
-def prepared_task(data, inputs=None):
+def validate_task_schema(data, schema):
+    """Check payloads and active field references against the selected immutable schema."""
+    from .ros_interfaces import validate_schema_value
+    if not schema or 'field_schemas' not in schema:
+        return
+    request = {'kind': 'object', 'fields': schema['field_schemas']}
+    response = {'kind': 'object', 'fields': schema.get('output_field_schemas', schema['field_schemas'])}
+    validate_schema_value(data.get('payload', {}), request, '$.payload')
+    if data.get('kind') == 'publish_periodic':
+        validate_schema_value(data.get('stop_payload', {}), request, '$.stop_payload')
+
+    def descriptor_at(path, descriptor, location):
+        if path == '$':
+            return descriptor
+        if not isinstance(path, str) or not path:
+            fail(location, 'missing_schema_field', '请选择接口中存在的字段')
+        for part in path.split('.'):
+            if descriptor['kind'] == 'object' and part in descriptor.get('fields', {}):
+                descriptor = descriptor['fields'][part]
+            elif descriptor['kind'] == 'array' and part.isdigit():
+                bound = descriptor.get('length', descriptor.get('max_length'))
+                if bound is not None and int(part) >= bound:
+                    fail(location, 'invalid_array_index', '字段路径的数组索引超出接口边界：' + path)
+                descriptor = descriptor['item']
+            else:
+                fail(location, 'missing_schema_field', '接口中不存在此字段路径：' + path)
+        return descriptor
+
+    for path in data.get('input_bindings', {}):
+        descriptor_at(path, request, '$.input_bindings.' + path)
+        if path == '$' and len(data['input_bindings']) != 1:
+            fail('$.input_bindings', 'invalid_root_binding', '完整消息绑定需要单个 JSON 对象输入')
+    for port, path in data.get('output_bindings', {}).items():
+        descriptor_at(path, response, '$.output_bindings.' + port)
+    for name in ('condition', 'success_condition'):
+        condition = data.get(name, {})
+        if name == 'condition' and data.get('kind') != 'subscribe_wait' or condition.get('operator', 'any') == 'any':
+            continue
+        descriptor = descriptor_at(condition.get('field'), response, '$.' + name + '.field')
+        if condition.get('operator') in ('greater', 'less') and descriptor['kind'] not in ('integer', 'number'):
+            fail('$.' + name + '.field', 'invalid_comparison_field', '大小比较需要选择数值字段')
+        validate_schema_value(condition.get('value'), descriptor, '$.' + name + '.value')
+
+
+def prepared_task(data, inputs=None, schema=None):
     prepared = copy.deepcopy(data)
+    schema = schema or data.get('interface_schema')
+    if schema:
+        validate_task_schema(prepared, schema)
+    if schema and 'field_schemas' in schema and data.get('input_bindings'):
+        def with_defaults(value, descriptor):
+            if descriptor['kind'] == 'object':
+                return {name: with_defaults(value.get(name, copy.deepcopy(field.get('default'))), field)
+                        for name, field in descriptor.get('fields', {}).items()}
+            if descriptor['kind'] == 'array':
+                return [with_defaults(item, descriptor['item']) for item in value]
+            return value
+        prepared['payload'] = with_defaults(prepared.get('payload', {}), {'kind': 'object', 'fields': schema['field_schemas']})
     contracts = {name: parse(TypeDescriptor, spec) for name, spec in data.get('inputs', {}).items()}
     values = _values(inputs or {}, contracts, '$.inputs')
     for path, key in data.get('input_bindings', {}).items():
@@ -120,6 +180,8 @@ def prepared_task(data, inputs=None):
         target = prepared.setdefault('payload', {})
         for part in parts[:-1]:
             if isinstance(target, list) and part.isdigit():
+                if int(part) >= len(target):
+                    fail('$.input_bindings.'+path, 'invalid_field_path', '输入映射的数组元素尚未配置')
                 target = target[int(part)]
             elif isinstance(target, dict):
                 target = target.setdefault(part, {})
@@ -127,11 +189,15 @@ def prepared_task(data, inputs=None):
                 fail('$.input_bindings.'+path, 'invalid_field_path', '输入映射无法写入消息字段')
         last = parts[-1]
         if isinstance(target, list) and last.isdigit():
+            if int(last) >= len(target):
+                fail('$.input_bindings.'+path, 'invalid_field_path', '输入映射的数组元素尚未配置')
             target[int(last)] = copy.deepcopy(values[key])
         elif isinstance(target, dict):
             target[last] = copy.deepcopy(values[key])
         else:
             fail('$.input_bindings.'+path, 'invalid_field_path', '输入映射无法写入消息字段')
+    if schema:
+        validate_task_schema(prepared, schema)
     return prepared
 
 
@@ -156,6 +222,8 @@ class RosTasks:
 
     def list(self):
         key = self._robot()
+        from .interface_sources import InterfaceWorkspaces
+        InterfaceWorkspaces(self.store, key).migrate()
         return [self._bound(task) for task in self.store.list('ros_task') if task.get('robot_system_id') == key]
 
     def _bound(self, task):
@@ -179,6 +247,9 @@ class RosTasks:
     def save(self, raw):
         data = validate_task(raw)
         key = self._robot()
+        from .interface_sources import InterfaceWorkspaces
+        workspaces = InterfaceWorkspaces(self.store, key)
+        workspaces.migrate()
         identity = data.get('id') or 'ros_'+uuid4().hex
         if not IDENT.fullmatch(identity):
             fail('$.id', 'invalid_id', '任务标识无效')
@@ -191,13 +262,35 @@ class RosTasks:
             old = None
         if old and old.get('robot_system_id') != key:
             fail('$.task', 'ownership', '任务不属于当前机器人')
+        data.setdefault('workspace_ids', old.get('workspace_ids', []) if old else workspaces.catalog()['default_workspace_ids'])
+        workspaces.selection(data['workspace_ids'])
+        preserved_snapshot = bool(old and old.get('schema_id') and data.get('schema_id') == old.get('schema_id')
+                                  and data['ros_type'] == old['ros_type']
+                                  and set(data['workspace_ids']) == set(old.get('workspace_ids', [])))
+        selected_type = None
+        if not preserved_snapshot:
+            resolution = workspaces.require_resolved(data['workspace_ids'])
+            selected_type = next((item for item in resolution['types'] if item['ros_type'] == data['ros_type']), None)
+            if data['workspace_ids']:
+                if data.get('schema_id') and (not selected_type or selected_type['schema_id'] != data['schema_id']):
+                    from .ros_interfaces import normalized_definition
+                    requested = self.store.get('ros_schema', data['schema_id'])
+                    resolved = self.store.get('ros_schema', selected_type['schema_id']) if selected_type else None
+                    canonical = lambda record: {name: normalized_definition(name, value) for name, value in record.get('definitions', {}).items()}
+                    if not resolved or requested.get('project_id') != key or requested.get('ros_type') != data['ros_type'] or canonical(requested) != canonical(resolved):
+                        fail('$.schema_id', 'workspace_schema_mismatch', '接口定义不属于所选工作区，请重新选择接口')
+                if selected_type:
+                    data['schema_id'] = selected_type['schema_id']
+            elif data.get('schema_id'):
+                fail('$.workspace_ids', 'missing_workspace', '请为接口选择所属工作区')
         data.update(id=identity, robot_system_id=key, revision=old['revision'] + 1 if old else 1)
         from .ros_interfaces import InterfaceLibrary
         try:
-            if not data['ros_type']:
+            if not data['ros_type'] or not preserved_snapshot and not selected_type:
                 fail('$.ros_type', 'type_not_found', '任务尚未选择接口类型')
             schema = InterfaceLibrary(self.store, key).describe(data['kind'], data['ros_type'], data.get('schema_id'))
             data['schema_id'] = schema['schema_id']
+            validate_task_schema(data, schema)
         except ContractValidationError as exc:
             if data.get('schema_id') or any(issue.code != 'type_not_found' for issue in exc.issues):
                 raise
@@ -205,6 +298,33 @@ class RosTasks:
         self.store.put('ros_task', identity, data)
         self.bind(identity, interface)
         return self.get(identity)
+
+    def validate_task_workspaces(self, tasks):
+        """Validate frozen dependency closures together without touching ROS or DDS."""
+        from .ros_interfaces import InterfaceLibrary, normalized_definition
+        definitions, owners = {}, {}
+        key = self._robot()
+        for value in tasks:
+            task = self.get(value.removeprefix('ros:')) if isinstance(value, str) else value
+            if not isinstance(task, dict):
+                fail('$.tasks', 'invalid_task', '流程包含无效任务定义')
+            if task.get('robot_system_id', key) != key:
+                fail('$.tasks', 'ownership', '流程任务不属于当前机器人')
+            if task.get('schema_id'):
+                record = self.store.get('ros_schema', task['schema_id'])
+            elif task.get('ros_type'):
+                schema = InterfaceLibrary(self.store, key).describe(task['kind'], task['ros_type'])
+                record = self.store.get('ros_schema', schema['schema_id'])
+            else:
+                fail('$.tasks', 'missing_interface', '任务尚未选择接口类型：' + task.get('name', task.get('id', '')))
+            if record.get('project_id') != key:
+                fail('$.tasks', 'ownership', '任务接口定义不属于当前机器人')
+            label = task.get('name') or task.get('id', '')
+            for ros_type, content in record.get('definitions', {}).items():
+                normalized = normalized_definition(ros_type, content)
+                if ros_type in definitions and definitions[ros_type] != normalized:
+                    fail('$.tasks', 'task_interface_conflict', '流程任务接口定义冲突：' + owners[ros_type] + ' / ' + label + ' · ' + ros_type)
+                definitions[ros_type], owners[ros_type] = normalized, label
 
     def delete(self, identity):
         self.get(identity)
@@ -291,7 +411,7 @@ class RosTasks:
     def verify_support(self, data):
         from .ros_interfaces import InterfaceLibrary, PRIMITIVES, installed_schema
         identity = data['id']
-        expected = data.get('interface_schema') or self.describe(data['kind'], data['ros_type'], data.get('schema_id'))
+        expected = self.validate_structure(data)
         schemas = {data['ros_type']: expected}
         if data.get('schema_id'):
             record = self.store.get('ros_schema', data['schema_id'])
@@ -323,8 +443,17 @@ class RosTasks:
                 if normalized(schema.get(field, {}), package) != normalized(actual.get(field, {}), package):
                     fail('$.task.' + identity, 'type_support_mismatch', '执行环境接口与任务定义不一致：' + data['name'] + ' / ' + ros_type)
 
+    def validate_structure(self, data):
+        validate_task(data)
+        schema = data.get('interface_schema')
+        if not schema or 'field_schemas' not in schema:
+            schema = self.describe(data['kind'], data['ros_type'], data.get('schema_id'))
+        validate_task_schema(data, schema)
+        return schema
+
     async def run(self, task_id, stop: threading.Event, feedback=None, *, definition=None, inputs=None):
-        data = prepared_task(definition if definition is not None else self.get(task_id), inputs)
+        original = definition if definition is not None else self.get(task_id)
+        data = prepared_task(original, inputs, self.validate_structure(original))
         data.setdefault('_ros_domain', self.connection()['domain_id'])
         result = await asyncio.to_thread(self._execute, data, stop, feedback)
         if isinstance(result, str):
@@ -394,10 +523,14 @@ def _matches_value(value, cond):
     op = cond.get('operator', 'any')
     if op == 'any':
         return True
-    for segment in cond.get('field', '').split('.'):
-        if not isinstance(value, dict) or segment not in value:
-            return False
-        value = value[segment]
+    if cond.get('field') != '$':
+        for segment in cond.get('field', '').split('.'):
+            if isinstance(value, dict) and segment in value:
+                value = value[segment]
+            elif isinstance(value, list) and segment.isdigit() and int(segment) < len(value):
+                value = value[int(segment)]
+            else:
+                return False
     right = cond.get('value')
     if op == 'equals': return value == right
     if op == 'not_equals': return value != right

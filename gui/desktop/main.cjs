@@ -113,6 +113,11 @@ if (url && dataDirectory) {
         if (!result.canceled && result.filePath) fs.writeFileSync(result.filePath, document.xml, { mode: 0o600 })
       })
       // 工程文件仅由文件对话框选择，渲染进程无任意文件系统访问能力
+      ipcMain.handle('agro:interface-folder', async event => {
+        trusted(event)
+        const picked = await dialog.showOpenDialog(win, { properties: ['openDirectory'] })
+        return picked.canceled ? null : picked.filePaths[0] || null
+      })
       ipcMain.handle('agro:project-open', async event => {
         trusted(event)
         const picked = await dialog.showOpenDialog(win, { properties: ['openFile'],

@@ -3,81 +3,71 @@ import type {ApiClient} from '../api'
 import {useLocale} from '../locale'
 import {Icon} from '../components/Icon'
 import {ErrorFields} from './shared'
+import type {InterfaceWorkspace, WorkspaceResolution} from './InterfaceWorkspacePicker'
 
-type Source = {path:string; mode:'source'|'installed'}
-type Preview = {
-  digest:string
-  conflicts:{package:string;sources:string[]}[]
-  diagnostics:{code:string;reason:string;ros_type?:string}[]
-  affected_tasks:{id:string;name:string;ros_type:string}[]
-  types:{ros_type:string;source:string;dependency:boolean}[]
-}
-
-export default function InterfaceResources({client,onChanged,onClose}: {
-  client:ApiClient;onChanged:()=>Promise<unknown>;onClose:()=>void
-}) {
-  const {t:translate}=useLocale()
-  const [sources,setSources]=useState<Source[]>([{path:'',mode:'source'}])
-  const [basePath,setBasePath]=useState(''),[choices,setChoices]=useState<Record<string,string>>({})
-  const [preview,setPreview]=useState<Preview|null>(null),[busy,setBusy]=useState(false)
+export default function InterfaceResources({client}: {client:ApiClient}) {
+  const {t}=useLocale()
+  const [workspaces,setWorkspaces]=useState<InterfaceWorkspace[]>([])
+  const [selected,setSelected]=useState(''),[query,setQuery]=useState('')
+  const [editor,setEditor]=useState<'source'|'installed'|'files'|null>(null)
+  const [name,setName]=useState(''),[path,setPath]=useState(''),[packageName,setPackageName]=useState('')
+  const [files,setFiles]=useState<File[]>([]),[rename,setRename]=useState('')
+  const [resolution,setResolution]=useState<WorkspaceResolution|null>(null)
+  const [busy,setBusy]=useState(false),[loading,setLoading]=useState(true)
   const [error,setError]=useState<unknown>(null),[notice,setNotice]=useState('')
-  const [packageName,setPackageName]=useState(''),[files,setFiles]=useState<File[]>([])
   const alive=useRef(true)
+  const current=workspaces.find(item=>item.id===selected)
+  async function load(preferred?:string){
+    const result=await client.request<{workspaces:InterfaceWorkspace[]}>('/ros/interface-workspaces')
+    if(!alive.current)return
+    setWorkspaces(result.workspaces)
+    setSelected(old=>preferred|| (result.workspaces.some(item=>item.id===old)?old:result.workspaces[0]?.id||''))
+  }
+  useEffect(()=>{alive.current=true;void load().catch(setError).finally(()=>setLoading(false));return()=>{alive.current=false}},[client])
   useEffect(()=>{
-    alive.current=true
-    void client.request<{configuration:{sources:Source[];base_path:string;choices:Record<string,string>;diagnostics?:Preview['diagnostics']}}>('/ros/interface-types').then(({configuration})=>{
-      if(!alive.current)return
-      if(configuration.sources.length)setSources(configuration.sources.map(({path,mode})=>({path,mode})))
-      setBasePath(configuration.base_path);setChoices(configuration.choices)
-      if(configuration.diagnostics?.length)setNotice(configuration.diagnostics.map(issue=>issue.reason).join('；'))
-    }).catch(cause=>{if(alive.current)setError(cause)})
-    return()=>{alive.current=false}
-  },[client])
-  const invalidate=()=>{setPreview(previous=>previous?{...previous,digest:''}:null);setNotice('')}
+    setResolution(null);setRename(current?.name||'')
+    if(!selected)return
+    const controller=new AbortController()
+    void client.request<WorkspaceResolution>('/ros/interface-workspaces/resolve','POST',{workspace_ids:[selected]},controller.signal).then(value=>{if(!controller.signal.aborted)setResolution(value)}).catch(cause=>{if(!controller.signal.aborted)setError(cause)})
+    return()=>controller.abort()
+  },[selected,workspaces,client])
   async function perform(action:()=>Promise<void>){
     if(busy)return
     setBusy(true);setError(null);setNotice('')
     try{await action()}catch(cause){if(alive.current)setError(cause)}finally{if(alive.current)setBusy(false)}
   }
-  const request=()=>({sources:sources.map(source=>({...source,path:source.path.trim()})),base_path:basePath.trim(),choices})
-  async function inspect(){
-    const result=await client.request<Preview>('/ros/interface-sources/preview','POST',request())
-    if(alive.current)setPreview(result)
+  function create(mode:typeof editor){setEditor(mode);setName('');setPath('');setFiles([]);setPackageName('');setNotice('');setError(null)}
+  async function register(){
+    const definitions=editor==='files'?await Promise.all(files.map(async file=>({name:file.name,content:await file.text()}))):undefined
+    const result=await client.request<InterfaceWorkspace>('/ros/interface-workspaces','POST',{name:name.trim()||(editor==='files'?packageName.trim():path.split('/').filter(Boolean).at(-1)),mode:editor,path:path.trim(),package:packageName.trim(),files:definitions})
+    await load(result.id);setEditor(null);setNotice(t('接口工作区已添加'))
+    window.dispatchEvent(new Event('agro:interfaces:changed'))
   }
-  async function apply(){
-    if(!preview?.digest)return
-    const result=await client.request<{diagnostics:Preview['diagnostics']}>('/ros/interface-sources','PUT',{...request(),digest:preview.digest})
-    await onChanged()
-    if(alive.current)setNotice(result.diagnostics.length?translate('可用定义已保存，请处理列出的缺项'):translate('接口资源已保存'))
+  async function update(data:Record<string,unknown>){
+    await client.request('/ros/interface-workspaces/'+selected,'PUT',data)
+    await load();setNotice(t('工作区已更新，已保存任务继续使用原定义'))
+    window.dispatchEvent(new Event('agro:interfaces:changed'))
   }
-  async function upload(){
-    const definitions=await Promise.all(files.map(async file=>({name:file.name,content:await file.text()})))
-    await client.request('/ros/interface-types/import','POST',{package:packageName.trim(),files:definitions})
-    await onChanged()
-    if(alive.current){setNotice(translate('接口资源已保存'));setFiles([])}
+  async function remove(){
+    if(!current||!window.confirm(t('移除接口工作区 {0}',{0:current.name})))return
+    await client.request('/ros/interface-workspaces/'+selected,'DELETE');await load();setNotice(t('接口工作区已移除'))
+    window.dispatchEvent(new Event('agro:interfaces:changed'))
   }
-  return <section className="interface-resources" aria-label={translate('接口资源')}>
-    <header><div><h2>{translate('接口资源')}</h2><p>{translate('选择当前工程使用的工作区，任务使用其中保存的类型定义')}</p></div><button disabled={busy} onClick={onClose} aria-label={translate('返回任务')}><Icon name="x"/></button></header>
-    <p className="ros-field-hint">{translate('路径位于 Studio 服务所在主机，源码工作区无需编译即可读取')}</p>
-    <fieldset disabled={busy}>
-      {sources.map((source,index)=><div className="interface-source-row" key={index}>
-        <input aria-label={translate('工作区路径 {0}',{0:index+1})} value={source.path} placeholder={translate('工作区文件夹的绝对路径')} onChange={event=>{setSources(previous=>previous.map((item,position)=>position===index?{...item,path:event.target.value}:item));invalidate()}}/>
-        <select aria-label={translate('读取方式')} value={source.mode} onChange={event=>{setSources(previous=>previous.map((item,position)=>position===index?{...item,mode:event.target.value as Source['mode']}:item));invalidate()}}><option value="source">{translate('源码工作区')}</option><option value="installed">{translate('安装目录')}</option></select>
-        <button disabled={sources.length===1} aria-label={translate('移除工作区')} onClick={()=>{setSources(previous=>previous.filter((_,position)=>position!==index));invalidate()}}><Icon name="x"/></button>
-      </div>)}
-      <button disabled={sources.length>=16} onClick={()=>{setSources(previous=>[...previous,{path:'',mode:'source'}]);invalidate()}}><Icon name="plus"/>{translate('添加工作区')}</button>
-      <label className="field"><span>{translate('基础 ROS 安装路径')}</span><input value={basePath} placeholder={translate('可选，用于补齐标准接口依赖')} onChange={event=>{setBasePath(event.target.value);invalidate()}}/></label>
-      <div className="buttons"><button disabled={sources.some(source=>!source.path.trim())} onClick={()=>void perform(inspect)}><Icon name="search"/>{translate('预览接口')}</button><button className="primary" disabled={!preview?.digest||!!preview.conflicts.length} onClick={()=>void perform(apply)}>{translate('保存接口资源')}</button></div>
-      {preview&&<div className="interface-source-preview">
-        <strong>{translate('工作区接口 {0} · 依赖接口 {1}',{0:preview.types.filter(item=>!item.dependency).length,1:preview.types.filter(item=>item.dependency).length})}</strong>
-        {preview.conflicts.map(conflict=><label className="field" key={conflict.package}><span>{translate('选择接口包来源')} · {conflict.package}</span><select value={choices[conflict.package]||''} onChange={event=>{setChoices(previous=>({...previous,[conflict.package]:event.target.value}));invalidate()}}><option value="">{translate('请选择来源后重新预览')}</option>{conflict.sources.map(path=><option key={path} value={path}>{path}</option>)}</select></label>)}
-        {!!preview.diagnostics.length&&<ul className="interface-source-issues">{preview.diagnostics.map((issue,index)=><li key={index}>{issue.ros_type&&<code>{issue.ros_type} </code>}{translate(issue.reason)}</li>)}</ul>}
-        {!!preview.affected_tasks.length&&<div><strong>{translate('受影响的任务')}</strong><p>{translate('已保存任务继续使用原定义，可在任务中读取新定义后检查字段')}</p>{preview.affected_tasks.map(task=><div key={task.id}>{task.name} · <code>{task.ros_type}</code></div>)}</div>}
-        <details><summary>{translate('查看工作区接口')}</summary><div className="interface-source-types">{preview.types.filter(item=>!item.dependency).map(item=><div key={item.ros_type}><code>{item.ros_type}</code><small>{item.source}</small></div>)}</div></details>
-      </div>}
-      <details className="interface-file-import"><summary>{translate('从接口文件导入')}</summary><label className="field"><span>{translate('接口所属包名')}</span><input value={packageName} onChange={event=>setPackageName(event.target.value)}/></label><label className="field"><span>{translate('原生接口文件')}</span><input type="file" accept=".msg,.srv,.action" multiple onChange={event=>setFiles(Array.from(event.target.files||[]))}/></label><button disabled={!packageName.trim()||!files.length} onClick={()=>void perform(upload)}>{translate('导入定义')}</button></details>
-    </fieldset>
-    {error!=null&&<ErrorFields value={error}/>}
-    <div role="status">{busy?translate('正在读取接口'):notice}</div>
+  return <section className="interface-workspace-manager" aria-label={t('接口工作区')}>
+    <header className="iw-heading"><div><h2>{t('接口工作区')}</h2><p>{t('集中管理接口定义，在任务中选择需要的工作区')}</p></div><div className="buttons"><button disabled={busy} onClick={()=>create('files')}><Icon name="import"/>{t('导入接口文件')}</button><button className="primary" disabled={busy} onClick={()=>create('source')}><Icon name="plus"/>{t('添加工作区')}</button></div></header>
+    <div className="iw-content"><aside className="iw-catalog"><div className="ros-search"><Icon name="search"/><input aria-label={t('搜索接口工作区')} placeholder={t('搜索接口工作区')} value={query} onChange={event=>setQuery(event.target.value)}/></div><div className="iw-workspaces">{workspaces.filter(item=>(item.name+' '+item.path).toLowerCase().includes(query.toLowerCase())).map(item=><button className="iw-workspace-row" aria-current={selected===item.id?'true':undefined} disabled={busy} key={item.id} onClick={()=>{setSelected(item.id);setEditor(null);setError(null);setNotice('')}}><Icon name="boxes"/><span><strong>{item.name}</strong><small>{t('{0} 个接口',{0:item.interface_count})}{item.diagnostics.length?` · ${t('待补充')}`:''}</small></span>{!!item.conflicts_with.length&&<span className="iw-conflict-marker" title={t('与其他工作区存在冲突')}><Icon name="info"/></span>}</button>)}{!workspaces.length&&<p className="iw-list-empty">{t(loading?'正在读取接口':'尚未添加工作区')}</p>}</div><footer>{t('接口定义可离线使用')}</footer></aside>
+    <div className="iw-detail">
+      {editor?<form className="iw-register" onSubmit={event=>{event.preventDefault();void perform(register)}}><header><h3>{t(editor==='files'?'导入接口文件':'添加工作区')}</h3><button type="button" disabled={busy} aria-label={t('取消')} onClick={()=>setEditor(null)}><Icon name="x"/></button></header><fieldset disabled={busy}>
+        <label className="field"><span>{t('工作区名称')}</span><input autoFocus value={name} placeholder={t('为这组接口命名')} onChange={event=>setName(event.target.value)}/></label>
+        {editor!=='files'?<><div className="iw-source-mode" role="group" aria-label={t('读取方式')}><button type="button" aria-pressed={editor==='source'} onClick={()=>setEditor('source')}>{t('源码工作区')}</button><button type="button" aria-pressed={editor==='installed'} onClick={()=>setEditor('installed')}>{t('安装目录')}</button></div><label className="field"><span>{t('工作区目录')}</span><div className="iw-path"><input required value={path} placeholder={t('工作区文件夹的绝对路径')} onChange={event=>setPath(event.target.value)}/>{window.agroDesktop?.chooseInterfaceFolder&&<button type="button" onClick={()=>void window.agroDesktop!.chooseInterfaceFolder().then(value=>{if(value){setPath(value);if(!name)setName(value.split('/').filter(Boolean).at(-1)||'')}}).catch(setError)}>{t('选择文件夹')}</button>}</div></label><p className="ros-field-hint">{t('读取 Studio 主机上的接口文件，无需启动 ROS 节点')}</p></>:<><label className="field"><span>{t('接口所属包名')}</span><input required value={packageName} placeholder="robot_interfaces" onChange={event=>setPackageName(event.target.value)}/></label><label className="field"><span>{t('原生接口文件')}</span><input type="file" accept=".msg,.srv,.action" multiple onChange={event=>setFiles(Array.from(event.target.files||[]))}/></label><p className="ros-field-hint">{t('支持消息、服务和 Action 定义，依赖可从其他工作区补齐')}</p></>}
+        <div className="buttons"><button type="button" onClick={()=>setEditor(null)}>{t('取消')}</button><button className="primary" type="submit" disabled={editor==='files'?!packageName.trim()||!files.length:!path.trim()}>{t(busy?'正在读取接口':'检查并添加')}</button></div>
+      </fieldset></form>:current?<><header className="iw-detail-heading"><div><span className="iw-eyebrow">{t(current.mode==='files'?'导入定义':current.mode==='installed'?'安装目录':'源码工作区')}</span><h3>{current.name}</h3><p>{current.path||t('接口文件已保存在当前机器人工程')}</p></div><div className="buttons">{current.mode!=='files'&&<button disabled={busy} onClick={()=>void perform(()=>update({refresh:true}))}><Icon name="refresh"/>{t('重新扫描')}</button>}<button disabled={busy||current.used_by>0} title={current.used_by?t('已有任务使用此工作区'):t('移除工作区')} aria-label={t('移除工作区')} onClick={()=>void perform(remove)}><Icon name="trash"/></button></div></header>
+        <div className="iw-metadata"><label className="field"><span>{t('工作区名称')}</span><div className="iw-path"><input value={rename} disabled={busy} onChange={event=>setRename(event.target.value)}/><button disabled={busy||!rename.trim()||rename.trim()===current.name} onClick={()=>void perform(()=>update({name:rename.trim()}))}>{t('保存')}</button></div></label><span>{t('{0} 个任务使用',{0:current.used_by})}</span></div>
+        {!!current.conflicts_with.length&&<div className="iw-notice"><strong>{t('不能同时选用的工作区')}</strong><p>{t('这些工作区可以保留，任务选择时会自动排除冲突组合')}</p>{current.conflicts_with.map(other=><div key={other.id}><strong>{other.name}</strong><small>{other.types.join(' · ')}</small></div>)}</div>}
+        {!!(resolution?.diagnostics.length||current.diagnostics.length)&&<div className="iw-diagnostics"><strong>{t('待补充的接口定义')}</strong>{(resolution?.diagnostics||current.diagnostics).map((issue,index)=><p key={index}>{issue.ros_type&&<code>{issue.ros_type} · </code>}{t(issue.reason)}</p>)}</div>}
+        <div className="iw-interface-list"><h4>{t('接口清单')} <span>{resolution?.types.length??current.interface_count}</span></h4>{resolution?.types.map(item=><div className="iw-interface-row" key={item.ros_type}><span className="ros-kind-symbol">{item.ros_type.includes('/action/')?'A':item.ros_type.includes('/srv/')?'S':'T'}</span><code>{item.ros_type}</code></div>)}{!resolution&&<p className="ros-field-hint">{t('正在读取接口')}</p>}{resolution&&!resolution.types.length&&<p className="ros-field-hint">{t('补齐定义后，接口会显示在这里')}</p>}</div>
+      </>:<div className="iw-empty"><Icon name="boxes" size="xl"/><h3>{t('为机器人准备接口定义')}</h3><p>{t('添加源码工作区或导入接口文件，即可离线创建任务')}</p><button onClick={()=>create('source')}><Icon name="plus"/>{t('添加工作区')}</button></div>}
+      <ErrorFields value={error}/>{notice&&<p className="iw-status" role="status">{notice}</p>}
+    </div></div>
   </section>
 }
