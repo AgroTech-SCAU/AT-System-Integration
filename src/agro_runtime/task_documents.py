@@ -25,7 +25,8 @@ def new_id():
 
 
 def compatible(source,target):
-    return all(target.get(k) is None or source.get(k)==target[k] for k in ('type','unit','frame_id','clock_domain'))
+    from .data_contracts import contract_reason
+    return not contract_reason(source, target)
 
 
 def binding(value,spec):
@@ -310,12 +311,12 @@ class TaskDocuments:
             for name,value in node['ports'].items():
                 if value['kind']!='blackboard_reference':continue
                 spec=specs.get(name,{})
-                typ={k:spec[k] for k in ('type','unit','frame_id','clock_domain','max_age_s') if spec.get(k) is not None}
+                typ={k:spec[k] for k in ('type','unit','frame_id','clock_domain','max_age_s','minimum','maximum','choices','extensions') if spec.get(k) is not None}
                 if spec.get('direction')!='OUTPUT' and value['key'] not in known:read.setdefault(value['key'],typ)
             for name,value in node['ports'].items():
                 spec=specs.get(name,{})
                 if value['kind']=='blackboard_reference' and spec.get('direction')=='OUTPUT':
-                    written[value['key']]={k:spec[k] for k in ('type','unit','frame_id','clock_domain','max_age_s') if spec.get(k) is not None}
+                    written[value['key']]={k:spec[k] for k in ('type','unit','frame_id','clock_domain','max_age_s','minimum','maximum','choices','extensions') if spec.get(k) is not None}
                     known.add(value['key'])
             if registration in {'Fallback','ReactiveFallback'}:
                 branches=[visit(child,known) for child in node['children']]
@@ -434,7 +435,7 @@ class TaskDocuments:
                     else:
                         if value.get('type') and not compatible(value['type'],{k:v for k,v in spec.items() if k in {'type','unit'}}):error('literal_type_mismatch','常量类型或单位不兼容',tree_id,identity,port)
                         try:
-                            typ={k:spec[k] for k in ('type','unit','minimum','maximum','choices','frame_id','clock_domain','max_age_s') if spec.get(k) is not None}
+                            typ={k:spec[k] for k in ('type','unit','minimum','maximum','choices','frame_id','clock_domain','max_age_s','extensions') if spec.get(k) is not None}
                             # 通用位姿端口从数据来源取得完整契约
                             if spec['type'] in {'stamped_pose','target_list'} and 'frame_id' not in typ:
                                 if not isinstance(value.get('value'),dict if spec['type']=='stamped_pose' else list):raise ValueError('位姿常量结构错误')
@@ -490,13 +491,15 @@ class TaskDocuments:
                 if spec.get('direction')!='OUTPUT' and value['kind']=='blackboard_reference':
                     source=env.get(value['key'])
                     if not source:error('undefined_variable','变量尚未由当前执行路径保证产生',tree_id,identity,port)
-                    elif not compatible(source,spec):error('port_contract_mismatch','类型、单位、坐标系或时间域不兼容',tree_id,identity,port)
+                    elif not compatible(source,spec):
+                        from .data_contracts import contract_reason
+                        error('port_contract_mismatch',contract_reason(source,spec),tree_id,identity,port)
                     else:sources.append({'tree_id':tree_id,'editor_id':identity,'port':port,'key':value['key'],'type':{k:v for k,v in source.items() if k!='_producers'},'producers':source.get('_producers',[])})
             def output_values():
                 for port,value in node['ports'].items():
                     spec=specs.get(port,{})
                     if spec.get('direction')=='OUTPUT' and value['kind']=='blackboard_reference':
-                        out={k:spec[k] for k in ('type','unit','frame_id','clock_domain','max_age_s') if spec.get(k) is not None}
+                        out={k:spec[k] for k in ('type','unit','frame_id','clock_domain','max_age_s','minimum','maximum','choices','extensions') if spec.get(k) is not None}
                         if registration in {'ForEachTarget','SelectTarget','TargetsFromPose'}:
                             source=node['ports'].get('targets' if registration!='TargetsFromPose' else 'target')
                             if source and source['kind']=='blackboard_reference' and source['key'] in env:

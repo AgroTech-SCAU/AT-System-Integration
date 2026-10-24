@@ -50,6 +50,10 @@ class TypeDescriptor(ContractModel):
 
     @model_validator(mode='after')
     def check_type(self):
+        if self.extensions.get('ros_shape') is not None:
+            from .data_contracts import valid_shape
+            if not valid_shape(self.extensions['ros_shape']):
+                invalid(('extensions',), 'invalid_ros_shape', 'ROS 字段结构无效')
         if self.type in {'integer', 'number', 'stamped_pose', 'target_list'} and self.unit is None:
             invalid(('unit',), 'unit_required', '数值与位姿必须声明单位，无量纲数值使用 1')
         if self.minimum is not None and self.maximum is not None and self.minimum > self.maximum:
@@ -96,6 +100,13 @@ def scalar_error(spec, value, *, check_choices=True):
             return 'out_of_range', f'值不能大于 {spec.maximum}'
     if check_choices and spec.choices is not None and value not in spec.choices:
         return 'invalid_choice', '值不在声明的可选值中'
+    if spec.extensions.get('ros_shape'):
+        from .ros_interfaces import validate_schema_value
+        from .errors import ContractValidationError
+        try:
+            validate_schema_value(value, spec.extensions['ros_shape'], '$.value')
+        except ContractValidationError:
+            return 'ros_shape_mismatch', '数据不符合声明的 ROS 字段结构或范围'
     return None, None
 
 

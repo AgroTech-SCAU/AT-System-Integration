@@ -1,3 +1,4 @@
+import {contractReason} from '../../data-contracts'
 import {confirmDialog, unsavedDialog, deferNavigation} from '../../components/StudioDialogs'
 import {AnimatePresence, motion} from 'motion/react'
 import {springs, fade, PresenceLayer} from '../../motion'
@@ -144,7 +145,7 @@ export default function TaskEditor({client,observation,language,changed,configur
    for(const [name,binding] of Object.entries(item.ports) as [string,Json][]){const spec=portModels[item.editor_id]?.[name];if((spec?.direction==='OUTPUT'||spec?.direction==='INOUT')&&binding.kind==='blackboard_reference'&&binding.key)options.push({key:binding.key,label:`${value.layout.labels[item.editor_id]||models?.nodes[item.registration_id]?.label||nodeLabel(item.registration_id,language)} · ${name.replace(/^out_/,'')}`,contract:typeof spec.type==='object'?spec.type:spec})}
   }
   const seen=new Set<string>()
-  return options.filter(candidate=>{if(seen.has(candidate.key))return false;for(const field of ['type','unit','frame_id','clock_domain'])if(target[field]&&candidate.contract[field]!==target[field])return false;seen.add(candidate.key);return true}).map(({key,label})=>({key,label}))
+  return options.filter(candidate=>{if(seen.has(candidate.key))return false;seen.add(candidate.key);return true}).map(({key,label,contract})=>({key,label,reason:contractReason(contract as any,target as any)}))
  }
  async function save(){
   const previous=currentDraft.current,snapshot=currentValue.current,sequence=editSequence.current

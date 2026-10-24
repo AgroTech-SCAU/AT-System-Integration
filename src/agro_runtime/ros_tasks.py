@@ -146,11 +146,14 @@ def validate_task_schema(data, schema):
         return descriptor
 
     for path in data.get('input_bindings', {}):
-        descriptor_at(path, request, '$.input_bindings.' + path)
+        descriptor = descriptor_at(path, request, '$.input_bindings.' + path)
+        contract = data['inputs'][data['input_bindings'][path]]
+        _check_field_contract(contract, descriptor, '$.input_bindings.' + path)
         if path == '$' and len(data['input_bindings']) != 1:
             fail('$.input_bindings', 'invalid_root_binding', '完整消息绑定需要单个 JSON 对象输入')
     for port, path in data.get('output_bindings', {}).items():
-        descriptor_at(path, response, '$.output_bindings.' + port)
+        descriptor = descriptor_at(path, response, '$.output_bindings.' + port)
+        _check_field_contract(data['outputs'][port], descriptor, '$.output_bindings.' + port)
     for name in ('condition', 'success_condition'):
         condition = data.get(name, {})
         if name == 'condition' and data.get('kind') != 'subscribe_wait' or condition.get('operator', 'any') == 'any':
@@ -159,6 +162,17 @@ def validate_task_schema(data, schema):
         if condition.get('operator') in ('greater', 'less') and descriptor['kind'] not in ('integer', 'number'):
             fail('$.' + name + '.field', 'invalid_comparison_field', '大小比较需要选择数值字段')
         validate_schema_value(condition.get('value'), descriptor, '$.' + name + '.value')
+
+
+def _check_field_contract(contract, descriptor, path):
+    from .data_contracts import wire_shape
+    extension = contract.get('extensions', {})
+    if extension.get('ros_type'):
+        expected = descriptor['kind'] if descriptor['kind'] not in ('object', 'array') else 'json'
+        if contract['type'] != expected or extension['ros_type'] != descriptor.get('type') or extension.get('ros_shape') != wire_shape(descriptor):
+            fail(path, 'field_contract_changed', '字段类型或结构已变化，请重新选择对应的输入输出字段')
+        if descriptor.get('unit') and contract.get('unit') != descriptor['unit']:
+            fail(path, 'field_unit_mismatch', '端口单位与已确认的字段单位不同')
 
 
 def prepared_task(data, inputs=None, schema=None):

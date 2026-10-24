@@ -585,6 +585,17 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
         from .interface_sources import InterfaceWorkspaces
         return InterfaceWorkspaces(store, ros_tasks._robot()).save(body, workspace_id)
 
+    @api.get('/ros/interface-workspaces/{workspace_id}/communications')
+    async def interface_workspace_communications(workspace_id: str):
+        from .interface_sources import InterfaceWorkspaces
+        workspaces = InterfaceWorkspaces(store, ros_tasks._robot())
+        return workspaces.communications(workspaces.get(workspace_id))
+
+    @api.put('/ros/interface-workspaces/{workspace_id}/field-notes')
+    async def interface_workspace_field_notes(workspace_id: str, body: dict):
+        from .interface_sources import InterfaceWorkspaces
+        return InterfaceWorkspaces(store, ros_tasks._robot()).annotate(workspace_id, body)
+
     @api.delete('/ros/interface-workspaces/{workspace_id}')
     async def interface_workspace_delete(workspace_id: str):
         from .interface_sources import InterfaceWorkspaces
@@ -612,7 +623,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     @api.get('/ros/bindings')
     async def ros_bindings():
         return {'bindings': [{'task_id': item['id'], 'name': item['name'], 'interface': item.get('interface', ''),
-                              'ros_type': item['ros_type'], 'kind': item['kind']} for item in ros_tasks.list()]}
+                              'ros_type': item['ros_type'], 'kind': item['kind'], 'workspace_ids': item.get('workspace_ids', [])} for item in ros_tasks.list()]}
 
     @api.put('/ros/bindings/{task_id}')
     async def ros_binding_save(task_id: str, body: RosBindingSave):

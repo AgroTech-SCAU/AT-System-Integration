@@ -80,6 +80,17 @@ def validate(spec, definitions=(), ros_tasks=(), *, ready=True):
         if len(json.dumps(variables, allow_nan=False)) > 262144: raise ValueError()
     except (ValueError, TypeError):
         fail('$.variables', 'invalid_variables', '变量必须为有限 JSON 数据且不超过 256 KiB')
+    contracts = spec.get('variable_contracts', {})
+    if not isinstance(contracts, dict) or set(contracts) - set(variables):
+        fail('$.variable_contracts', 'invalid_variables', '数据约束需要对应已声明的流程变量')
+    from .models import TypeDescriptor, scalar_error
+    from .errors import parse
+    for name, contract in contracts.items():
+        descriptor = parse(TypeDescriptor, contract)
+        if variables[name] is not None:
+            code, reason = scalar_error(descriptor, variables[name])
+            if code:
+                fail('$.variables.' + name, code, reason)
     if ready:
         for edge in edges:
             guard = edge.get('guard') or {}
@@ -210,6 +221,28 @@ class StateMachines:
         if self.ros_tasks:
             self.ros_tasks.validate_task_workspaces(tasks)
         diagnostics = []
+        from .data_contracts import contract_reason
+        variable_contracts = spec.get('variable_contracts', {})
+        task_map = {'ros:' + item['id']: item for item in self.ros_definitions()}
+        for state in spec['states']:
+            for phase in ('entry', 'do', 'exit'):
+                ref = state.get(phase)
+                behavior = task_map.get(ref) or trees.get(ref)
+                if not behavior:
+                    continue
+                ros = ref.startswith('ros:')
+                tree = behavior.get('document', {}).get('trees', {}).get(behavior.get('document', {}).get('main_tree_id'), {})
+                inputs = behavior.get('inputs', {}) if ros else behavior.get('document', {}).get('inputs', {})
+                outputs = behavior.get('outputs', {}) if ros else {name: port['type'] for name, port in tree.get('ports', {}).items() if port['direction'] == 'OUTPUT'}
+                for direction, ports in (('inputs', inputs), ('outputs', outputs)):
+                    for port, variable in state.get('bindings', {}).get(phase, {}).get(direction, {}).items():
+                        target = ports.get(port)
+                        reason = '行为中已不存在此输入输出字段' if not target else ''
+                        if target and variable in variable_contracts:
+                            source = variable_contracts[variable]
+                            reason = contract_reason(source, target) if direction == 'inputs' else contract_reason(target, source)
+                        if reason:
+                            diagnostics.append({'message': variable + ' → ' + port + ' · ' + reason, 'state_id': state['id'], 'phase': phase, 'path': 'bindings.' + direction + '.' + port})
         if self.ros_tasks:
             from .ros_tasks import validate_task, validate_task_schema
             from .errors import ContractValidationError
@@ -225,7 +258,7 @@ class StateMachines:
                                         'task_id': task.get('id'), 'path': issue.path,
                                         **task_origins.get(task.get('id'), {})} for issue in exc.issues)
         return {'valid': not diagnostics, 'diagnostics': diagnostics, 'behaviors': len(checked),
-                'message': '离线配置检查通过，在线通信与执行状态尚未确认' if not diagnostics else '运行前需补充配置'}
+                'message': '离线配置检查通过' if not diagnostics else '运行前需补充配置'}
 
     def running(self):
         return self._session is not None and self._session.get('status') in ('RUNNING','ENTERING','TRANSITIONING','STOPPING')
@@ -296,15 +329,40 @@ class StateMachines:
         result = copy.deepcopy(defaults or {})
         for name in names:
             key = mapping.get(name,name)
-            if key in values: result[name] = copy.deepcopy(values[key])
+            if key in values:
+                if values[key] is None and key in self._spec.get('variable_contracts', {}):
+                    fail('$.variables.' + key, 'missing_input_data', '此输入尚未获得上游任务的数据：' + key)
+                contract = self._spec.get('variable_contracts', {}).get(key, {})
+                if contract.get('max_age_s') is not None:
+                    written = self._session.get('variable_times', {}).get(key)
+                    if written is None or time.monotonic() - written > contract['max_age_s']:
+                        fail('$.variables.' + key, 'expired_input_data', '来源数据尚未更新或已超过有效期：' + key)
+                result[name] = copy.deepcopy(values[key])
         return result
 
     def _outputs(self, output, state_id, phase):
         values = copy.deepcopy(self._session['variables'])
+        timestamps = copy.deepcopy(self._session.get('variable_times', {}))
         mapping = self._bindings(state_id,phase).get('outputs', {})
         for name,value in output.items():
             key = mapping.get(name,name)
-            if key in values: values[key] = copy.deepcopy(value)
+            if key in values:
+                contract = self._spec.get('variable_contracts', {}).get(key)
+                if contract:
+                    from .models import TypeDescriptor, scalar_error
+                    from .errors import parse
+                    code, reason = scalar_error(parse(TypeDescriptor, contract), value)
+                    if code:
+                        fail('$.variables.' + key, code, reason)
+                values[key] = copy.deepcopy(value)
+                timestamps[key] = time.monotonic()
+        self._persist(variables=values, variable_times=timestamps)
+
+    def _clear_outputs(self, state_id, phase):
+        values = copy.deepcopy(self._session['variables'])
+        for variable in self._bindings(state_id, phase).get('outputs', {}).values():
+            if variable in self._spec.get('variable_contracts', {}):
+                values[variable] = None
         self._persist(variables=values)
 
     def _behavior_status(self):
@@ -362,6 +420,7 @@ class StateMachines:
                 result = await self._run_ros(frozen, instance)
             else:
                 parameters = self._inputs(frozen.get('manifest', {}).get('parameters', {}), state_id, stage, frozen.get('parameters', {}))
+                self._clear_outputs(state_id, stage)
                 request = self.documents.definition_request(frozen['id'], 'hsm_' + uuid4().hex, parameters=parameters)
                 token = self._acquire_control(frozen.get('manifest', {}).get('timeout_ms', 30000) / 1000)
                 async with self.context.transition:
@@ -405,6 +464,7 @@ class StateMachines:
     async def _run_ros(self, definition, instance):
         token = self._acquire_control(definition.get('timeout_s', 15))
         inputs = self._inputs(definition.get('inputs', {}), instance['state_id'], instance['phase'])
+        self._clear_outputs(instance['state_id'], instance['phase'])
         operation = await self.documents.ros_operations.start(definition, inputs, token.model_dump(mode='json'),
             task_id=self._session['id'], node_id=instance['state_id'] + '_' + instance['phase'],
             request_id=instance['id'])

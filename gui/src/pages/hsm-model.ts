@@ -4,7 +4,7 @@ import type {HsmLayout} from './HsmCanvas'
 export type Scalar = string | number | boolean | null | Scalar[] | {[key:string]:Scalar}
 export type MachineState = {id:string;label:string;parent?:string;initial?:string;entry?:string;do?:string;exit?:string;bindings?:Partial<Record<'entry'|'do'|'exit',{inputs?:Record<string,string>;outputs?:Record<string,string>}>>}
 export type Transition = {source:string;target:string;event:string;guard?:{operator:string;key?:string;value?:Scalar}}
-export type MachineDocument = {initial:string;states:MachineState[];transitions:Transition[];variables:Record<string,Scalar>}
+export type MachineDocument = {variable_contracts?:Record<string,import('../data-contracts').DataContract>;initial:string;states:MachineState[];transitions:Transition[];variables:Record<string,Scalar>}
 export type MachineSnapshot = {title:string;document:MachineDocument;layout:HsmLayout}
 export type SavedMachine = {id:string;name:string;document:MachineDocument;layout?:HsmLayout;revision?:number;needs_tree_rebinding?:boolean}
 export type Diagnostic = {message:string;stateId?:string;edgeIndex?:number}

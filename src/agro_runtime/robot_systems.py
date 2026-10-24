@@ -313,7 +313,9 @@ class RobotSystems:
             "state_machines": state_machines,
             "ros_tasks": ros_tasks,
             "interface_workspaces": [{**{field: copy.deepcopy(item[field]) for field in ('id', 'name', 'definitions')},
-                                      'mode': 'files', 'path': '', 'icon': item.get('icon', 'generic')}
+                                      'mode': 'files', 'path': '', 'icon': item.get('icon', 'generic'),
+                                      'communications': copy.deepcopy(item.get('communications', {'endpoints': []})),
+                                      'field_notes': copy.deepcopy(item.get('field_notes', {}))}
                                      for item in interface_workspaces],
             "interface_foundation": copy.deepcopy(foundation.get("definitions", {})),
             "interface_definitions": [{field: value for field, value in item.items() if field not in ('project_id', 'source')}
@@ -545,6 +547,16 @@ class RobotSystems:
             workspace_names.add(name.strip())
             clean_workspaces.append({'id': identity, 'project_id': key, 'name': name.strip(), 'icon': icon, 'mode': mode,
                                      'path': path, 'definitions': definitions, 'diagnostics': diagnostics})
+            from .offline_communications import portable_communications
+            if 'communications' in item:
+                clean_workspaces[-1]['communications'] = portable_communications(item['communications'])
+            notes = item.get('field_notes', {})
+            if not isinstance(notes, dict) or len(notes) > 3000 or len(json.dumps(notes)) > 524288 or any(
+                not isinstance(value, dict) or not isinstance(value.get('definition_key'), str) or not isinstance(value.get('fields'), dict)
+                for value in notes.values()):
+                fail('$.field_notes', 'invalid_notes', '字段说明格式无效')
+            clean_workspaces[-1]['field_notes'] = copy.deepcopy(notes)
+
         for item in transfer_schemas:
             if not isinstance(item, dict) or not isinstance(item.get('id'), str) or item['id'] in schema_refmap:
                 fail('$.interface_definitions', 'invalid_definitions', '接口定义标识无效或重复')

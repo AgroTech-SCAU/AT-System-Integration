@@ -15,8 +15,8 @@ const icons = [
 ]
 
 export function TaskIcon({value}: {value?: string}) {
-  const selected = icons.find(icon => icon.id === value)
-  return selected && selected.id !== 'generic' ? <img className="studio-task-icon" src={`/ui/brand/${selected.id}.png`} alt=""/> : <span className="studio-task-icon studio-task-icon-generic"><Icon name="boxes"/></span>
+  const selected = icons.find(icon => icon.id === value) || icons[0]
+  return <img className="studio-task-icon" src={`/ui/brand/${selected.id}.png`} alt=""/>
 }
 
 export function TaskIconPicker({value, onChange, label='任务图标'}: {value?: string; onChange: (value: string) => void; label?:string}) {

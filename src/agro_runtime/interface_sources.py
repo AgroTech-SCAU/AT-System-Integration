@@ -226,9 +226,33 @@ class InterfaceWorkspaces:
         return {key: copy.deepcopy(record.get(key)) for key in ('id', 'name', 'mode', 'path')} | {
             'icon': record.get('icon', 'generic'),
             'diagnostics': resolved['diagnostics'], 'available_count': ready,
-            'pending_count': len(record['definitions']) - ready,
-            'interface_count': len(record['definitions']), 'conflicts_with': conflicts,
+            'pending_count': len(resolved['types']) - ready,
+            'interface_count': len(resolved['types']), 'conflicts_with': conflicts,
             'used_by': len(used_tasks)}
+
+    def communications(self, record):
+        from .offline_communications import scan_communications
+        if 'communications' not in record:
+            result = scan_communications(record['path'], record['mode']) if record.get('path') else {
+                'endpoints': [], 'profiles': [], 'profile': '', 'arguments': {},
+                'notices': ['仅导入接口定义，添加源码工作区可扫描通信声明']}
+            record['communications'] = result
+            self.store.put('interface_workspace', record['id'], record)
+        return record['communications']
+
+    def annotate(self, identity, raw):
+        from .field_metadata import definition_key, validate_notes
+        record = self.get(identity)
+        ros_type = raw.get('ros_type')
+        resolved = self.resolve([identity])
+        item = next((item for item in resolved['types'] if item['ros_type'] == ros_type and item['available']), None)
+        if not item:
+            fail('$.ros_type', 'missing_definition', '请先补齐接口依赖')
+        snapshot = self.store.get('ros_schema', item['schema_id'])
+        notes = validate_notes(raw.get('fields'), snapshot['schema'])
+        record.setdefault('field_notes', {})[ros_type] = {'definition_key': definition_key(snapshot['definitions'][ros_type]), 'fields': notes}
+        self.store.put('interface_workspace', identity, record)
+        return self.resolve([identity])
 
     def catalog(self):
         records = self.records()
@@ -289,6 +313,21 @@ class InterfaceWorkspaces:
             definitions, diagnostics = old['definitions'], old.get('diagnostics', [])
         record = {'id': identity or 'workspace_' + uuid4().hex, 'project_id': self.project_id,
                   'name': name.strip(), 'icon': icon, 'mode': mode, 'path': path, 'definitions': definitions, 'diagnostics': diagnostics}
+        if old and 'field_notes' in old:
+            record['field_notes'] = old['field_notes']
+        if old and not refresh:
+            for key in ('communications', 'field_notes'):
+                if key in old:
+                    record[key] = old[key]
+        if path and (refresh or 'communication_profile' in raw or 'communication_arguments' in raw):
+            from .offline_communications import scan_communications
+            previous = (old or {}).get('communications', {})
+            profile = raw.get('communication_profile', previous.get('profile', ''))
+            arguments = raw.get('communication_arguments', previous.get('arguments', {}))
+            if not isinstance(profile, str) or len(profile) > 1024 or not isinstance(arguments, dict) or len(arguments) > 64 or any(
+                not isinstance(key, str) or not isinstance(value, str) or len(key) > 128 or len(value) > 1024 for key, value in arguments.items()):
+                fail('$.communication_arguments', 'invalid_arguments', '启动参数需要名称与文本值，最多 64 项')
+            record['communications'] = scan_communications(path, mode, profile, arguments)
         self.store.put('interface_workspace', record['id'], record)
         return self.summary(record)
 
@@ -326,7 +365,9 @@ class InterfaceWorkspaces:
             if len(fingerprints) > 1:
                 conflicts.append({'ros_type': name, 'workspace_ids': [item['id'] for item in records],
                                   'workspace_names': [item['name'] for item in records]})
-        result = {'workspace_ids': workspace_ids, 'types': [], 'conflicts': conflicts, 'diagnostics': [], 'dependencies': []}
+        result = {'workspace_ids': workspace_ids, 'types': [], 'conflicts': conflicts, 'diagnostics': [], 'dependencies': [],
+                  'communications': [{**endpoint, 'workspace_id': record['id'], 'workspace_name': record['name']}
+                                     for record in selected for endpoint in self.communications(record)['endpoints']]}
         if conflicts:
             return result
         foundation = InterfaceFoundation(self.store, self.project_id).record()
@@ -349,7 +390,40 @@ class InterfaceWorkspaces:
             origins[name] = source
             result['dependencies'].append({'ros_type': name, 'source': source, 'workspace_id': identity})
             return content
+        # A transport declared in source can use a standard type that is supplied by the foundation
+        for endpoint in result['communications']:
+            name = endpoint.get('ros_type', '')
+            if name and name not in primary and name in candidates:
+                content = dependency(name)
+                if content:
+                    definitions[name] = content
+                    primary.add(name)
+                    owners[name] = [record for record in selected if record['id'] == endpoint['workspace_id']]
         schemas, diagnostics = self.library.compile(definitions, allow_partial=True, saved_definitions=False, dependency_loader=dependency)
+        from .field_metadata import apply_notes, definition_key, validate_notes
+        for name, schema in list(schemas.items()):
+            entries = [(record, record.get('field_notes', {}).get(name)) for record in selected]
+            notes = [(record, note) for record, note in entries if note]
+            if len({json.dumps(note['fields'], sort_keys=True) for _, note in notes}) > 1:
+                diagnostics.append({'code': 'annotation_conflict', 'ros_type': name, 'reason': '所选工作区对此接口的字段说明不同，请统一后使用'})
+                continue
+            if notes:
+                record, note = notes[0]
+                if note['definition_key'] != definition_key(definitions[name]):
+                    diagnostics.append({'code': 'annotation_changed', 'ros_type': name, 'reason': '接口定义已变化，原字段说明已保留，需重新确认'})
+                else:
+                    from .errors import ContractValidationError
+                    try:
+                        schemas[name] = apply_notes(schema, validate_notes(note['fields'], schema))
+                    except ContractValidationError:
+                        diagnostics.append({'code': 'annotation_changed', 'ros_type': name, 'reason': '字段说明与当前依赖定义不一致，原说明已保留，需重新确认'})
+        endpoint_types = {}
+        for endpoint in result['communications']:
+            if endpoint['status'] == 'resolved':
+                endpoint_types.setdefault((endpoint['kind'], endpoint['name']), set()).add(endpoint['ros_type'])
+        for endpoint in result['communications']:
+            if len(endpoint_types.get((endpoint['kind'], endpoint['name']), set())) > 1:
+                endpoint.update(status='conflict', reason='同一通信名称存在不同接口类型，请检查启动配置或重映射')
         saved = self.library.persist(definitions, schemas, 'workspace', origins, workspace_ids) if persist else []
         schema_ids = {item['ros_type']: item['id'] for item in saved}
         result['types'] = [{'ros_type': name, 'schema_id': schema_ids.get(name), 'source': origins[name],

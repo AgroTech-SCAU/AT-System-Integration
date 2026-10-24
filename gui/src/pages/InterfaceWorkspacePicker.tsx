@@ -1,3 +1,4 @@
+import type {OfflineEndpoint} from './OfflineCommunications'
 import {useState} from 'react'
 import {AnimatePresence} from 'motion/react'
 import {AnchoredPopover} from '../components/AnchoredPopover'
@@ -8,7 +9,7 @@ import {useLocale} from '../locale'
 export type InterfaceIssue={code:string;reason:string;ros_type?:string;dependency?:string}
 export type InterfaceWorkspace={id:string;name:string;icon?:string;mode:'source'|'installed'|'files';path:string;interface_count:number;available_count:number;pending_count:number;diagnostics:InterfaceIssue[];conflicts_with:{id:string;name:string;types:string[]}[];used_by:number}
 export type WorkspaceInterface={ros_type:string;schema_id?:string|null;available?:boolean;issues?:InterfaceIssue[];source:string;workspace_ids:string[];dependency?:boolean}
-export type WorkspaceResolution={workspace_ids:string[];types:WorkspaceInterface[];conflicts:{ros_type:string;workspace_ids:string[];workspace_names:string[]}[];diagnostics:InterfaceIssue[];dependencies?:{ros_type:string;source:string;workspace_id:string|null}[]}
+export type WorkspaceResolution={communications?:OfflineEndpoint[];workspace_ids:string[];types:WorkspaceInterface[];conflicts:{ros_type:string;workspace_ids:string[];workspace_names:string[]}[];diagnostics:InterfaceIssue[];dependencies?:{ros_type:string;source:string;workspace_id:string|null}[]}
 
 export default function InterfaceWorkspacePicker({workspaces,value,onChange,onManage,disabled}:{workspaces:InterfaceWorkspace[];value:string[];onChange:(value:string[])=>void;onManage?:()=>void;disabled?:boolean}){
   const {t}=useLocale()
