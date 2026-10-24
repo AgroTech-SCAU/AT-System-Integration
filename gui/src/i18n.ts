@@ -1,7 +1,7 @@
 import type { Language } from './types'
 
 const zh = {
-  overview: '机器人', overviewHint: '发现 ROS 接口，观察消息并创建任务',
+  overview: '机器人', overviewHint: '导入子系统 ROS2 工作区，配置任务通信并查看在线接口',
   editor: '流程编排', editorHint: '编辑层级状态机、行为树和任务参数',
   records: '运行记录', recordsHint: '按任务查看执行结果、失败原因与日志',
   minimizeWindow: '最小化窗口', maximizeWindow: '最大化或还原窗口', closeWindow: '关闭应用窗口',
@@ -26,7 +26,7 @@ const zh = {
   noObservation: '正在获取系统状态', error: '错误', waiting: '等待连接'
 }
 const en: typeof zh = {
-  overview: 'Robot', overviewHint: 'Discover ROS interfaces, observe messages and create tasks',
+  overview: 'Robot', overviewHint: 'Import subsystem ROS2 workspaces, configure task communication and inspect live interfaces',
   editor: 'Flow editor', editorHint: 'Compose hierarchical states, behavior trees and task parameters',
   records: 'Run history', recordsHint: 'Inspect results, failures and logs by task',
   minimizeWindow: 'Minimize window', maximizeWindow: 'Maximize or restore window', closeWindow: 'Close application window',

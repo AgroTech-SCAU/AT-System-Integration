@@ -197,7 +197,7 @@ class InterfaceWorkspaces:
     def get(self, identity):
         record = next((item for item in self.records() if item['id'] == identity), None)
         if record is None:
-            fail('$.workspace_ids', 'unknown_workspace', '接口工作区不存在或不属于当前机器人')
+            fail('$.workspace_ids', 'unknown_workspace', '子系统 ROS2 工作区不存在或不属于当前机器人')
         return record
 
     @staticmethod
@@ -235,11 +235,11 @@ class InterfaceWorkspaces:
 
     def save(self, raw, identity=None):
         if not isinstance(raw, dict):
-            fail('$.workspace', 'invalid_workspace', '接口工作区配置无效')
+            fail('$.workspace', 'invalid_workspace', '子系统 ROS2 工作区配置无效')
         records = self.records()
         old = self.get(identity) if identity else None
         if not old and len(records) >= 64:
-            fail('$.workspace', 'too_many_workspaces', '当前机器人最多保存 64 个接口工作区')
+            fail('$.workspace', 'too_many_workspaces', '当前机器人最多保存 64 个子系统 ROS2 工作区')
         mode = raw.get('mode', old['mode'] if old else 'source')
         if mode not in ('source', 'installed', 'files'):
             fail('$.mode', 'invalid_source', '选择源码工作区、安装目录或接口文件')
@@ -251,7 +251,7 @@ class InterfaceWorkspaces:
         if not isinstance(name, str) or not 1 <= len(name.strip()) <= 80:
             fail('$.name', 'invalid_name', '填写工作区名称，最多 80 个字符')
         if any(item['id'] != identity and item['name'] == name.strip() for item in records):
-            fail('$.name', 'duplicate_name', '接口工作区名称已存在')
+            fail('$.name', 'duplicate_name', '子系统 ROS2 工作区名称已存在')
         refresh = not old or raw.get('refresh') or mode != old['mode'] or path != old.get('path', '') or 'files' in raw
         if refresh:
             if mode == 'files':
@@ -279,18 +279,18 @@ class InterfaceWorkspaces:
     def delete(self, identity):
         record = self.get(identity)
         if self.summary(record)['used_by']:
-            fail('$.workspace', 'workspace_in_use', '工作区已被任务使用，请先调整任务的接口工作区选择')
+            fail('$.workspace', 'workspace_in_use', '工作区已被任务使用，请先调整任务的子系统 ROS2 工作区选择')
         self.store.delete('interface_workspace', identity)
         return {'deleted': True}
 
     def selection(self, workspace_ids):
         if not isinstance(workspace_ids, list) or len(workspace_ids) > 64 or any(not isinstance(identity, str) for identity in workspace_ids):
-            fail('$.workspace_ids', 'invalid_workspaces', '接口工作区选择必须是标识列表')
+            fail('$.workspace_ids', 'invalid_workspaces', '子系统 ROS2 工作区选择必须是标识列表')
         if len(set(workspace_ids)) != len(workspace_ids):
-            fail('$.workspace_ids', 'duplicate_workspace', '接口工作区不能重复选择')
+            fail('$.workspace_ids', 'duplicate_workspace', '子系统 ROS2 工作区不能重复选择')
         records = {item['id']: item for item in self.records()}
         if any(identity not in records for identity in workspace_ids):
-            fail('$.workspace_ids', 'unknown_workspace', '接口工作区不存在或不属于当前机器人')
+            fail('$.workspace_ids', 'unknown_workspace', '子系统 ROS2 工作区不存在或不属于当前机器人')
         return [records[identity] for identity in workspace_ids]
 
     def resolve(self, workspace_ids):

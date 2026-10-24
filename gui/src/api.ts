@@ -1,7 +1,7 @@
 import type { Observation } from './types'
 
 export class ApiError extends Error {
-  constructor(public readonly kind: 'unauthorized' | 'offline' | 'response', public readonly details: {path:string;code:string;reason:string}[] = []) { super(kind) }
+  constructor(public readonly kind: 'unauthorized' | 'offline' | 'response', public readonly details: {path:string;code:string;reason:string}[] = [], public operation?: string) { super(kind) }
 }
 
 export class ApiClient {
@@ -43,8 +43,9 @@ export class ApiClient {
       }
       return await response.json() as T
     } catch (error) {
-      if (error instanceof ApiError) throw error
-      throw new ApiError('offline')
+      const operation = method==='GET'?'读取失败':path.includes('/copy')?'创建副本失败':method==='DELETE'?'删除失败':path.includes('/start')||path.includes('/operations')?'执行请求失败':path.includes('/tasks')?'任务保存失败':path.includes('/state-machines')?'状态机操作失败':path.includes('/interface-workspaces')?'子系统工作区操作失败':'配置未能保存'
+      if (error instanceof ApiError) { error.operation ||= operation; throw error }
+      throw new ApiError('offline', [], operation)
     } finally {
       clearTimeout(timer)
       this.#requests.delete(controller)

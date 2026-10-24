@@ -1,3 +1,4 @@
+import {requestNavigation} from '../components/StudioDialogs'
 import {motion} from 'motion/react'
 import {springs, fade} from '../motion'
 import {useLocale} from '../locale'
@@ -26,9 +27,9 @@ function TaskWorkspaceContent(props:Props){
   const [browseKey,setBrowseKey]=useState(0)
   const region=useRef<HTMLDivElement>(null)
   useEffect(()=>{sessionStorage.setItem(storageKey,JSON.stringify({tab,context,requestKey}))},[storageKey,tab,context,requestKey])
-  function select(next:Surface){
+  async function select(next:Surface){
     if(tab===next){if(next==='tree'){setContext(null);setBrowseKey(key=>key+1)}return}
-    if((tab==='tree'||tab==='ros')&&!window.dispatchEvent(new Event('agro:studio:leave-task',{cancelable:true})))return
+    if((tab==='tree'||tab==='ros')&&!await requestNavigation('agro:studio:leave-task'))return
     setTab(next);setContext(null)
     if(next==='tree')setBrowseKey(key=>key+1)
     if(next==='hsm')window.dispatchEvent(new Event('agro:hsm:refresh'))
@@ -40,8 +41,8 @@ function TaskWorkspaceContent(props:Props){
     setTab('hsm');setContext(null)
     window.dispatchEvent(new Event('agro:hsm:refresh'))
   }
-  function back(){
-    if(!window.dispatchEvent(new Event('agro:studio:leave-task',{cancelable:true})))return
+  async function back(){
+    if(!await requestNavigation('agro:studio:leave-task'))return
     setTab('hsm');setContext(null)
   }
   const contextLabel=context?`${context.stateLabel} / ${t(phases[context.phase])}`:undefined

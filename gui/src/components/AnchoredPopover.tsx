@@ -1,5 +1,5 @@
 import {motion, useIsPresent} from 'motion/react'
-import {springs, fade} from '../motion'
+import {menuTransition, fade} from '../motion'
 import {useLayoutEffect, useRef, type ReactNode} from 'react'
 
 export function AnchoredPopover({anchor, children, onClose, label, className = '', role = 'dialog', columns = 1, align = 'end', positionKey}: {
@@ -42,7 +42,7 @@ export function AnchoredPopover({anchor, children, onClose, label, className = '
     }
   }, [anchor, align, positionKey])
 
-  return <motion.div initial={{opacity:0,scale:.985,y:-2}} animate={{opacity:1,scale:1,y:0}} exit={{opacity:0,scale:.99,y:-1,transition:fade}} transition={springs.quick} ref={panel} aria-hidden={!present} popover={role==='menu'?'manual':'auto'} role={role} aria-label={label} className={`studio-popover ${className}`}
+  return <motion.div initial={{opacity:0,scale:.985,y:-2}} animate={{opacity:1,scale:1,y:0}} exit={{opacity:0,scale:.99,y:-1,transition:fade}} transition={menuTransition} ref={panel} aria-hidden={!present} popover={role==='menu'?'manual':'auto'} role={role} aria-label={label} className={`studio-popover ${className}`}
     onToggle={event => {if (present && event.newState === 'closed') onClose()}}
     onBlur={() => requestAnimationFrame(() => {
       const node = panel.current

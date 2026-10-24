@@ -1,3 +1,4 @@
+import {requestNavigation, reportError} from '../components/StudioDialogs'
 import {AnimatePresence, motion} from 'motion/react'
 import {springs, fade} from '../motion'
 import {useLocale} from '../locale'
@@ -71,14 +72,14 @@ export default function RobotLibrary({client, directory, onRefresh, onReconnect,
         if (!client || operation.current) return
         operation.current = true; setBusy(true); setFailed(false); setMessage(''); setPhase(progress); setMenu(null)
         try {await work()}
-        catch (error) {setFailed(true); setMessage(problem(error,t))}
+        catch (error) {reportError(error);setFailed(true); setMessage(problem(error,t))}
         finally {operation.current = false; setBusy(false); setPhase('')}
     }
     async function enter(robot: RobotSystem) {
         if (!client || locked) return
         if (robot.id === directory?.selected_id && (directory.active || !robot.configured)) {onNavigate('overview'); return}
         if (switchReason) return
-        if (!window.dispatchEvent(new Event('agro:navigate', {cancelable: true}))) return
+        if (!await requestNavigation()) return
         await perform(async () => {
             if (!robot.configured) await client.request(`/robot-systems/${robot.id}/select-blank`, 'POST', {})
             else {
@@ -112,7 +113,7 @@ export default function RobotLibrary({client, directory, onRefresh, onReconnect,
         if (locked) return
         if (window.agroDesktop) {
             try {await acceptImport(await window.agroDesktop.openRobotProject())}
-            catch (error) {setFailed(true); setMessage(problem(error,t))}
+            catch (error) {reportError(error);setFailed(true); setMessage(problem(error,t))}
         } else fileInput.current?.click()
     }
     async function browseFile(file?: File) {
@@ -120,7 +121,7 @@ export default function RobotLibrary({client, directory, onRefresh, onReconnect,
         try {
             if (file.size > 6 * 1024 * 1024) throw new Error(t("工程文件不能超过 6 MiB"))
             await acceptImport(JSON.parse(await file.text()) as unknown)
-        } catch (error) {setFailed(true); setMessage(t("无法读取工程文件：") + problem(error,t))}
+        } catch (error) {reportError(error);setFailed(true); setMessage(t("无法读取工程文件：") + problem(error,t))}
         finally {if (fileInput.current) fileInput.current.value = ''}
     }
     async function exportProject(robot: RobotSystem) {
@@ -141,7 +142,7 @@ export default function RobotLibrary({client, directory, onRefresh, onReconnect,
     }
     async function remove() {
         if (!client || !target || editName !== target.name || switchReason) return
-        if (target.id === directory?.selected_id && !window.dispatchEvent(new Event('agro:navigate', {cancelable: true}))) return
+        if (target.id === directory?.selected_id && !await requestNavigation()) return
         await perform(async () => {
             if (target.id === directory?.selected_id) await client.request('/robot-systems/deselect', 'POST', {})
             await client.request(`/robot-systems/${target.id}`, 'DELETE')

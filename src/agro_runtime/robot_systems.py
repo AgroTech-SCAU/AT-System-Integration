@@ -148,7 +148,7 @@ class RobotSystems:
         # All affected workspace records are removed in one transaction, so a
         # cancelled or failed deletion cannot leave a half-deleted project
         with self.store.db:
-            for kind in ("tree_draft", "plan", "state_machine", "ros_task"):
+            for kind in ("tree_draft", "plan", "state_machine", "ros_task", "ros_resource", "ros_binding"):
                 for row in self.store.list(kind):
                     if row.get("robot_system_id") == key:
                         self.store.db.execute(
@@ -512,20 +512,20 @@ class RobotSystems:
         library = InterfaceLibrary(self.store, key)
         transfer_workspaces = bundle.get('interface_workspaces', [])
         if not isinstance(transfer_workspaces, list) or len(transfer_workspaces) > 64:
-            fail('$.interface_workspaces', 'invalid_workspaces', '工程接口工作区清单无效')
+            fail('$.interface_workspaces', 'invalid_workspaces', '工程子系统 ROS2 工作区清单无效')
         workspace_refmap, clean_workspaces, workspace_names = {}, [], set()
         for item in transfer_workspaces:
             if not isinstance(item, dict) or not isinstance(item.get('id'), str) or item['id'] in workspace_refmap:
-                fail('$.interface_workspaces', 'invalid_workspaces', '接口工作区标识无效或重复')
+                fail('$.interface_workspaces', 'invalid_workspaces', '子系统 ROS2 工作区标识无效或重复')
             name, mode, path = item.get('name'), item.get('mode'), item.get('path', '')
             if not isinstance(name, str) or not 1 <= len(name.strip()) <= 80 or name.strip() in workspace_names or mode not in ('source', 'installed', 'files') or not isinstance(path, str):
-                fail('$.interface_workspaces', 'invalid_workspaces', '接口工作区名称或来源无效')
+                fail('$.interface_workspaces', 'invalid_workspaces', '子系统 ROS2 工作区名称或来源无效')
             definitions = item.get('definitions')
             if not isinstance(definitions, dict) or len(definitions) > 3000 or any(
                 not isinstance(ros_type, str) or not TYPE.fullmatch(ros_type) or not isinstance(content, str) or len(content.encode()) > 262144
                 for ros_type, content in definitions.items()
             ):
-                fail('$.interface_workspaces', 'invalid_definitions', '接口工作区需要包含原生接口定义')
+                fail('$.interface_workspaces', 'invalid_definitions', '子系统 ROS2 工作区需要包含原生接口定义')
             _, diagnostics = library.compile(definitions, allow_partial=True, saved_definitions=False)
             identity = 'workspace_' + uuid4().hex
             workspace_refmap[item['id']] = identity
@@ -555,7 +555,7 @@ class RobotSystems:
         for task in clean_ros_tasks:
             workspace_ids = task.get('workspace_ids', [])
             if any(identity not in workspace_refmap for identity in workspace_ids):
-                fail('$.interface_workspaces', 'missing_workspace', '任务引用的接口工作区未包含在工程中：' + task['name'])
+                fail('$.interface_workspaces', 'missing_workspace', '任务引用的子系统 ROS2 工作区未包含在工程中：' + task['name'])
             if 'interface_workspaces' in bundle:
                 task['workspace_ids'] = [workspace_refmap[identity] for identity in workspace_ids]
             if task.get('schema_id'):

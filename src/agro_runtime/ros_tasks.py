@@ -27,7 +27,10 @@ def validate_task(raw):
     if 'workspace_ids' in data:
         workspace_ids = data['workspace_ids']
         if not isinstance(workspace_ids, list) or len(workspace_ids) > 64 or any(not isinstance(identity, str) for identity in workspace_ids) or len(set(workspace_ids)) != len(workspace_ids):
-            fail('$.workspace_ids', 'invalid_workspaces', '接口工作区选择必须是不重复的标识列表')
+            fail('$.workspace_ids', 'invalid_workspaces', '子系统 ROS2 工作区选择必须是不重复的标识列表')
+    labels = data.get('resource_labels', {})
+    if not isinstance(labels, dict) or any(not isinstance(key, str) or not isinstance(value, str) or not 1 <= len(value.strip()) <= 80 for key, value in labels.items()):
+        fail('$.resource_labels', 'invalid_resources', '请填写设备或互斥对象名称')
     kind = data.get('kind')
     if not isinstance(kind, str) or kind not in KINDS:
         fail('$.kind', 'invalid_kind', '选择话题发布、话题订阅、服务或动作')
@@ -325,6 +328,58 @@ class RosTasks:
                 if ros_type in definitions and definitions[ros_type] != normalized:
                     fail('$.tasks', 'task_interface_conflict', '流程任务接口定义冲突：' + owners[ros_type] + ' / ' + label + ' · ' + ros_type)
                 definitions[ros_type], owners[ros_type] = normalized, label
+
+    def copy(self, identity, name):
+        original = self.get(identity)
+        data = validate_task({**original, 'name': name})
+        data.update(id='ros_' + uuid4().hex, revision=1)
+        interface = data.pop('interface', '')
+        self.store.put('ros_task', data['id'], data)
+        self.bind(data['id'], interface)
+        return self.get(data['id'])
+
+    def uses(self):
+        robot = self._robot()
+        result = {}
+        phases = {'entry': '进入', 'do': '持续', 'exit': '退出'}
+        for machine in self.store.list('state_machine'):
+            if machine.get('robot_system_id') != robot:
+                continue
+            for state in machine['document']['states']:
+                for phase, label in phases.items():
+                    ref = state.get(phase) or ''
+                    if ref.startswith('ros:'):
+                        result.setdefault(ref[4:], []).append({'kind': 'state', 'name': machine['name'], 'detail': state['label'] + ' / ' + label})
+        drafts = [item for item in self.store.list('tree_draft') if item.get('robot_system_id') == robot]
+        draft_ids = {item['id'] for item in drafts}
+        records = drafts + [item for item in self.store.list('tree_definition') if item.get('draft_id') not in draft_ids]
+        for record in records:
+            if record.get('robot_system_id') != robot or record.get('archived') or record.get('test_only'):
+                continue
+            for tree in record.get('document', {}).get('trees', {}).values():
+                for node in tree.get('nodes', {}).values():
+                    ref = node['registration_id']
+                    if ref.startswith('RosTask_'):
+                        result.setdefault(ref[8:], []).append({'kind': 'tree', 'name': record.get('name') or record['document']['main_tree_id'], 'detail': record.get('layout', {}).get('labels', {}).get(node['editor_id']) or tree['tree_id']})
+        return result
+
+    def resources(self):
+        values = {item['name']: item for item in self.store.list('ros_resource') if item.get('robot_system_id') == self._robot()}
+        for task in self.list():
+            for resource in task.get('resources', []):
+                name = resource['name']
+                values.setdefault(name, {'name': name, 'label': task.get('resource_labels', {}).get(name, name)})
+        return list(values.values())
+
+    def resource(self, label):
+        label = label.strip()
+        if not label:
+            fail('$.name', 'invalid_name', '请填写设备或互斥对象名称')
+        existing = next((item for item in self.resources() if item['label'].casefold() == label.casefold()), None)
+        if existing:
+            return existing
+        name = 'resource_' + uuid4().hex
+        return self.store.put('ros_resource', name, {'id': name, 'name': name, 'label': label, 'robot_system_id': self._robot()})
 
     def delete(self, identity):
         self.get(identity)

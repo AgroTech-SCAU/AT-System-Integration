@@ -1,3 +1,4 @@
+import {confirmDialog, unsavedDialog, deferNavigation, reportError} from '../components/StudioDialogs'
 import {AnimatePresence, motion} from 'motion/react'
 import {springs, fade} from '../motion'
 import {SpatialPanel} from '../components/SpatialPanel'
@@ -17,7 +18,7 @@ type Props=PageProps & {onNavigate:(page:Workspace)=>void;onOpenRos:()=>void;onO
 const phaseLabels={entry:'进入时',do:'状态期间',exit:'离开时'}
 const newMachineId=()=>'machine_'+crypto.randomUUID().replaceAll('-','')
 const statusLabels:Record<string,string>={ENTERING:'进入状态',RUNNING:'运行中',TRANSITIONING:'切换状态',STOPPING:'正在停止',STOPPED:'已停止',SUCCEEDED:'已完成',FAILED:'执行失败',UNKNOWN:'状态待确认',CANCELED:'已取消'}
-const errorMessage=(error:unknown,translate:(text:string)=>string=text=>text)=>error instanceof ApiError?error.kind==='offline'?'无法连接后台，修改仍保留在当前草稿':error.kind==='unauthorized'?'后台连接已失效，请重新连接':error.details.map(detail=>translate(detail.reason)).join(' · '):error instanceof Error?error.message:'操作未完成，请重试'
+const errorMessage=(error:unknown,translate:(text:string)=>string=text=>text)=>{reportError(error);return error instanceof ApiError?error.kind==='offline'?'无法连接后台，修改仍保留在当前草稿':error.kind==='unauthorized'?'后台连接已失效，请重新连接':error.details.map(detail=>translate(detail.reason)).join(' · '):error instanceof Error?error.message:'操作未完成，请重试'}
 const setting=(key:string,fallback:boolean)=>{try{return localStorage.getItem(key)==='true'||localStorage.getItem(key)===null&&fallback}catch{return fallback}}
 const tinyIcon=(kind:'outline'|'inspect'|'undo'|'redo'|'play'|'stop'|'plus'|'chevron'|'close'|'state'|'branch'|'check'|'focus')=><svg viewBox="0 0 20 20" aria-hidden="true">{kind==='outline'?<><rect x="3" y="3" width="14" height="14" rx="3"/><path d="M8 3 V17"/></>:kind==='inspect'?<><rect x="3" y="3" width="14" height="14" rx="3"/><path d="M12 3 V17"/></>:kind==='undo'?<><path d="M7 5 L3 9 L7 13"/><path d="M3 9 H11 Q16 9 16 14"/></>:kind==='redo'?<><path d="M13 5 L17 9 L13 13"/><path d="M17 9 H9 Q4 9 4 14"/></>:kind==='play'?<path d="M6 4 L16 10 L6 16 Z"/>:kind==='stop'?<rect x="5" y="5" width="10" height="10" rx="2"/>:kind==='plus'?<path d="M10 4 V16 M4 10 H16"/>:kind==='chevron'?<path d="M8 5 L13 10 L8 15"/>:kind==='close'?<path d="M5 5 L15 15 M15 5 L5 15"/>:kind==='branch'?<><rect x="2" y="3" width="6" height="5" rx="1.5"/><rect x="12" y="12" width="6" height="5" rx="1.5"/><path d="M5 8 V14 H12"/></>:kind==='check'?<path d="M4 10 L8 14 L16 5"/>:kind==='focus'?<><path d="M3 7 V3 H7 M13 3 H17 V7 M17 13 V17 H13 M7 17 H3 V13"/></>:<rect x="4" y="4" width="12" height="12" rx="4"/>}</svg>
 
@@ -127,16 +128,16 @@ export default function StateMachineEditor({client,onNavigate,onOpenRos,onOpenTa
   else if(kind==='ros'||reference?.startsWith('ros:'))onOpenRos()
   else{setInspectorOpen(true);setPhaseMenu(phase)}
  }
- function loadMachine(machine:SavedMachine,restore=true){
-  if(dirty&&loaded&&!window.confirm(t("当前草稿尚未保存，切换后放弃这些修改")))return false
+ async function loadMachine(machine:SavedMachine,restore=true){
+  if(dirty&&loaded&&!await unsavedDialog(title,()=>save()))return false
   if(dirty&&loaded){try{localStorage.removeItem(current?'agro.hsm.draft.'+current.id:'agro.hsm.unsaved.'+robotKey)}catch{}}
   let next=snapshotOf(machine);const base=fingerprint(next);let recovered=false
   if(restore){try{const cached=JSON.parse(localStorage.getItem('agro.hsm.draft.'+machine.id)||'null');if(cached?.base===base&&cached?.snapshot){next=cached.snapshot;recovered=true}}catch{}}
   setCurrent(machine);setEditor(next);setSavedFingerprint(base);setSelected(next.document.states.find(s=>s.parent)?.id||next.document.initial);setScope(next.document.initial);setEdgeIndex(null);setError('');setSaveFailedAt('');setNotice(recovered?t("已恢复本地未保存草稿"):'');resetHistory()
   return true
  }
- function create(){
-  if(dirty&&!window.confirm(t("当前草稿尚未保存，继续后放弃这些修改")))return
+ async function create(){
+  if(dirty&&!await unsavedDialog(title,()=>save()))return
   if(dirty){try{localStorage.removeItem(current?'agro.hsm.draft.'+current.id:'agro.hsm.unsaved.'+robotKey)}catch{}}
   setDraftId(newMachineId())
   const next=blankMachine(t);setCurrent(null);setEditor(next);setSavedFingerprint('');setSelected(next.document.initial);setScope('workflow');setEdgeIndex(null);setError('');setNotice(t("新建草稿尚未保存"));setSaveFailedAt('');resetHistory()
@@ -168,7 +169,7 @@ export default function StateMachineEditor({client,onNavigate,onOpenRos,onOpenTa
    let body:Json={mode:'auto'}
    if(action==='start'){
     const systems=await client.request<Json>('/robot-systems'),robot=systems.systems?.find((item:Json)=>item.id===systems.selected_id)
-    if(robot&&!robot.configured){if(!window.confirm(t("此操作会向机器人发送真实命令，请确认设备急停和通信失联保护可用")))return;body={mode:'auto',confirm_safety:true}}
+    if(robot&&!robot.configured){if(!await confirmDialog(t('此操作会向机器人发送真实命令，请确认设备急停和通信失联保护可用'),'启动运行'))return;body={mode:'auto',confirm_safety:true}}
    }
    await client.request(action==='start'?`/state-machines/${current!.id}/start`:'/state-machines/stop','POST',body)
    const status=await client.request<Json>('/state-machines/status');setSession(status.session);setNotice(action==='start'?t("启动请求已提交"):t("取消请求已提交，正在等待停止确认"))
@@ -188,7 +189,7 @@ export default function StateMachineEditor({client,onNavigate,onOpenRos,onOpenTa
   try{await client.request('/state-machines/event','POST',{event,variables:{}});const status=await client.request<Json>('/state-machines/status');setSession(status.session);setNotice(t("已提交事件 ")+event)}catch(cause){setError(errorMessage(cause,t))}finally{busyRef.current=false;setBusy(null)}
  }
  async function deleteMachine(){
-  if(!current||busyRef.current||!window.confirm(t("删除状态机「{0}」及其保存定义", {0: title})))return
+  if(!current||busyRef.current||!await confirmDialog(t('删除状态机「{0}」及其保存定义',{0:title}),'删除状态机',true))return
   busyRef.current=true;setBusy('delete');setError('')
   try{await client.request(`/state-machines/${current.id}`,'DELETE');setMachines(previous=>previous.filter(item=>item.id!==current.id));const next=blankMachine(t);setCurrent(null);setEditor(next);setSavedFingerprint('');setSelected(next.document.initial);setScope('workflow');setEdgeIndex(null);setNotice(t("定义已删除"));setDraftId(newMachineId());resetHistory()}catch(cause){setError(errorMessage(cause,t))}finally{busyRef.current=false;setBusy(null)}
  }
@@ -243,7 +244,7 @@ export default function StateMachineEditor({client,onNavigate,onOpenRos,onOpenTa
   if(!loaded||!current||!dirty||Object.entries(invalidFields).some(([key,value])=>value&&(key.startsWith('variable:')?key.slice(9) in document.variables:key==='guard:'+edgeIndex))||saveFailedAt===currentFingerprint||busy)return
   const timer=window.setTimeout(()=>{void save(false)},1100);return()=>clearTimeout(timer)
  },[loaded,current?.id,currentFingerprint,dirty,currentRunning,diagnostics.length,saveFailedAt,busy])
- useEffect(()=>{const beforeUnload=(event:BeforeUnloadEvent)=>{if(dirty){event.preventDefault();event.returnValue=''}};const navigate=(event:Event)=>{if(dirty&&!window.confirm(t("状态机有未保存的修改，是否离开")))event.preventDefault()};window.addEventListener('beforeunload',beforeUnload);window.addEventListener('agro:navigate',navigate);return()=>{window.removeEventListener('beforeunload',beforeUnload);window.removeEventListener('agro:navigate',navigate)}},[dirty])
+ useEffect(()=>{const beforeUnload=(event:BeforeUnloadEvent)=>{if(dirty){event.preventDefault();event.returnValue=''}};const navigate=(event:Event)=>{if(dirty)deferNavigation(event,()=>unsavedDialog(title,()=>save(),()=>{const restored=current?snapshotOf(current):blankMachine(t);setEditor(restored);setSavedFingerprint(fingerprint(restored));try{localStorage.removeItem(current?'agro.hsm.draft.'+current.id:'agro.hsm.unsaved.'+robotKey)}catch{}}))};window.addEventListener('beforeunload',beforeUnload);window.addEventListener('agro:navigate',navigate);return()=>{window.removeEventListener('beforeunload',beforeUnload);window.removeEventListener('agro:navigate',navigate)}},[dirty,currentFingerprint,title])
  useEffect(()=>{
   if(!document.states.some(s=>s.id===selected)){setSelected(document.initial);setEdgeIndex(null)}
   if(!document.states.some(s=>s.id===scope))setScope(document.initial)
@@ -266,7 +267,7 @@ export default function StateMachineEditor({client,onNavigate,onOpenRos,onOpenTa
  useEffect(()=>{
   if(!machines.length)return
   const raw=sessionStorage.getItem('atil.flow.reveal');if(!raw)return
-  try{const target=JSON.parse(raw),machine=machines.find(item=>item.id===target.machineId);if(!machine)return;sessionStorage.removeItem('atil.flow.reveal');if(!loadMachine(machine))return;const state=machine.document.states.find(item=>item.id===target.stateId);if(state){setSelected(state.id);setScope(state.parent||machine.document.initial);setReveal(previous=>({id:state.id,nonce:(previous?.nonce||0)+1}))}setInspectorOpen(true)}catch{sessionStorage.removeItem('atil.flow.reveal')}
+  void (async()=>{try{const target=JSON.parse(raw),machine=machines.find(item=>item.id===target.machineId);if(!machine)return;sessionStorage.removeItem('atil.flow.reveal');if(!await loadMachine(machine))return;const state=machine.document.states.find(item=>item.id===target.stateId);if(state){setSelected(state.id);setScope(state.parent||machine.document.initial);setReveal(previous=>({id:state.id,nonce:(previous?.nonce||0)+1}))}setInspectorOpen(true)}catch{sessionStorage.removeItem('atil.flow.reveal')}})()
  },[machines.length])
  const ancestors:MachineState[]=[];let cursor=document.states.find(s=>s.id===scope);while(cursor&&ancestors.length<49){ancestors.unshift(cursor);cursor=document.states.find(s=>s.id===cursor?.parent)}
  const selectedPath=statePath(document,selected)

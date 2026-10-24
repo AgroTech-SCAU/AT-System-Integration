@@ -1,3 +1,4 @@
+import {DialogHost, requestNavigation, reportError} from './components/StudioDialogs'
 import {AnimatePresence, LayoutGroup, motion} from 'motion/react'
 import {springs, fade, PresenceLayer} from './motion'
 import {LocaleProvider, translator} from './locale'
@@ -62,8 +63,8 @@ export default function App() {
     return () => preferred.removeEventListener('change', applyTheme)
   }, [settings, text.brand])
   useEffect(() => {
-    const back = () => {
-      if (!window.dispatchEvent(new Event('agro:navigate', { cancelable: true }))) { history.pushState({}, '', `/ui/${workspace}`); return }
+    const back = async () => {
+      if (!await requestNavigation()) { history.pushState({}, '', `/ui/${workspace}`); return }
       setWorkspace(currentWorkspace())
     }
     window.addEventListener('popstate', back)
@@ -86,6 +87,8 @@ export default function App() {
     }
     return () => { cancelled = true }
   }, [])
+
+  useEffect(()=>{if(error)reportError(error==='unauthorized'?new ApiError('unauthorized'):error==='failed'?new ApiError('offline'):new Error(t('无法读取所选凭据文件')),'连接失败')},[error])
 
   async function reloadRobots(target: ApiClient) {
     try { const directory = await target.request<RobotDirectory>('/robot-systems'); if(active.current===target) setRobotDirectory(directory) }
@@ -158,8 +161,8 @@ export default function App() {
     setBusy(false)
     setPending(false)
   }
-  function disconnect() {
-    if(!window.dispatchEvent(new Event('agro:navigate',{cancelable:true})))return
+  async function disconnect() {
+    if(!await requestNavigation())return
     active.current?.disconnect()
     active.current = null
     fileRead.current++
@@ -172,9 +175,9 @@ export default function App() {
     history.pushState(null, '', '/ui/overview')
     setWorkspace('overview')
   }
-  function navigate(next: Workspace) {
+  async function navigate(next: Workspace) {
     if(next===workspace)return
-    if(!window.dispatchEvent(new Event('agro:navigate',{cancelable:true})))return
+    if(!await requestNavigation())return
     history.pushState(null, '', `/ui/${next}`)
     setWorkspace(next)
   }
@@ -230,7 +233,7 @@ export default function App() {
           {window.agroDesktop && <div className="window-controls">
             <button className="title-button" aria-label={text.minimizeWindow} onClick={() => void window.agroDesktop?.minimize()}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10" /></svg></button>
             <button className="title-button" aria-label={text.maximizeWindow} onClick={() => void window.agroDesktop?.maximize()}><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="1" /></svg></button>
-            <button className="title-button window-close" aria-label={text.closeWindow} onClick={() => void window.agroDesktop?.close()}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 3 10 10M13 3 3 13" /></svg></button>
+            <button className="title-button window-close" aria-label={text.closeWindow} onClick={async() => {if(await requestNavigation())void window.agroDesktop?.close()}}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 3 10 10M13 3 3 13" /></svg></button>
           </div>}</div>
       </header>
       <div className="shell" inert={pending}>
@@ -302,5 +305,6 @@ export default function App() {
     <AnimatePresence>{projectPicker&&<PresenceLayer initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0,pointerEvents:'none'}} transition={fade} className="project-sheet-backdrop" onMouseDown={event=>{if(event.target===event.currentTarget&&!projectBusy.current)setProjectPicker(false)}}><motion.section ref={projectSheet} layout initial={{opacity:0,y:10,scale:.985}} animate={{opacity:1,y:0,scale:1}} exit={{opacity:0,y:6,scale:.99}} transition={springs.panel} className="project-sheet" role="dialog" aria-modal="true" aria-label={t("机器人管理")}><RobotLibrary initialSection={projectSection} client={client} directory={robotDirectory} onRefresh={refreshProjects} onReconnect={reconnectLocal} onBusyChange={value=>{projectBusy.current=value}} onClose={()=>{if(!projectBusy.current)setProjectPicker(false)}} onNavigate={next=>{setProjectPicker(false);navigate(next)}}/></motion.section></PresenceLayer>}</AnimatePresence>
     <PendingDialog open={pending} text={text} error={error ? text[error] : undefined} onClose={() => setPending(false)} actions={<span className="muted">{text.futureActions}</span>} />
 
+    <DialogHost/>
   </LayoutGroup></LocaleProvider>
 }

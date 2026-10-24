@@ -72,7 +72,7 @@ export default function HsmCanvas({states,transitions,layout,selected,onSelect,o
  const fitRef=useRef(fit);fitRef.current=fit
  const zoomAt=(factor:number,clientX?:number,clientY?:number,direct=false)=>{
   const bounds=surface.current?.getBoundingClientRect();if(!bounds||!visible.length)return
-  const x=clientX===undefined?bounds.width/2:clientX-bounds.left,y=clientY===undefined?bounds.height/2:clientY-bounds.top,current=camera.current(),scale=clamp(current.scale*factor,.25,2)
+  const x=clientX===undefined?bounds.width/2:clientX-bounds.left,y=clientY===undefined?bounds.height/2:clientY-bounds.top,current=viewRef.current,scale=clamp(current.scale*factor,.15,2.5)
   updateView({x:x-(x-current.x)/current.scale*scale,y:y-(y-current.y)/current.scale*scale,scale},direct)
  }
  useEffect(()=>{if(!surface.current)return;let first=true;const observer=new ResizeObserver(([entry])=>{setSize({width:entry.contentRect.width,height:entry.contentRect.height});if(first&&entry.contentRect.width&&entry.contentRect.height){first=false;if(!views.current[scopeId])fitRef.current()}});observer.observe(surface.current);return()=>observer.disconnect()},[scopeId])
@@ -84,7 +84,7 @@ export default function HsmCanvas({states,transitions,layout,selected,onSelect,o
   frame=requestAnimationFrame(()=>{frame=requestAnimationFrame(()=>{const box=boxRef.current[reveal.id],bounds=surface.current?.getBoundingClientRect();if(!box||!bounds){fitRef.current();return}const scale=clamp(Math.min(camera.current().scale,(bounds.width-72)/box.width,(bounds.height-72)/box.height),.25,1.3);updateView({x:bounds.width/2-(box.x+box.width/2)*scale,y:bounds.height/2-(box.y+box.height/2)*scale,scale})})})
   return()=>cancelAnimationFrame(frame)
  },[reveal?.nonce,reveal?.id,scopeId,updateView])
- useEffect(()=>{const element=surface.current;if(!element)return;const wheel=(event:WheelEvent)=>{if((event.target as Element).closest('button,input,[role=menu]'))return;event.preventDefault();if(!visible.length)return;const unit=event.deltaMode===1?16:event.deltaMode===2?element.clientHeight:1;zoomAt(Math.exp(-clamp(event.deltaY*unit,-150,150)*.0025),event.clientX,event.clientY,true)};element.addEventListener('wheel',wheel,{passive:false});return()=>element.removeEventListener('wheel',wheel)},[updateView,visible.length])
+ useEffect(()=>{const element=surface.current;if(!element)return;const wheel=(event:WheelEvent)=>{if((event.target as Element).closest('button,input,[role=menu]'))return;event.preventDefault();if(!visible.length)return;const unit=event.deltaMode===1?16:event.deltaMode===2?element.clientHeight:1;zoomAt(Math.exp(-clamp(event.deltaY*unit,-150,150)*.0025),event.clientX,event.clientY)};element.addEventListener('wheel',wheel,{passive:false});return()=>element.removeEventListener('wheel',wheel)},[updateView,visible.length])
  useEffect(()=>()=>{if(frame.current!==null)cancelAnimationFrame(frame.current)},[])
  const beginRename=(state:State)=>{if(!onRename)return;renameCanceled.current=false;setName(state.label);setRenaming(state.id)}
  const finishRename=()=>{if(renaming&&!renameCanceled.current&&name.trim())onRename?.(renaming,name.trim());setRenaming(null)}

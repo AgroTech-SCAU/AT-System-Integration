@@ -3,11 +3,12 @@ import {animate, MotionConfig, motion, motionValue, useIsPresent, useReducedMoti
 
 // Shared physical responses preserve velocity when an interaction changes direction
 export const springs = {
-  panel: {type: 'spring', stiffness: 560, damping: 42, mass: 1},
+  panel: {type: 'spring', stiffness: 560, damping: 48, mass: 1},
   quick: {type: 'spring', stiffness: 900, damping: 50, mass: .7},
   spatial: {type: 'spring', stiffness: 420, damping: 40, mass: 1},
   canvas: {type: 'spring', stiffness: 480, damping: 44, mass: 1},
 } satisfies Record<string, Transition>
+export const menuTransition = {duration: .18, ease: [.1,.9,.2,1]} satisfies Transition
 export const fade = {duration: .14, ease: [.2, 0, .2, 1]} satisfies Transition
 
 export function StudioMotion({children}: {children: ReactNode}) {

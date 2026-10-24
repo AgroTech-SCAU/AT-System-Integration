@@ -407,6 +407,8 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
         interface: str = ''
         ros_type: str
         schema_id: str | None = None
+        workspace_ids: list[str] = Field(default_factory=list, max_length=64)
+        resource_labels: dict[str, str] = Field(default_factory=dict)
         payload: dict = Field(default_factory=dict)
         inputs: dict = Field(default_factory=dict)
         outputs: dict = Field(default_factory=dict)
@@ -429,8 +431,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     @api.post('/ros/tasks/{task_id}/copy')
     async def ros_task_copy(task_id: str, body: BehaviorCopy):
-        original = ros_tasks.get(task_id)
-        return ros_tasks.save({**original, 'id': None, 'name': body.name})
+        return ros_tasks.copy(task_id, body.name)
 
     @api.post('/ros/operations', status_code=202)
     async def ros_operation_start(body: RosOperationRequest):
@@ -485,6 +486,21 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     async def ros_task_list():
         return {'tasks':ros_tasks.list()}
 
+    @api.get('/ros/task-uses')
+    async def ros_task_uses():
+        return {'uses': ros_tasks.uses()}
+
+    @api.get('/ros/resources')
+    async def ros_resources():
+        return {'resources': ros_tasks.resources()}
+
+    class ResourceCreate(BaseModel):
+        name: str = Field(min_length=1, max_length=80)
+
+    @api.post('/ros/resources')
+    async def ros_resource_create(body: ResourceCreate):
+        return ros_tasks.resource(body.name)
+
     @api.post('/ros/tasks')
     async def ros_task_save(body: RosTaskSave):
         return ros_tasks.save(body.model_dump(exclude_none=True, exclude_unset=True))
@@ -497,6 +513,9 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
         for machine in hsm.list():
             if any(state.get(phase)==reference for state in machine['document']['states'] for phase in ('entry','do','exit')):
                 fail('$.ros','task_in_use','此任务仍被状态机引用，请先解除关联')
+        uses = ros_tasks.uses().get(task_id, [])
+        if uses:
+            fail('$.task', 'task_in_use', '任务仍在使用，请先解除关联：' + ' / '.join(item['name'] for item in uses))
         return ros_tasks.delete(task_id)
 
     class RosConnection(BaseModel):

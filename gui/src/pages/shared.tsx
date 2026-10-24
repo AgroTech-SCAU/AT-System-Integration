@@ -1,3 +1,4 @@
+import {ErrorNotice} from '../components/StudioDialogs'
 import {useLocale} from '../locale'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ApiClient, ApiError } from '../api'
@@ -7,13 +8,7 @@ import type { Language, Observation } from '../types'
 
 export type Json = Record<string, any>
 export interface PageProps { client: ApiClient; observation: Observation | null; language: Language; changed(): Promise<void> }
-export function ErrorFields({ value }: {value: unknown}) {
- const {t}=useLocale()
-
-  if (!value) return null
-  const errors = value instanceof ApiError ? value.details : (value as Json).errors
-  return <div className="error" role="alert">{errors?.length ? errors.map((e: Json, i: number) => <p key={i}><code>{e.path}</code> · {t(e.reason)} ({e.code})</p>) : <p>{value instanceof ApiError && value.kind === 'unauthorized' ? t("后台认证已失效，请重新连接") : t("请求未完成，请核对后台状态后重试")}</p>}</div>
-}
+export function ErrorFields({value,title}:{value:unknown;title?:string}) { return <ErrorNotice value={value} title={title}/> }
 export function Parameters({ specs, value, onChange }: {specs: Json; value: Json; onChange(value: Json): void}) {
  const {t}=useLocale()
 
