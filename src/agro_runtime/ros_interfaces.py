@@ -235,13 +235,17 @@ class InterfaceLibrary:
                                       'source': (origins or {}).get(ros_type, source)}))
         return self.store.put_many('ros_schema', records)
 
-    def compile(self, definitions, allow_partial=False, saved_definitions=True):
+    def compile(self, definitions, allow_partial=False, saved_definitions=True, dependency_loader=None):
         schemas, visiting, budget = {}, set(), [0, 0]
         saved = {item['ros_type']:item['schema'] for item in self.saved()} if saved_definitions else {}
 
         def resolve(ros_type):
             if ros_type in schemas:
                 return schemas[ros_type]
+            if ros_type not in definitions and dependency_loader:
+                content = dependency_loader(ros_type)
+                if content is not None:
+                    definitions[ros_type] = content
             if ros_type not in definitions:
                 if ros_type in saved:
                     return saved[ros_type]
@@ -279,14 +283,16 @@ class InterfaceLibrary:
             return schema
 
         diagnostics = []
-        for ros_type in definitions:
+        for ros_type in list(definitions):
             try:
                 resolve(ros_type)
             except Exception as exc:
                 from .errors import ContractValidationError
                 if not allow_partial or not isinstance(exc, ContractValidationError):
                     raise
-                diagnostics.extend({'ros_type': ros_type, 'code': issue.code, 'reason': issue.reason} for issue in exc.issues)
+                diagnostics.extend({'ros_type': ros_type, 'code': issue.code, 'reason': issue.reason,
+                                    **({'dependency': issue.reason.rsplit('：', 1)[-1]} if issue.code in ('missing_dependency', 'ambiguous_dependency') else {})}
+                                   for issue in exc.issues)
             finally:
                 visiting.clear()
                 budget[:] = [0, 0]

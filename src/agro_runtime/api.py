@@ -402,7 +402,8 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
         model_config = ConfigDict(extra='forbid')
         id: str | None = None
         name: str
-        icon: Literal['navigation','arm','vision','operations','mechanical','electrical'] = 'navigation'
+        icon: Literal['generic','navigation','arm','vision','operations','mechanical','electrical'] = 'generic'
+        icon_mode: Literal['workspace', 'manual'] = 'manual'
         kind: Literal['service', 'action', 'publish_once', 'publish_periodic', 'subscribe_wait']
         interface: str = ''
         ros_type: str
@@ -553,6 +554,18 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     async def interface_workspaces():
         from .interface_sources import InterfaceWorkspaces
         return InterfaceWorkspaces(store, ros_tasks._robot()).catalog()
+
+    @api.post('/ros/interface-workspaces/detect')
+    async def interface_workspace_detect(body: dict):
+        from .interface_dependencies import detect_workspace
+        return detect_workspace(store, ros_tasks._robot(), body.get('path'))
+
+    @api.put('/ros/interface-foundation')
+    async def interface_foundation_select(body: dict):
+        from .interface_dependencies import InterfaceFoundation
+        foundation = InterfaceFoundation(store, ros_tasks._robot())
+        foundation.select(body.get('path'))
+        return foundation.public()
 
     @api.post('/ros/interface-workspaces')
     async def interface_workspace_create(body: dict):

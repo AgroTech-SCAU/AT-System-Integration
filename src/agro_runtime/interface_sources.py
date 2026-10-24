@@ -221,7 +221,12 @@ class InterfaceWorkspaces:
         for definition in self.store.list('tree_definition'):
             if definition.get('robot_system_id') == self.project_id and not definition.get('archived'):
                 used_tasks.update(task['id'] for task in definition.get('ros_tasks', []) if record['id'] in task.get('workspace_ids', []))
-        return {key: copy.deepcopy(record.get(key)) for key in ('id', 'name', 'mode', 'path', 'diagnostics')} | {
+        resolved = self._resolve_records([record], records, persist=False)
+        ready = sum(item['available'] for item in resolved['types'])
+        return {key: copy.deepcopy(record.get(key)) for key in ('id', 'name', 'mode', 'path')} | {
+            'icon': record.get('icon', 'generic'),
+            'diagnostics': resolved['diagnostics'], 'available_count': ready,
+            'pending_count': len(record['definitions']) - ready,
             'interface_count': len(record['definitions']), 'conflicts_with': conflicts,
             'used_by': len(used_tasks)}
 
@@ -231,7 +236,9 @@ class InterfaceWorkspaces:
         defaults = [identity for identity in self.library.configuration().get('default_workspace_ids', []) if identity in available]
         if not defaults and len(records) == 1:
             defaults = [records[0]['id']]
-        return {'workspaces': [self.summary(item, records) for item in records], 'default_workspace_ids': defaults}
+        from .interface_dependencies import InterfaceFoundation
+        return {'workspaces': [self.summary(item, records) for item in records], 'default_workspace_ids': defaults,
+                'foundation': InterfaceFoundation(self.store, self.project_id).public()}
 
     def save(self, raw, identity=None):
         if not isinstance(raw, dict):
@@ -240,18 +247,27 @@ class InterfaceWorkspaces:
         old = self.get(identity) if identity else None
         if not old and len(records) >= 64:
             fail('$.workspace', 'too_many_workspaces', '当前机器人最多保存 64 个子系统 ROS2 工作区')
-        mode = raw.get('mode', old['mode'] if old else 'source')
-        if mode not in ('source', 'installed', 'files'):
+        mode = raw.get('mode', old['mode'] if old else 'auto')
+        if mode not in ('auto', 'source', 'installed', 'files'):
             fail('$.mode', 'invalid_source', '选择源码工作区、安装目录或接口文件')
         path = raw.get('path', old.get('path', '') if old else '')
         if not isinstance(path, str):
             fail('$.path', 'invalid_source', '工作区路径必须是文本')
+        if mode == 'auto':
+            from .interface_dependencies import detect_workspace
+            detected = detect_workspace(self.store, self.project_id, path)
+            if detected['mode'] == 'ambiguous':
+                fail('$.path', 'source_choice_required', '源码与安装接口内容不同，请选择本次读取的来源')
+            mode, path = detected['mode'], detected['path']
         default_name = raw.get('package', '') if mode == 'files' else Path(path.strip()).name
         name = raw.get('name', old['name'] if old else default_name)
         if not isinstance(name, str) or not 1 <= len(name.strip()) <= 80:
             fail('$.name', 'invalid_name', '填写工作区名称，最多 80 个字符')
         if any(item['id'] != identity and item['name'] == name.strip() for item in records):
             fail('$.name', 'duplicate_name', '子系统 ROS2 工作区名称已存在')
+        icon = raw.get('icon', old.get('icon', 'generic') if old else 'generic')
+        if icon not in ('generic', 'navigation', 'arm', 'vision', 'operations', 'mechanical', 'electrical'):
+            fail('$.icon', 'invalid_icon', '请选择子系统图标')
         refresh = not old or raw.get('refresh') or mode != old['mode'] or path != old.get('path', '') or 'files' in raw
         if refresh:
             if mode == 'files':
@@ -272,7 +288,7 @@ class InterfaceWorkspaces:
         else:
             definitions, diagnostics = old['definitions'], old.get('diagnostics', [])
         record = {'id': identity or 'workspace_' + uuid4().hex, 'project_id': self.project_id,
-                  'name': name.strip(), 'mode': mode, 'path': path, 'definitions': definitions, 'diagnostics': diagnostics}
+                  'name': name.strip(), 'icon': icon, 'mode': mode, 'path': path, 'definitions': definitions, 'diagnostics': diagnostics}
         self.store.put('interface_workspace', record['id'], record)
         return self.summary(record)
 
@@ -294,27 +310,52 @@ class InterfaceWorkspaces:
         return [records[identity] for identity in workspace_ids]
 
     def resolve(self, workspace_ids):
-        selected = self.selection(workspace_ids)
+        return self._resolve_records(self.selection(workspace_ids), self.records())
+
+    def _resolve_records(self, selected, all_records, persist=True):
+        from .interface_dependencies import InterfaceFoundation
+        workspace_ids = [record['id'] for record in selected]
         definitions, owners, conflicts = {}, {}, []
         for record in selected:
             for name, content in record['definitions'].items():
                 owners.setdefault(name, []).append(record)
-                if name not in definitions:
-                    definitions[name] = content
+                definitions.setdefault(name, content)
+        primary = set(definitions)
         for name, records in owners.items():
             fingerprints = {json.dumps(normalized_definition(name, record['definitions'][name]), sort_keys=True) for record in records}
             if len(fingerprints) > 1:
                 conflicts.append({'ros_type': name, 'workspace_ids': [item['id'] for item in records],
                                   'workspace_names': [item['name'] for item in records]})
-        result = {'workspace_ids': workspace_ids, 'types': [], 'conflicts': conflicts, 'diagnostics': []}
+        result = {'workspace_ids': workspace_ids, 'types': [], 'conflicts': conflicts, 'diagnostics': [], 'dependencies': []}
         if conflicts:
             return result
-        schemas, diagnostics = self.library.compile(definitions, allow_partial=True, saved_definitions=False)
+        foundation = InterfaceFoundation(self.store, self.project_id).record()
+        candidates = {}
+        for record in all_records:
+            if record['id'] not in workspace_ids:
+                for name, content in record['definitions'].items():
+                    candidates.setdefault(name, []).append((content, record['name'], record['id']))
+        for name, content in foundation['definitions'].items():
+            candidates.setdefault(name, []).append((content, foundation['path'] or '导入的基础接口快照', None))
         origins = {name: ' · '.join(item['name'] for item in records) for name, records in owners.items()}
-        records = self.library.persist(definitions, schemas, 'workspace', origins, workspace_ids)
-        result['types'] = [{'ros_type': item['ros_type'], 'schema_id': item['id'], 'source': item['source'],
-                            'workspace_ids': [record['id'] for record in owners[item['ros_type']]], 'dependency': False}
-                           for item in sorted(records, key=lambda item: item['ros_type'])]
+        def dependency(name):
+            found = candidates.get(name, [])
+            if not found:
+                return None
+            fingerprints = {json.dumps(normalized_definition(name, item[0]), sort_keys=True) for item in found}
+            if len(fingerprints) > 1:
+                fail('$.dependencies', 'ambiguous_dependency', '依赖接口存在不同定义，请选择来源工作区：' + name)
+            content, source, identity = found[0]
+            origins[name] = source
+            result['dependencies'].append({'ros_type': name, 'source': source, 'workspace_id': identity})
+            return content
+        schemas, diagnostics = self.library.compile(definitions, allow_partial=True, saved_definitions=False, dependency_loader=dependency)
+        saved = self.library.persist(definitions, schemas, 'workspace', origins, workspace_ids) if persist else []
+        schema_ids = {item['ros_type']: item['id'] for item in saved}
+        result['types'] = [{'ros_type': name, 'schema_id': schema_ids.get(name), 'source': origins[name],
+                            'workspace_ids': [record['id'] for record in owners[name]], 'dependency': False,
+                            'available': name in schemas, 'issues': [issue for issue in diagnostics if issue['ros_type'] == name]}
+                           for name in sorted(primary)]
         result['diagnostics'] = diagnostics + [issue for item in selected for issue in item.get('diagnostics', [])
                                                if issue.get('code') in ('invalid_package', 'unreadable_definition', 'idl_not_supported', 'no_definitions')]
         return result

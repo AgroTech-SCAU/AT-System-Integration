@@ -10,7 +10,7 @@ export type SavedMachine = {id:string;name:string;document:MachineDocument;layou
 export type Diagnostic = {message:string;stateId?:string;edgeIndex?:number}
 export const isIdentifier=(value:string)=>/^[a-z][a-z0-9_]{0,63}$/.test(value)
 export const activeStatus=(value?:string)=>['ENTERING','RUNNING','TRANSITIONING','STOPPING'].includes(value||'')
-export const blankMachine=(t:(text:string)=>string=text=>text):MachineSnapshot=>({title:t("我的状态机"),document:{initial:'workflow',states:[{id:'workflow',label:t("工作流程")}],transitions:[],variables:{}},layout:{positions:{}}})
+export const blankMachine=(t:(text:string)=>string=text=>text):MachineSnapshot=>({title:t("未命名状态机"),document:{initial:'workflow',states:[{id:'workflow',label:t("工作流程")}],transitions:[],variables:{}},layout:{positions:{}}})
 export const snapshotOf=(machine:SavedMachine):MachineSnapshot=>({title:machine.name,document:structuredClone(machine.document),layout:structuredClone(machine.layout||{positions:{}})})
 export const fingerprint=(snapshot:MachineSnapshot)=>JSON.stringify(snapshot)
 export const isFallback=(edge:Transition)=>!edge.guard?.operator||['always','otherwise'].includes(edge.guard.operator)

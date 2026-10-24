@@ -24,6 +24,10 @@ def validate_task(raw):
     if not isinstance(raw, dict):
         fail('$.task', 'invalid_task', 'ROS 2 任务必须是对象')
     data = copy.deepcopy(raw)
+    if data.get('icon_mode', 'manual') not in ('workspace', 'manual'):
+        fail('$.icon_mode', 'invalid_icon', '任务图标模式无效')
+    if data.get('icon', 'generic') not in ('generic', 'navigation', 'arm', 'vision', 'operations', 'mechanical', 'electrical'):
+        fail('$.icon', 'invalid_icon', '请选择任务图标')
     if 'workspace_ids' in data:
         workspace_ids = data['workspace_ids']
         if not isinstance(workspace_ids, list) or len(workspace_ids) > 64 or any(not isinstance(identity, str) for identity in workspace_ids) or len(set(workspace_ids)) != len(workspace_ids):
@@ -232,7 +236,13 @@ class RosTasks:
     def _bound(self, task):
         binding = next((item for item in self.store.list('ros_binding')
                         if item['task_id'] == task['id'] and item['robot_system_id'] == self._robot()), None)
-        return {**task, 'interface': binding['interface'] if binding else task.get('interface', '')}
+        result = {**task, 'interface': binding['interface'] if binding else task.get('interface', '')}
+        if task.get('icon_mode') == 'workspace':
+            first = next(iter(task.get('workspace_ids', [])), None)
+            workspace = next((item for item in self.store.list('interface_workspace')
+                              if item['id'] == first and item.get('project_id') == self._robot()), None)
+            result['icon'] = workspace.get('icon', 'generic') if workspace else 'generic'
+        return result
 
     def bind(self, identity, interface):
         task = self.get(identity)
@@ -273,7 +283,7 @@ class RosTasks:
         selected_type = None
         if not preserved_snapshot:
             resolution = workspaces.require_resolved(data['workspace_ids'])
-            selected_type = next((item for item in resolution['types'] if item['ros_type'] == data['ros_type']), None)
+            selected_type = next((item for item in resolution['types'] if item['ros_type'] == data['ros_type'] and item.get('available', True)), None)
             if data['workspace_ids']:
                 if data.get('schema_id') and (not selected_type or selected_type['schema_id'] != data['schema_id']):
                     from .ros_interfaces import normalized_definition
@@ -297,7 +307,10 @@ class RosTasks:
         except ContractValidationError as exc:
             if data.get('schema_id') or any(issue.code != 'type_not_found' for issue in exc.issues):
                 raise
-        interface = data.pop('interface', self._bound(old)['interface'] if old else '')
+        previous_interface = self._bound(old)['interface'] if old else ''
+        # An omitted endpoint must never carry an old communication contract into a new one
+        contract_changed = old and any(data.get(field) != old.get(field) for field in ('kind', 'ros_type', 'schema_id'))
+        interface = data.pop('interface', '' if contract_changed else previous_interface)
         self.store.put('ros_task', identity, data)
         self.bind(identity, interface)
         return self.get(identity)
@@ -313,6 +326,7 @@ class RosTasks:
                 fail('$.tasks', 'invalid_task', '流程包含无效任务定义')
             if task.get('robot_system_id', key) != key:
                 fail('$.tasks', 'ownership', '流程任务不属于当前机器人')
+            self.require_snapshot(task)
             if task.get('schema_id'):
                 record = self.store.get('ros_schema', task['schema_id'])
             elif task.get('ros_type'):
@@ -452,8 +466,14 @@ class RosTasks:
         from .ros_interfaces import InterfaceLibrary
         return InterfaceLibrary(self.store, self._robot()).describe(kind, ros_type, schema_id)
 
+    @staticmethod
+    def require_snapshot(data):
+        if data.get('workspace_ids') and not data.get('schema_id'):
+            fail('$.ros_type', 'definition_incomplete', '任务接口定义尚未补齐，请补齐依赖后重新保存任务：' + data.get('name', ''))
+
     def freeze(self, identity):
         data = self.get(identity)
+        self.require_snapshot(data)
         if not data.get('interface'):
             fail('$.task.' + identity, 'missing_endpoint', '任务尚未绑定机器人端点：' + data['name'])
         expected = self.describe(data['kind'], data['ros_type'], data.get('schema_id'))
@@ -500,6 +520,7 @@ class RosTasks:
 
     def validate_structure(self, data):
         validate_task(data)
+        self.require_snapshot(data)
         schema = data.get('interface_schema')
         if not schema or 'field_schemas' not in schema:
             schema = self.describe(data['kind'], data['ros_type'], data.get('schema_id'))

@@ -20,7 +20,8 @@ export function AnchoredPopover({anchor, children, onClose, label, className = '
     }
     node.showPopover()
     position()
-    const initial = node.querySelector<HTMLElement>('[aria-selected="true"], [aria-checked="true"]')
+    const initial = node.querySelector<HTMLElement>('input:not(:disabled), textarea:not(:disabled)')
+      || node.querySelector<HTMLElement>('[aria-selected="true"], [aria-checked="true"]')
       || node.querySelector<HTMLElement>('button:not(:disabled)')
     initial?.focus()
     const dismiss = (event: globalThis.PointerEvent) => {
@@ -44,13 +45,11 @@ export function AnchoredPopover({anchor, children, onClose, label, className = '
 
   return <motion.div initial={{opacity:0,scale:.985,y:-2}} animate={{opacity:1,scale:1,y:0}} exit={{opacity:0,scale:.99,y:-1,transition:fade}} transition={menuTransition} ref={panel} aria-hidden={!present} popover={role==='menu'?'manual':'auto'} role={role} aria-label={label} className={`studio-popover ${className}`}
     onToggle={event => {if (present && event.newState === 'closed') onClose()}}
-    onBlur={() => requestAnimationFrame(() => {
-      const node = panel.current
-      if (role !== 'menu' && present && node && !node.contains(document.activeElement)) onClose()
-    })}
     onKeyDown={event => {
       if (event.key === 'Escape') {event.preventDefault(); event.stopPropagation(); onClose(); return}
-      if (event.key === 'Tab') {if (role !== 'menu') onClose(); return}
+      if (event.key === 'Tab') return
+      // Dialogs contain forms, whose native text and checkbox keys must remain intact
+      if (role === 'dialog' || event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || (event.target instanceof HTMLElement && event.target.isContentEditable)) return
       const buttons = Array.from(panel.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') || [])
       const index = buttons.indexOf(document.activeElement as HTMLButtonElement)
       const step = {ArrowRight: 1, ArrowLeft: -1, ArrowDown: columns, ArrowUp: -columns}[event.key]

@@ -180,15 +180,17 @@ class StateMachines:
         definitions = self.definitions()
         spec = validate(machine['document'], definitions, self.ros_definitions())
         trees = {item['id']: item for item in definitions}
-        tasks, checked = [], set()
+        tasks, checked, task_origins = [], set(), {}
         for state in spec['states']:
             for phase in ('entry', 'do', 'exit'):
                 reference = state.get(phase)
                 if not reference or reference in checked:
                     continue
                 checked.add(reference)
+                start = len(tasks)
                 if reference.startswith('ros:'):
                     tasks.append(reference[4:])
+                    task_origins[reference[4:]] = {'state_id': state['id'], 'phase': phase}
                     continue
                 tree = trees[reference]
                 frozen = tree.get('ros_tasks')
@@ -203,9 +205,27 @@ class StateMachines:
                 if not result['valid']:
                     reasons = ' · '.join(item['reason'] for item in result.get('diagnostics', []) if item.get('severity') == 'error')
                     fail('$.states.' + state['id'] + '.' + phase, 'behavior_incomplete', reasons or '状态行为尚未配置完整')
+                for task in tasks[start:]:
+                    task_origins[task['id'] if isinstance(task, dict) else task] = {'state_id': state['id'], 'phase': phase}
         if self.ros_tasks:
             self.ros_tasks.validate_task_workspaces(tasks)
-        return {'valid': True, 'behaviors': len(checked), 'message': '流程结构、行为依赖与接口定义检查通过'}
+        diagnostics = []
+        if self.ros_tasks:
+            from .ros_tasks import validate_task, validate_task_schema
+            from .errors import ContractValidationError
+            for value in tasks:
+                task = self.ros_tasks.get(value.removeprefix('ros:')) if isinstance(value, str) else value
+                try:
+                    validate_task(task)
+                    validate_task_schema(task, self.ros_tasks.describe(task['kind'], task['ros_type'], task.get('schema_id')))
+                    if not task.get('interface', '').strip():
+                        fail('$.interface', 'missing_binding', '通信名称待配置')
+                except ContractValidationError as exc:
+                    diagnostics.extend({'message': task.get('name', '') + ' · ' + issue.reason,
+                                        'task_id': task.get('id'), 'path': issue.path,
+                                        **task_origins.get(task.get('id'), {})} for issue in exc.issues)
+        return {'valid': not diagnostics, 'diagnostics': diagnostics, 'behaviors': len(checked),
+                'message': '离线配置检查通过，在线通信与执行状态尚未确认' if not diagnostics else '运行前需补充配置'}
 
     def running(self):
         return self._session is not None and self._session.get('status') in ('RUNNING','ENTERING','TRANSITIONING','STOPPING')

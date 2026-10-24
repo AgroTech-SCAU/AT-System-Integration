@@ -155,6 +155,7 @@ class RobotSystems:
                             "DELETE FROM documents WHERE kind=? AND id=?",
                             (kind, row["id"]),
                         )
+            self.store.db.execute("DELETE FROM documents WHERE kind='interface_foundation' AND id=?", (key,))
             self.store.db.execute(
                 "DELETE FROM documents WHERE kind='robot_system' AND id=?", (key,)
             )
@@ -295,6 +296,7 @@ class RobotSystems:
         schemas = [item for item in self.store.list('ros_schema') if item.get('project_id') == key and
                    (item.get('id') in schema_ids or item.get('id') in catalog_record.get('schema_ids', []) and
                     item['ros_type'] in catalog_record.get('primary_types', [item['ros_type']]))]
+        foundation = next((item for item in self.store.list('interface_foundation') if item['id'] == key), {})
         bundle = {
             "format": "agrotech.robot-system",
             "format_version": 1,
@@ -311,8 +313,9 @@ class RobotSystems:
             "state_machines": state_machines,
             "ros_tasks": ros_tasks,
             "interface_workspaces": [{**{field: copy.deepcopy(item[field]) for field in ('id', 'name', 'definitions')},
-                                      'mode': 'files', 'path': ''}
+                                      'mode': 'files', 'path': '', 'icon': item.get('icon', 'generic')}
                                      for item in interface_workspaces],
+            "interface_foundation": copy.deepcopy(foundation.get("definitions", {})),
             "interface_definitions": [{field: value for field, value in item.items() if field not in ('project_id', 'source')}
                                       for item in schemas],
             "interface_selection": [item['id'] for item in schemas if item['id'] in catalog_record.get('schema_ids', [])],
@@ -345,6 +348,7 @@ class RobotSystems:
             "interface_definitions",
             "interface_selection",
             "interface_workspaces",
+            "interface_foundation",
             "assets",
             "notes",
         }:
@@ -510,6 +514,12 @@ class RobotSystems:
             fail('$.interface_definitions', 'invalid_definitions', '工程接口定义清单无效')
         schema_refmap, clean_schemas = {}, []
         library = InterfaceLibrary(self.store, key)
+        foundation = bundle.get('interface_foundation', {})
+        if not isinstance(foundation, dict) or len(foundation) > 3000 or any(
+            not isinstance(name, str) or not TYPE.fullmatch(name) or not isinstance(content, str) or len(content.encode()) > 262144
+            for name, content in foundation.items()
+        ):
+            fail('$.interface_foundation', 'invalid_definitions', '基础接口快照需要包含原生接口定义')
         transfer_workspaces = bundle.get('interface_workspaces', [])
         if not isinstance(transfer_workspaces, list) or len(transfer_workspaces) > 64:
             fail('$.interface_workspaces', 'invalid_workspaces', '工程子系统 ROS2 工作区清单无效')
@@ -518,6 +528,9 @@ class RobotSystems:
             if not isinstance(item, dict) or not isinstance(item.get('id'), str) or item['id'] in workspace_refmap:
                 fail('$.interface_workspaces', 'invalid_workspaces', '子系统 ROS2 工作区标识无效或重复')
             name, mode, path = item.get('name'), item.get('mode'), item.get('path', '')
+            icon = item.get('icon', 'generic')
+            if icon not in ('generic', 'navigation', 'arm', 'vision', 'operations', 'mechanical', 'electrical'):
+                fail('$.interface_workspaces', 'invalid_icon', '请选择子系统图标')
             if not isinstance(name, str) or not 1 <= len(name.strip()) <= 80 or name.strip() in workspace_names or mode not in ('source', 'installed', 'files') or not isinstance(path, str):
                 fail('$.interface_workspaces', 'invalid_workspaces', '子系统 ROS2 工作区名称或来源无效')
             definitions = item.get('definitions')
@@ -530,7 +543,7 @@ class RobotSystems:
             identity = 'workspace_' + uuid4().hex
             workspace_refmap[item['id']] = identity
             workspace_names.add(name.strip())
-            clean_workspaces.append({'id': identity, 'project_id': key, 'name': name.strip(), 'mode': mode,
+            clean_workspaces.append({'id': identity, 'project_id': key, 'name': name.strip(), 'icon': icon, 'mode': mode,
                                      'path': path, 'definitions': definitions, 'diagnostics': diagnostics})
         for item in transfer_schemas:
             if not isinstance(item, dict) or not isinstance(item.get('id'), str) or item['id'] in schema_refmap:
@@ -691,6 +704,8 @@ class RobotSystems:
                 'base_snapshot_id': self.context.snapshot_id, 'validation': None, 'published': None, 'robot_system_id': key})
         self.store.put_many('ros_schema', [(item['id'], item) for item in clean_schemas])
         self.store.put_many('interface_workspace', [(item['id'], item) for item in clean_workspaces])
+        if foundation:
+            self.store.put('interface_foundation', key, {'id': key, 'path': '', 'definitions': foundation})
         self.store.put('interface_catalog', key, {'id': key, 'schema_ids': list(selected_schemas.values()),
             'sources': [], 'base_path': '', 'choices': {}, 'primary_types': list(selected_schemas),
             'workspaces_migrated': 'interface_workspaces' in bundle,

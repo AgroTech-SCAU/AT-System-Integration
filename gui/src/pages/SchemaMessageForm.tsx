@@ -1,4 +1,4 @@
-import {useEffect, useState} from 'react'
+import {useEffect, useRef, useState} from 'react'
 import {useLocale} from '../locale'
 import {Icon} from '../components/Icon'
 
@@ -12,19 +12,20 @@ export function reconcileFields(fields:Record<string,FieldSchema>,value:Record<s
   const changed=Object.keys(value).filter(key=>!(key in fields)).map(key=>prefix+key)
   function merge(schema:FieldSchema,previous:unknown,path:string):unknown{
     if(schema.kind==='object'){
+      if(previous!==undefined&&!record(previous)){changed.push(path);return previous}
       const nested=reconcileFields(schema.fields||{},record(previous)?previous:{},path+'.');changed.push(...nested.changed);return nested.value
     }
     if(schema.kind==='array'){
-      if(!Array.isArray(previous)){if(previous!==undefined)changed.push(path);return structuredClone(schema.default??[])}
-      if(schema.length!==undefined&&previous.length!==schema.length||schema.max_length!==undefined&&previous.length>schema.max_length){changed.push(path);return structuredClone(schema.default??[])}
-      return schema.item?previous.map((item,index)=>merge(schema.item!,item,path+'['+index+']')):previous
+      if(!Array.isArray(previous)){if(previous!==undefined){changed.push(path);return previous}return structuredClone(schema.default??[])}
+      if(schema.length!==undefined&&previous.length!==schema.length||schema.max_length!==undefined&&previous.length>schema.max_length)changed.push(path)
+      return schema.item?previous.map((item,index)=>merge(schema.item!,item,path+'.'+index)):previous
     }
     const valid=schema.kind==='boolean'?typeof previous==='boolean':schema.kind==='string'?typeof previous==='string'&&(schema.max_length===undefined||previous.length<=schema.max_length):typeof previous==='number'&&Number.isFinite(previous)&&(schema.kind!=='integer'||Number.isInteger(previous))&&(schema.min===undefined||previous>=schema.min)&&(schema.max===undefined||previous<=schema.max)
     if(valid)return previous
-    if(previous!==undefined)changed.push(path)
+    if(previous!==undefined){changed.push(path);return previous}
     return structuredClone(schema.default)
   }
-  return {value:Object.fromEntries(Object.entries(fields).map(([name,schema])=>[name,merge(schema,value[name],prefix+name)])),changed}
+  return {value:{...value,...Object.fromEntries(Object.entries(fields).map(([name,schema])=>[name,merge(schema,value[name],prefix+name)]))},changed}
 }
 export function schemaFieldAt(fields:Record<string,FieldSchema>,path:string):FieldSchema|undefined{
   let node:FieldSchema={kind:'object',type:'',default:{},fields}
@@ -54,11 +55,34 @@ export function invalidMessageFields(fields:Record<string,FieldSchema>,value:Rec
   check({kind:'object',type:'',default:{},fields},value,prefix)
   return errors
 }
+function addDecimal(value:number,delta:number){
+  const parts=(number:number)=>{const [digits,exponent='0']=String(number).split('e');const decimals=digits.split('.')[1]?.length||0;return {digits:BigInt(digits.replace('.','')),exponent:Number(exponent)-decimals}}
+  const a=parts(value),b=parts(delta),exponent=Math.min(a.exponent,b.exponent)
+  return Number(String(a.digits*10n**BigInt(a.exponent-exponent)+b.digits*10n**BigInt(b.exponent-exponent))+'e'+exponent)
+}
+export function MessageFieldIssues({fields,value,onChange}:{fields:Record<string,FieldSchema>;value:Record<string,unknown>;onChange:(value:Record<string,unknown>)=>void}){
+  const {t}=useLocale(),issues=invalidMessageFields(fields,value)
+  const at=(path:string)=>path.split('.').reduce<unknown>((item,key)=>item&&typeof item==='object'?(item as Record<string,unknown>)[key]:undefined,value)
+  function repair(path:string){
+    const next=structuredClone(value),parts=path.split('.'),key=parts.pop()!,schema=schemaFieldAt(fields,path)
+    const parent=parts.reduce<Record<string,unknown>>((item,key)=>item[key] as Record<string,unknown>,next)
+    if(schema)parent[key]=structuredClone(schema.default);else delete parent[key]
+    onChange(next)
+  }
+  return issues.length>0?<div className="ros-field-review" role="group" aria-label={t('待处理的原参数')}><strong>{t('原参数已保留，以下字段与当前接口不兼容')}</strong>{issues.map(path=><div key={path}><code>{path}</code><pre>{JSON.stringify(at(path),null,2)}</pre><button type="button" onClick={()=>repair(path)}>{t(schemaFieldAt(fields,path)?'使用此字段默认值':'移除不再支持的字段')}</button></div>)}</div>:null
+}
 function NumberValue({schema,value,label,onChange}:{schema:FieldSchema;value:unknown;label:string;onChange:(value:unknown)=>void}){
+  const {t}=useLocale(),emitted=useRef(value)
   const [text,setText]=useState(String(value??schema.default??0))
-  useEffect(()=>setText(String(value??schema.default??0)),[value])
+  useEffect(()=>{if(!Object.is(value,emitted.current)){emitted.current=value;setText(String(value??schema.default??0))}},[value])
   const number=Number(text),valid=text.trim()!==''&&Number.isFinite(number)&&(schema.kind!=='integer'||Number.isSafeInteger(number))&&(schema.min===undefined||number>=schema.min)&&(schema.max===undefined||number<=schema.max)
-  return <input type="number" aria-label={label} aria-invalid={!valid} value={text} step={schema.kind==='integer'?1:'any'} min={schema.min} max={schema.max} onChange={event=>{const next=event.target.value;setText(next);if(next.trim()&&Number.isFinite(Number(next)))onChange(Number(next))}}/>
+  function change(next:string){setText(next);const parsed=Number(next);if(next.trim()&&Number.isFinite(parsed)){emitted.current=parsed;onChange(parsed)}else onChange(value)}
+  function increment(direction:number,fine=false){
+    let next=addDecimal(Number.isFinite(number)&&text.trim()?number:0,direction*(schema.kind==='integer'?1:fine?0.01:0.1))
+    next=Math.max(schema.min??-Infinity,Math.min(schema.max??Infinity,next))
+    if(Number.isFinite(next)&&(schema.kind!=='integer'||Number.isSafeInteger(next)))change(String(next))
+  }
+  return <div className="schema-number"><input type="text" inputMode={schema.kind==='integer'?'numeric':'decimal'} role="spinbutton" aria-label={label} aria-valuenow={valid?number:undefined} aria-valuemin={schema.min} aria-valuemax={schema.max} aria-invalid={!valid} value={text} onChange={event=>change(event.target.value)} onKeyDown={event=>{if(event.key==='ArrowUp'||event.key==='ArrowDown'){event.preventDefault();increment(event.key==='ArrowUp'?1:-1,event.altKey)}}}/><span className="schema-number-steps"><button type="button" aria-label={t('增加 {0}',{0:label})} title={t(schema.kind==='integer'?'每次调整 1':'每次调整 0.1，按住 Alt 调整 0.01')} disabled={schema.max!==undefined&&number>=schema.max} onClick={event=>increment(1,event.altKey)}>▴</button><button type="button" aria-label={t('减少 {0}',{0:label})} title={t(schema.kind==='integer'?'每次调整 1':'每次调整 0.1，按住 Alt 调整 0.01')} disabled={schema.min!==undefined&&number<=schema.min} onClick={event=>increment(-1,event.altKey)}>▾</button></span></div>
 }
 function SchemaField({name,schema,value,path,onChange,onExpose}:{name:string;schema:FieldSchema;value:unknown;path:string[];onChange:(value:unknown)=>void;onExpose?:(path:string[],value:unknown)=>void}){
   const {t}=useLocale(),[limit,setLimit]=useState(30)
