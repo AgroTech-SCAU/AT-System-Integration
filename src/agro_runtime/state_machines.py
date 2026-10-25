@@ -250,6 +250,7 @@ class StateMachines:
                 task = self.ros_tasks.get(value.removeprefix('ros:')) if isinstance(value, str) else value
                 try:
                     validate_task(task)
+                    if task.get('kind')=='compute':continue
                     validate_task_schema(task, self.ros_tasks.describe(task['kind'], task['ros_type'], task.get('schema_id')))
                     if not task.get('interface', '').strip():
                         fail('$.interface', 'missing_binding', '通信名称待配置')
@@ -601,6 +602,7 @@ class StateMachines:
                     if not ref or ref in dependencies:continue
                     if ref.startswith('ros:'):
                         dependencies[ref]=self.ros_tasks.freeze(ref[4:])
+                        self.ros_tasks.verify_support(dependencies[ref])
                     else:
                         dependencies[ref]=self.documents.prepare_behavior(ref)
                         if mode=='ros_only' and self.documents.requires_system(dependencies[ref]['document']):
@@ -729,6 +731,23 @@ class StateMachines:
                 self.documents.ros_operations.cancel(instance['operation_id'])
         asyncio.create_task(self.stop())
         return {'accepted': True, 'session': self.status()}
+
+    def refresh_stop_confirmation(self):
+        if not self._session:return
+        for instance in self._behaviors.values():
+            if instance['status']!='UNKNOWN':continue
+            if instance.get('operation_id'):
+                result=self.documents.ros_operations.snapshot(instance['operation_id'])
+                confirmed=result['stop_state']=='CONFIRMED' and result['state'] not in ACTIVE|{'UNKNOWN'}
+            elif instance.get('task_run_id'):
+                result=self.tasks.store.status(instance['task_run_id'])
+                confirmed=result.get('stop_confirmed') and result['state'] not in ACTIVE|{'UNKNOWN'}
+            else:continue
+            if confirmed:instance.update(status='FAILED',error='已确认设备停止，原流程未完成')
+        self._behavior_status()
+        self._release_control()
+        if self._session and self._session['status']=='UNKNOWN' and self._behaviors and all(v['status'] not in ACTIVE|{'UNKNOWN'} for v in self._behaviors.values()):
+            self._persist(status='FAILED',error='已确认设备停止，原流程未完成',action=None)
 
     async def stop(self):
         self._stop_requested=True

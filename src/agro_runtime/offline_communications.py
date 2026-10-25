@@ -150,6 +150,28 @@ def _python(text):
             if node.value:
                 for target in targets:
                     values[ast.unparse(target)] = node.value
+    dictionaries = {}
+    for name, value in values.items():
+        if isinstance(value, ast.Dict):
+            dictionaries[name] = {_literal(ast.unparse(k)): _literal(ast.unparse(v)) for k, v in zip(value.keys, value.values) if k is not None}
+    # Recognise declaration loops and parameter dictionaries without executing source
+    for loop in (n for n in ast.walk(tree) if isinstance(n, ast.For)):
+        if isinstance(loop.iter, ast.Call) and isinstance(loop.iter.func, ast.Attribute) and loop.iter.func.attr == 'items':
+            source = dictionaries.get(ast.unparse(loop.iter.func.value), {})
+            if isinstance(loop.target, (ast.Tuple, ast.List)) and len(loop.target.elts) == 2:
+                key, value = map(ast.unparse, loop.target.elts)
+                for call in (n for n in ast.walk(loop) if isinstance(n, ast.Call)):
+                    if ast.unparse(call.func).endswith('declare_parameter') and len(call.args) >= 2 and ast.unparse(call.args[0]) == key and ast.unparse(call.args[1]) == value:
+                        parameters.update({k:v for k,v in source.items() if isinstance(k,str)})
+    parameter_maps = {}
+    for name, value in values.items():
+        if isinstance(value, ast.DictComp) and len(value.generators) == 1:
+            generator = value.generators[0]
+            if ast.unparse(value.key) != ast.unparse(generator.target):
+                continue
+            source = dictionaries.get(ast.unparse(generator.iter), {})
+            if any(isinstance(n,ast.Call) and ast.unparse(n.func).endswith('get_parameter') and n.args and ast.unparse(n.args[0]) == ast.unparse(value.key) for n in ast.walk(value.value)):
+                parameter_maps[name] = source
     def resolve(node, seen=None):
         seen = seen or set()
         expr = ast.unparse(node)
@@ -159,6 +181,12 @@ def _python(text):
         literal = _literal(expr)
         if literal is not None:
             return literal, ''
+        if isinstance(node,ast.Subscript):
+            name, key = ast.unparse(node.value), _literal(ast.unparse(node.slice))
+            if isinstance(key,str) and name in parameter_maps and key in parameter_maps[name]:
+                return parameters.get(key), key
+            if isinstance(key,str) and key in dictionaries.get(name,{}):
+                return dictionaries[name][key], ''
         if expr in values:
             return resolve(values[expr], seen)
         for call in ast.walk(node):
@@ -216,6 +244,7 @@ def _launch(text, packages, supplied):
     except SyntaxError:
         return [], []
     env, arguments = {}, {}
+    helpers = {n.name:n for n in ast.walk(tree) if isinstance(n,ast.FunctionDef) and len(n.body)==1 and isinstance(n.body[0],ast.Return)}
     def evaluate(node, depth=0):
         if node is None or depth > 20:
             return None
@@ -236,6 +265,13 @@ def _launch(text, packages, supplied):
             name = ast.unparse(node.func).split('.')[-1]
             args = [ev(arg) for arg in node.args]
             kwargs = {kw.arg: ev(kw.value) for kw in node.keywords}
+            if name in helpers and len(args) == len(helpers[name].args.args):
+                old = dict(env)
+                env.update({parameter.arg:value for parameter,value in zip(helpers[name].args.args,args)})
+                try: return ev(helpers[name].body[0].value)
+                finally: env.clear(); env.update(old)
+            if name == 'ParameterValue' and args:
+                return args[0]
             if name == 'LaunchConfiguration' and args and isinstance(args[0], str):
                 key = args[0]
                 arguments.setdefault(key, kwargs.get('default'))

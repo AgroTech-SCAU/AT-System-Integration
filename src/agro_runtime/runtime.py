@@ -173,15 +173,20 @@ class LocalProcessManager:
                 fail(f'$.modules.{name}.argv', 'module_command_missing', '本地模块必须声明 argv')
             argv = [sys.executable, '-m', 'agro_mock.worker']
         lock = self.locks.get(name)
+        output = None
+        if self.directory and not mock_worker:
+            output = (self.directory / (name + '.log')).open('ab', buffering=0)
         try:
             process = await asyncio.create_subprocess_exec(
                 *argv, start_new_session=True, pass_fds=(lock.fileno(),) if lock else (),
                 stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE if mock_worker else asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL)
+                stdout=asyncio.subprocess.PIPE if mock_worker else output or asyncio.subprocess.DEVNULL,
+                stderr=output or asyncio.subprocess.DEVNULL)
         except BaseException:
             self._forget(name)
             raise
+        finally:
+            if output: output.close()
         self.processes[name] = process
         self._save(name, {'pid': process.pid, 'identity': self._identity(process.pid),
                           'target': descriptor.target, 'argv': descriptor.argv,
@@ -217,6 +222,8 @@ class LocalProcessManager:
             if asyncio.get_running_loop().time() >= deadline:
                 fail(f'$.modules.{name}', 'module_stop_unconfirmed', '进程组未在停止期限内退出')
             await asyncio.sleep(.01)
+        process = self.processes.pop(name, None)
+        if process: await process.wait()
         self._forget(name)
 
 

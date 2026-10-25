@@ -19,14 +19,14 @@ export class ApiClient {
     this.#requests.clear()
   }
 
-  async request<T>(path: string, method = 'GET', body?: unknown, signal?: AbortSignal): Promise<T> {
+  async request<T>(path: string, method = 'GET', body?: unknown, signal?: AbortSignal, timeoutMs=12000): Promise<T> {
     if (!this.#credential) throw new ApiError('unauthorized')
     const controller = new AbortController()
     this.#requests.add(controller)
     const abort = () => controller.abort()
     signal?.addEventListener('abort', abort, { once: true })
     if (signal?.aborted) controller.abort()
-    const timer = setTimeout(() => controller.abort(), 12000)
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
     try {
       const response = await fetch(this.basePath + path, {
         method, headers: { Authorization: `Bearer ${this.#credential}`, 'Content-Type': 'application/json' },

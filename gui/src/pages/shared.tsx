@@ -36,8 +36,8 @@ export function useOperation(language: Language) {
   const dialog=(actions?:ReactNode)=><PendingDialog open={open} text={{...messages(language),pendingDescription:phase}} onClose={()=>{observer.current?.abort();setOpen(false)}} actions={actions}/>
   return {busy,error,run,dialog,setError}
 }
-export async function waitJob(client:ApiClient,key:string,phase:(v:string)=>void,signal?:AbortSignal) {
-  const deadline=Date.now()+30000
+export async function waitJob(client:ApiClient,key:string,phase:(v:string)=>void,signal?:AbortSignal,timeoutMs=30000) {
+  const deadline=Date.now()+timeoutMs
   while(Date.now()<deadline) {
     signal?.throwIfAborted()
     const job=await client.request<Json>(`/management/jobs/${encodeURIComponent(key)}`,'GET',undefined,signal)

@@ -78,11 +78,17 @@ class GuiFiles(StaticFiles):
 
 
 def create_app(runtime, *, session_secret, session_identity='local_session', task_engine=None, endpoint=None,
-               ui_directory=None, tutorial_only=False):
+               ui_directory=None, tutorial_only=False, robot_profile=None):
     if not session_secret or not session_identity:
         fail('$.session', 'invalid_session_secret', '本地会话身份与密钥不能为空')
     runtime = ActiveContext(runtime)
     store = WorkspaceStore(runtime.state_directory)
+    from .robot_profiles import RobotProfiles
+    profiles = RobotProfiles(store)
+    profiles.restore()
+    if robot_profile:
+        selected_profile=profiles.open(robot_profile)
+        store.put('robot_selection','current',{'id':'current','system_id':selected_profile['id']})
     configuration = ConfigurationService(runtime, store)
     TaskManager(runtime.current, executable=task_engine, endpoint=endpoint, session_secret=session_secret)
     class CurrentTasks:
@@ -106,6 +112,9 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     ros_operations = RosOperations(runtime, store, tasks, ros_tasks)
     documents.ros_operations = ros_operations
     hsm = StateMachines(runtime,store,robot_systems,documents,tasks,ros_tasks)
+    from .deployment import Deployment
+    deployment = Deployment(store, robot_systems, ros_tasks, documents, hsm)
+    robot_systems.deployment = deployment
 
     async def authenticate(authorization: Annotated[str | None, Header()] = None):
         if authorization is None or not hmac.compare_digest(authorization.encode('utf-8'),
@@ -128,6 +137,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
                 await task
         await hsm.close()
         await tasks.stop_all()
+        await deployment.stop()
         await ros_operations.close()
         await asyncio.to_thread(ros_tasks.close)
         await runtime.aclose()
@@ -135,6 +145,16 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     app = FastAPI(title='Agro runtime management',
                   lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    @app.middleware('http')
+    async def persist_profile(request, call_next):
+        response = await call_next(request)
+        if request.method not in ('GET', 'HEAD', 'OPTIONS') and response.status_code < 400:
+            try:
+                profiles.flush()
+            except (ContractValidationError, OSError) as error:
+                issues = [v.model_dump() for v in error.issues] if isinstance(error, ContractValidationError) else [{'path':'$.storage_path','code':'profile_write_failed','reason':str(error)}]
+                return JSONResponse(status_code=409, content={'errors': issues})
+        return response
     @app.middleware('http')
     async def tutorial_guard(request, call_next):
         # A tutorial must never install third-party code, import projects or control a real device
@@ -159,6 +179,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     app.state.documents = documents
     app.state.hsm = hsm
     app.state.ros_tasks = ros_tasks
+    app.state.deployment = deployment
     api = APIRouter(dependencies=[Depends(authenticate)])
     identity = {'application': 'AT-System-Integration',
                 'source_root': str(Path(__file__).resolve().parents[2]),
@@ -209,6 +230,15 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     class RobotSystemCreate(BaseModel):
         name: str = Field(min_length=1, max_length=60)
         example_id: str | None = None
+        storage_path: str = Field(min_length=1)
+
+    @api.post('/robot-profiles/open')
+    async def open_robot_profile(body: dict):
+        robot_systems.require_stopped()
+        if hsm.running() or any(not worker.done() for worker in jobs.values()):
+            fail('$.robot', 'robot_busy', '请先停止运行并等待管理操作完成')
+        record = profiles.open(body.get('path', ''))
+        return record
 
     class RobotSystemActivate(BaseModel):
         request_id: str
@@ -259,7 +289,12 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     @api.post('/robot-systems')
     async def create_robot_system(body: RobotSystemCreate):
-        return robot_systems.create(body.name, body.example_id)
+        record = robot_systems.create(body.name, body.example_id)
+        try:
+            return profiles.attach(record['id'], body.storage_path)
+        except BaseException:
+            store.delete('robot_system', record['id'])
+            raise
 
     @api.delete('/robot-systems/{system_id}')
     async def delete_robot_system(system_id: str):
@@ -271,12 +306,18 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     @api.post('/robot-systems/{system_id}/select-blank')
     async def select_blank_robot_system(system_id: str):
         if hsm.running(): fail('$.machine','running','运行中不能切换机器人')
+        if any(not worker.done() for worker in jobs.values()):
+            fail('$.management','management_busy','请等待当前管理操作完成后再切换机器人')
+        robot_systems.require_stopped()
+        await asyncio.to_thread(ros_tasks.environments.close_computers)
         return robot_systems.choose_blank(system_id)
 
     @api.post('/robot-systems/{system_id}/activate', status_code=202)
     async def activate_robot_system(system_id: str, body: RobotSystemActivate):
         if hsm.running(): fail('$.machine','running','运行中不能切换机器人')
         async def work(phase):
+            robot_systems.require_stopped()
+            await asyncio.to_thread(ros_tasks.environments.close_computers)
             return await robot_systems.activate(system_id, phase)
         job=management.accept('robot_system_activate',body.request_id,{'id': system_id},work)
         return {'accepted': True, 'management_job_id': job['id']}
@@ -404,11 +445,16 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
         name: str
         icon: Literal['generic','navigation','arm','vision','operations','mechanical','electrical'] = 'generic'
         icon_mode: Literal['workspace', 'manual'] = 'manual'
-        kind: Literal['service', 'action', 'publish_once', 'publish_periodic', 'subscribe_wait']
+        kind: Literal['service', 'action', 'publish_once', 'publish_periodic', 'subscribe_wait', 'compute']
+        operation: str = ''
+        stop_observation: dict = Field(default_factory=dict)
         interface: str = ''
         ros_type: str
         schema_id: str | None = None
         workspace_ids: list[str] = Field(default_factory=list, max_length=64)
+        execution_workspace_id: str = ''
+        module_ids: list[str] = Field(default_factory=list, max_length=128)
+        startup_policy: Literal['managed','external'] = 'managed'
         resource_labels: dict[str, str] = Field(default_factory=dict)
         payload: dict = Field(default_factory=dict)
         inputs: dict = Field(default_factory=dict)
@@ -419,6 +465,9 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
         stop_payload: dict | None = None
         condition: dict = Field(default_factory=dict)
         success_condition: dict = Field(default_factory=dict)
+        stop_confirmation_field: str = ''
+        error_message_field: str = ''
+        stop_recovery_service: str = ''
         qos_reliability: Literal['reliable','best_effort'] = 'reliable'
         rate_hz: float = 5
         timeout_s: float = 15
@@ -446,6 +495,12 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     async def ros_operation_cancel(operation_id: str):
         return ros_operations.cancel(operation_id)
 
+    @api.post('/ros/operations/{operation_id}/confirm-stop')
+    async def ros_confirm_stop(operation_id: str):
+        result=await ros_operations.confirm_stop(operation_id)
+        hsm.refresh_stop_confirmation()
+        return result
+
     class RosTest(BaseModel):
         inputs: dict = Field(default_factory=dict)
         confirm_safety: bool = False
@@ -457,6 +512,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
         from .ros_tasks import prepared_task
         if hsm.running():fail('$.machine','hsm_busy','请先停止正在运行的状态流程')
         if not body.confirm_safety:fail('$.safety','confirmation_required','试运行前请确认设备环境与停止方式')
+        await deployment.require_ready('task',task_id)
         task=ros_tasks.get(task_id)
         prepared_task(task,body.inputs)
         async with runtime.transition:
@@ -486,6 +542,11 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     @api.get('/ros/tasks')
     async def ros_task_list():
         return {'tasks':ros_tasks.list()}
+
+    @api.get('/data/operations')
+    async def data_operations():
+        from .data_operations import OPERATIONS
+        return {'operations':[{'id':key,'name':name} for key,name in OPERATIONS.items()]}
 
     @api.get('/ros/task-uses')
     async def ros_task_uses():
@@ -530,18 +591,22 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     @api.put('/ros/connection')
     async def ros_connection_save(body: RosConnection):
         async with runtime.transition:
-            if hsm.running() or any(item['state'] in ('ACCEPTED','RUNNING','CANCELING','UNKNOWN') for item in tasks.list()) or any(item['snapshot']['state'] in ('ACCEPTED','RUNNING','CANCELING','UNKNOWN') for item in store.list('ros_operation')):
+            if deployment.has_processes() or hsm.running() or any(item['state'] in ('ACCEPTED','RUNNING','CANCELING','UNKNOWN') for item in tasks.list()) or any(item['snapshot']['state'] in ('ACCEPTED','RUNNING','CANCELING','UNKNOWN') for item in store.list('ros_operation')):
                 fail('$.connection','running','请先停止运行并确认设备状态，再切换 ROS 域')
             return ros_tasks.save_connection(body.domain_id,body.namespace)
 
     @api.get('/ros/message')
     async def ros_message(interface: str, ros_type: str):
-        return await asyncio.to_thread(ros_tasks.sample,interface,ros_type,ros_tasks.connection()['domain_id'])
+        candidates = [w['id'] for w in store.list('interface_workspace') if w.get('project_id')==ros_tasks._robot() and ros_type in w.get('definitions',{}) and ros_tasks.environments.active(w['id'])]
+        config = ros_tasks.environments.snapshot(workspace_id=candidates[0] if candidates else None)
+        return await asyncio.to_thread(ros_tasks.sample,interface,ros_type,ros_tasks.connection()['domain_id'],config)
 
     @api.get('/ros/interfaces')
     async def ros_interfaces():
         try:
-            return await asyncio.wait_for(asyncio.to_thread(ros_tasks.discover,ros_tasks.connection()), timeout=5)
+            environments=ros_tasks.environments.active()
+            config=ros_tasks.environments.snapshot(workspace_id=environments[0]['workspace_id'] if environments else None)
+            return await asyncio.wait_for(asyncio.to_thread(ros_tasks.discover,ros_tasks.connection(),config), timeout=5)
         except asyncio.TimeoutError:
             fail('$.ros','discovery_timeout','ROS 2 接口发现超时，请检查 ROS_DOMAIN_ID 与网络')
 
@@ -554,6 +619,81 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     async def interface_workspaces():
         from .interface_sources import InterfaceWorkspaces
         return InterfaceWorkspaces(store, ros_tasks._robot()).catalog()
+
+    @api.get('/ros/execution-environment')
+    async def execution_environment():
+        return {'environments': ros_tasks.environments.active()}
+
+    @api.get('/deployment/modules')
+    async def deployment_modules():
+        return {'modules': deployment.modules()}
+
+    @api.get('/deployment/workspaces/{workspace_id}/scan')
+    async def deployment_scan(workspace_id: str):
+        from .module_catalog import scan_modules
+        from .interface_sources import InterfaceWorkspaces
+        workspace=InterfaceWorkspaces(store,ros_tasks._robot()).get(workspace_id)
+        return await asyncio.to_thread(scan_modules,workspace['path'])
+
+    @api.post('/deployment/modules')
+    async def deployment_save(body: dict):
+        return deployment.save(body)
+
+    @api.delete('/deployment/modules/{identity}')
+    async def deployment_delete(identity: str):
+        robot_systems.require_stopped()
+        if identity not in {v['id'] for v in deployment.modules()}:fail('$.module','unknown_module','启动模块不存在')
+        if any(identity in v.get('dependencies',[]) for v in deployment.modules()) or any(identity in v.get('module_ids',[]) for v in ros_tasks.list()):
+            fail('$.module','module_in_use','启动模块仍被任务或其他模块引用')
+        store.delete('subsystem_module',identity)
+        return {'deleted':identity}
+
+    @api.get('/deployment/status')
+    async def deployment_status():
+        return await deployment.status()
+
+    @api.get('/deployment/modules/{identity}/logs')
+    async def deployment_logs(identity: str):
+        return deployment.logs(identity)
+
+    @api.post('/deployment/plan')
+    async def deployment_plan(body: dict):
+        return deployment.plan(body.get('kind'),body.get('reference'))
+
+    @api.post('/deployment/prepare',status_code=202)
+    async def deployment_prepare(body: dict):
+        if body.get('confirm_safety') is not True:fail('$.safety','confirmation_required','请确认设备环境后准备运行')
+        plan=deployment.plan(body.get('kind'),body.get('reference'))
+        async def work(phase):
+            phase('preparing_subsystems')
+            return await deployment.prepare(plan['kind'],plan['reference'],True)
+        job=management.accept('prepare_subsystems',body.get('request_id') or 'request_'+uuid4().hex,plan,work,
+                              on_accept=lambda:setattr(deployment,'stopping',False))
+        return {'management_job_id':job['id'],'accepted':True}
+
+    @api.post('/deployment/stop',status_code=202)
+    async def deployment_stop(body: dict):
+        deployment.stopping=True
+        async def work(phase):
+            phase('stopping_subsystems')
+            return await deployment.stop()
+        job=management.accept('stop_subsystems',body.get('request_id') or 'request_'+uuid4().hex,{},work)
+        return {'management_job_id':job['id'],'accepted':True}
+
+    @api.get('/ros/interface-workspaces/{workspace_id}/environment')
+    async def workspace_environment(workspace_id: str):
+        return ros_tasks.environments.status(workspace_id)
+
+    @api.post('/ros/interface-workspaces/{workspace_id}/environment/{action}')
+    async def workspace_environment_action(workspace_id: str, action: str, body: dict):
+        if action not in ('check','load','supplement'):
+            fail('$.action','invalid_action','不支持的执行环境操作')
+        if action in ('load','supplement') and deployment.has_processes():
+            fail('$.environment','modules_running','请先停止子系统再修改其执行环境')
+        if action in ('load','supplement') and any(v['state'] in ('ACCEPTED','RUNNING','CANCELING') for v in tasks.store.list()):
+            fail('$.environment','environment_busy','任务运行期间不能更换执行环境')
+        return await asyncio.to_thread(ros_tasks.environments.manage, ros_tasks._robot(), action,
+                                       workspace_id, body.get('python',''))
 
     @api.post('/ros/interface-workspaces/detect')
     async def interface_workspace_detect(body: dict):
@@ -582,6 +722,8 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     @api.put('/ros/interface-workspaces/{workspace_id}')
     async def interface_workspace_update(workspace_id: str, body: dict):
+        if deployment.has_processes() or deployment.lock.locked():
+            fail('$.workspace','modules_running','请先停止子系统再更新工作区')
         from .interface_sources import InterfaceWorkspaces
         return InterfaceWorkspaces(store, ros_tasks._robot()).save(body, workspace_id)
 
@@ -598,6 +740,8 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     @api.delete('/ros/interface-workspaces/{workspace_id}')
     async def interface_workspace_delete(workspace_id: str):
+        if deployment.has_processes() or deployment.lock.locked():
+            fail('$.workspace','modules_running','请先停止子系统再移除工作区')
         from .interface_sources import InterfaceWorkspaces
         return InterfaceWorkspaces(store, ros_tasks._robot()).delete(workspace_id)
 
@@ -686,10 +830,13 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     @api.get('/state-machines/status')
     async def hsm_status():
-        return {'session':hsm.status()}
+        session=hsm.status()
+        if session:session={**session,'operations':ros_operations.operations(session['id'])}
+        return {'session':session}
 
     @api.post('/state-machines/{machine_id}/start',status_code=202)
     async def hsm_start(machine_id: str,body: StateMachineStart):
+        await deployment.require_ready('flow',machine_id)
         return await hsm.start(machine_id,body.mode,body.confirm_safety)
 
     @api.post('/state-machines/{machine_id}/check')
@@ -911,6 +1058,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     @api.post('/trees/definitions/{key}/start',status_code=202)
     async def definition_start(key: str,body: TreeRunIntent,owner: str = Depends(authenticate)):
         if hsm.running(): fail('$.machine','hsm_busy','状态机持有任务控制权，请从状态机发送事件')
+        await deployment.require_ready('tree',key)
         robot=robot_systems.selected()
         standalone=bool(robot and not robot.get('configured') and runtime.state=='STOPPED')
         if standalone and not body.confirm_safety:

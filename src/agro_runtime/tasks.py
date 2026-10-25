@@ -43,7 +43,7 @@ class TaskManifest(ContractModel):
     parameters: dict[Identifier, ParameterDescriptor] = Field(default_factory=dict)
     max_targets: StrictInt = Field(ge=1, le=8)
     max_recovery_attempts: StrictInt = Field(ge=0, le=0)
-    timeout_ms: StrictInt = Field(ge=1000, le=60000)
+    timeout_ms: StrictInt = Field(ge=1000, le=3660000)
 
 
 def _digest(payload):
@@ -366,7 +366,7 @@ class TaskManager:
             token = None
             process = None
             try:
-                token = control_token or (self.runtime.engine.control.begin_task(owner,lease_s=65.0) if standalone else self.runtime.take_control('AUTO', owner, lease_s=65.0))
+                token = control_token or (self.runtime.engine.control.begin_task(owner,lease_s=max(65.0,snapshot['manifest']['timeout_ms']/1000+15)) if standalone else self.runtime.take_control('AUTO', owner, lease_s=max(65.0,snapshot['manifest']['timeout_ms']/1000+15)))
                 token_path = directory / 'control.json'
                 token_path.write_text(token.model_dump_json())
                 token_path.chmod(0o600)

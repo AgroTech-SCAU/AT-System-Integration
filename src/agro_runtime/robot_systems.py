@@ -49,8 +49,9 @@ class RobotSystems:
 
     def listing(self):
         connections = {item['id']: item for item in self.store.list('ros_connection')}
+        profiles = {item['id']: item['path'] for item in self.store.list('robot_profile')}
         return {
-            "systems": [{**item, 'connection': connections.get(item['id'])}
+            "systems": [{**item, 'connection': connections.get(item['id']), 'storage_path': profiles.get(item['id'])}
                         for item in self.store.list("robot_system")],
             "selected_id": self.selected_id(),
             "active": self.active(),
@@ -148,6 +149,7 @@ class RobotSystems:
         # All affected workspace records are removed in one transaction, so a
         # cancelled or failed deletion cannot leave a half-deleted project
         with self.store.db:
+            self.store.db.execute("DELETE FROM documents WHERE kind='robot_profile' AND id=?", (key,))
             for kind in ("tree_draft", "plan", "state_machine", "ros_task", "ros_resource", "ros_binding"):
                 for row in self.store.list(kind):
                     if row.get("robot_system_id") == key:
@@ -772,6 +774,8 @@ class RobotSystems:
         self.store.put("robot_system", record["id"], record)
 
     def require_stopped(self):
+        if getattr(self, 'deployment', None) and (self.deployment.has_processes() or self.deployment.lock.locked()):
+            fail('$.modules', 'modules_running', '请先在运行台停止子系统，再切换机器人')
         if any(r['snapshot']['state'] in {'ACCEPTED','RUNNING','CANCELING','UNKNOWN'} or r['snapshot']['stop_state']=='UNCONFIRMED' for r in self.store.list('ros_operation')):
             fail('$.operations','operation_not_stopped','ROS 操作停止未确认，不能切换系统')
         if self.context.state != "STOPPED":

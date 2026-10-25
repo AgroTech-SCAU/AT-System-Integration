@@ -95,6 +95,7 @@ def _parser():
     serve.add_argument('--port', type=int, default=8765)
     serve.add_argument('--task-engine', type=Path)
     serve.add_argument('--ui-dir', type=Path)
+    serve.add_argument('--profile', type=Path)
     gui = groups.add_parser('gui').add_subparsers(dest='command', required=True)
     open_gui = gui.add_parser('open')
     open_gui.add_argument('--config', required=True, type=Path)
@@ -102,6 +103,7 @@ def _parser():
     open_gui.add_argument('--task-engine', type=Path)
     open_gui.add_argument('--ui-dir', type=Path)
     open_gui.add_argument('--desktop-dir', type=Path)
+    open_gui.add_argument('--profile', type=Path)
     open_gui.add_argument('--no-window', '--no-browser', dest='no_window', action='store_true',
                           help='只核对 Agent，不打开桌面窗口')
     return parser
@@ -217,7 +219,7 @@ def _serve(args):
     runtime = Runtime(active_config(args.config, args.state_dir), args.state_dir)
     endpoint=f'http://[{args.host}]:{args.port}' if args.host=='::1' else f'http://{args.host}:{args.port}'
     app = create_app(runtime, session_secret=session_secret_file(args.state_dir),
-                     task_engine=args.task_engine, endpoint=endpoint, ui_directory=args.ui_dir)
+                     task_engine=args.task_engine, endpoint=endpoint, ui_directory=args.ui_dir, robot_profile=args.profile)
 
     class ManagedServer(uvicorn.Server):
         """退出信号先完成停止，未确认时继续服务诊断"""
@@ -227,6 +229,11 @@ def _serve(args):
                 self.shutdown_task = asyncio.create_task(self.stop_before_exit())
 
         async def stop_before_exit(self):
+            try:
+                await app.state.deployment.stop()
+            except ContractValidationError as error:
+                print(json.dumps({'errors':[v.model_dump() for v in error.issues]},ensure_ascii=False),flush=True)
+                return
             result = await app.state.runtime.stop()
             if result['state'] == 'STOPPED':
                 self.should_exit = True

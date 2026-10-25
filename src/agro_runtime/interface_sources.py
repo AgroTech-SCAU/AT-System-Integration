@@ -335,6 +335,10 @@ class InterfaceWorkspaces:
         record = self.get(identity)
         if self.summary(record)['used_by']:
             fail('$.workspace', 'workspace_in_use', '工作区已被任务使用，请先调整任务的子系统 ROS2 工作区选择')
+        if any(module.get('workspace_id')==identity for module in self.store.list('subsystem_module')):
+            fail('$.workspace','modules_configured','此工作区仍有启动模块，请先移除相应启动配置')
+        for env in self.store.list('execution_environment'):
+            if env.get('workspace_id') == identity:self.store.delete('execution_environment',env['id'])
         self.store.delete('interface_workspace', identity)
         return {'deleted': True}
 

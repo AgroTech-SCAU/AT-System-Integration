@@ -48,3 +48,5 @@
 }
 
 .run-attention{padding:14px;border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:8px;background:var(--tint);font-size:12px;margin:16px 0}.run-attention p{font-size:11px;line-height:1.7;color:var(--muted)}.run-attention button{font-size:11px}
+
+.deployment-panel{flex-basis:100%;width:100%;padding:10px 14px;border:1px solid var(--line);border-radius:12px}.deployment-panel summary{cursor:pointer}.deployment-panel pre{max-height:240px;overflow:auto}.run-launch{flex-wrap:wrap}

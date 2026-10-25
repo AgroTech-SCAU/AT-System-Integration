@@ -16,7 +16,7 @@ from .models import TypeDescriptor, ResourceRequirement
 from .registry import _values
 
 IDENT = re.compile(r'^[a-z][a-z0-9_]{0,63}$')
-KINDS = {'service', 'action', 'publish_once', 'publish_periodic', 'subscribe_wait'}
+KINDS = {'service', 'action', 'publish_once', 'publish_periodic', 'subscribe_wait', 'compute'}
 WAIT_MODES = {'response', 'result', 'message', 'sent', 'until_stopped'}
 
 
@@ -51,6 +51,19 @@ def validate_task(raw):
     if ros_type and ros_type.split('/')[1] != expected:
         fail('$.ros_type', 'kind_mismatch', '接口类型与通信方式不匹配')
     data['ros_type'] = ros_type
+    if kind == 'compute':
+        from .data_operations import OPERATIONS
+        if data.get('operation') not in OPERATIONS:
+            fail('$.operation','invalid_operation','请选择已支持的数据处理操作')
+    if data.get('execution_workspace_id') and data['execution_workspace_id'] not in data.get('workspace_ids',[]):
+        fail('$.execution_workspace_id','invalid_provider','执行子系统需要包含在任务选择的工作区内')
+    if not isinstance(data.get('module_ids',[]),list) or any(not isinstance(v,str) for v in data.get('module_ids',[])):
+        fail('$.module_ids','invalid_modules','启动模块选择无效')
+    if data.get('startup_policy','managed') not in ('managed','external'):
+        fail('$.startup_policy','invalid_startup_policy','请选择由运行台准备模块或使用外部接口')
+    observation=data.get('stop_observation')
+    if observation is not None and (not isinstance(observation,dict) or observation and kind!='action'):
+        fail('$.stop_observation','invalid_stop_observation','停止观测需要 Action 任务及有效的反馈配置')
     payload = data.get('payload', {})
     if not isinstance(payload, dict):
         fail('$.payload', 'invalid_payload', '请求内容必须是 JSON 对象')
@@ -71,6 +84,15 @@ def validate_task(raw):
             fail('$.condition', 'invalid_condition', '订阅条件不正确')
         if condition.get('operator', 'any') != 'any' and not isinstance(condition.get('field'), str):
             fail('$.condition.field', 'field_required', '选择消息字段后才能比较')
+    for name in ('stop_confirmation_field','error_message_field'):
+        value=data.get(name, '')
+        if not isinstance(value,str) or value and not re.fullmatch(r'[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*',value):
+            fail('$.'+name,'invalid_result_field','请选择有效的结果字段路径')
+        if value and kind!='action':
+            fail('$.'+name,'invalid_result_field','停止确认字段仅用于 Action')
+    recovery=data.get('stop_recovery_service','')
+    if not isinstance(recovery,str) or recovery and (kind!='action' or not re.fullmatch(r'/[A-Za-z_][A-Za-z0-9_/]*',recovery)):
+        fail('$.stop_recovery_service','invalid_recovery_service','请选择有效的停止确认服务名称')
     condition=data.get('success_condition', {})
     if not isinstance(condition,dict) or condition.get('operator','any') not in ('any','equals','not_equals','greater','less'):
         fail('$.success_condition','invalid_condition','完成条件无效')
@@ -145,6 +167,11 @@ def validate_task_schema(data, schema):
                 fail(location, 'missing_schema_field', '接口中不存在此字段路径：' + path)
         return descriptor
 
+    for name, kind in (('stop_confirmation_field','boolean'),('error_message_field','string')):
+        if data.get(name):
+            descriptor=descriptor_at(data[name],response,'$.'+name)
+            if descriptor['kind']!=kind:
+                fail('$.'+name,'invalid_result_field','结果字段类型不匹配')
     for path in data.get('input_bindings', {}):
         descriptor = descriptor_at(path, request, '$.input_bindings.' + path)
         contract = data['inputs'][data['input_bindings'][path]]
@@ -230,6 +257,8 @@ def mapped_outputs(data, response):
 class RosTasks:
     def __init__(self, store, robots):
         self.store, self.robots = store, robots
+        from .execution_environments import WorkspaceEnvironments
+        self.environments = WorkspaceEnvironments(store, robots) if store is not None and robots is not None else None
         self._context=None
         self._domain=None
         self._context_active=0
@@ -291,6 +320,11 @@ class RosTasks:
             fail('$.task', 'ownership', '任务不属于当前机器人')
         data.setdefault('workspace_ids', old.get('workspace_ids', []) if old else workspaces.catalog()['default_workspace_ids'])
         workspaces.selection(data['workspace_ids'])
+        if data['kind']=='compute':
+            data.update(id=identity, robot_system_id=key, revision=old['revision']+1 if old else 1,
+                        ros_type='',schema_id=None,interface='')
+            self.store.put('ros_task',identity,data)
+            return self.get(identity)
         preserved_snapshot = bool(old and old.get('schema_id') and data.get('schema_id') == old.get('schema_id')
                                   and data['ros_type'] == old['ros_type']
                                   and set(data['workspace_ids']) == set(old.get('workspace_ids', [])))
@@ -341,6 +375,7 @@ class RosTasks:
             if task.get('robot_system_id', key) != key:
                 fail('$.tasks', 'ownership', '流程任务不属于当前机器人')
             self.require_snapshot(task)
+            if task.get('kind')=='compute':continue
             if task.get('schema_id'):
                 record = self.store.get('ros_schema', task['schema_id'])
             elif task.get('ros_type'):
@@ -430,19 +465,21 @@ class RosTasks:
         self.close()
         return self.store.put('ros_connection',self._robot(),{'id':self._robot(),'domain_id':domain_id,'namespace':namespace.rstrip('/') or '/'})
 
-    def discover(self,connection=None):
+    def discover(self,connection=None,execution_environment=None):
         connection=connection or self.connection()
-        result=self._discover(connection['domain_id'])
+        result=(self.environments.call(execution_environment, {'op':'discover','domain_id':connection['domain_id']})
+                if self.environments else self._discover(connection['domain_id']))
         namespace=connection['namespace']
         if namespace!='/':
             for key in ('topics','services','actions'):
                 result[key]=[item for item in result[key] if item['name']==namespace or item['name'].startswith(namespace+'/')]
         return {**result,'connection':connection}
 
-    def sample(self, interface, ros_type, domain_id=None):
+    def sample(self, interface, ros_type, domain_id=None, execution_environment=None):
         definition=validate_task({'name':'观察消息','kind':'subscribe_wait','interface':interface,'ros_type':ros_type,
                                  'payload':{},'condition':{'operator':'any'},'timeout_s':2,'qos_reliability':'best_effort'})
         definition['_ros_domain']=domain_id
+        if self.environments: definition['_execution_environment']=execution_environment
         result=self._execute(definition,threading.Event(),None)
         return {'received':result['state']=='SUCCEEDED','message':result.get('response'), 'state':result['state']}
 
@@ -482,22 +519,30 @@ class RosTasks:
 
     @staticmethod
     def require_snapshot(data):
+        if data.get('kind')=='compute':return
         if data.get('workspace_ids') and not data.get('schema_id'):
             fail('$.ros_type', 'definition_incomplete', '任务接口定义尚未补齐，请补齐依赖后重新保存任务：' + data.get('name', ''))
 
     def freeze(self, identity):
         data = self.get(identity)
         self.require_snapshot(data)
+        if data['kind']=='compute':
+            data['_ros_domain']=self.connection()['domain_id']
+            return copy.deepcopy(data)
         if not data.get('interface'):
             fail('$.task.' + identity, 'missing_endpoint', '任务尚未绑定机器人端点：' + data['name'])
         expected = self.describe(data['kind'], data['ros_type'], data.get('schema_id'))
         data['schema_id'] = expected['schema_id']
         data['interface_schema'] = {name: value for name, value in expected.items() if name not in ('source', 'schema_id')}
-        self.verify_support(data)
+        self.validate_structure(data)
         data['_ros_domain'] = self.connection()['domain_id']
         return copy.deepcopy(data)
 
     def verify_support(self, data):
+        if data.get('kind')=='compute':
+            self.validate_structure(data)
+            self.environments.snapshot(data)
+            return
         from .ros_interfaces import InterfaceLibrary, PRIMITIVES, installed_schema
         identity = data['id']
         expected = self.validate_structure(data)
@@ -507,6 +552,13 @@ class RosTasks:
             if record.get('project_id') != self._robot():
                 fail('$.task.' + identity, 'ownership', '任务接口定义不属于当前工程')
             schemas.update(InterfaceLibrary(self.store, self._robot()).compile(record['definitions'], saved_definitions=False))
+        actual_schemas = None
+        if self.environments:
+            from .execution_environments import EnvironmentFailure
+            try:
+                actual_schemas = self.environments.call(self.environments.snapshot(data), {'op':'verify','expected':schemas})['schemas']
+            except EnvironmentFailure as error:
+                fail('$.task.'+identity,'environment_not_ready',str(error))
         def normalized(value, package):
             if isinstance(value, dict):
                 return {name: normalized(item, package) for name, item in value.items()}
@@ -524,7 +576,7 @@ class RosTasks:
         for ros_type, schema in schemas.items():
             kind = {'srv': 'service', 'action': 'action', 'msg': 'publish_once'}[ros_type.split('/')[1]]
             try:
-                actual = installed_schema(kind, ros_type)
+                actual = actual_schemas[ros_type] if actual_schemas is not None else installed_schema(kind, ros_type)
             except (ImportError, AttributeError, ValueError):
                 fail('$.task.' + identity, 'missing_type_support', '执行环境缺少接口类型支持：' + ros_type)
             for field in ('field_types', 'output_field_types', 'feedback_field_types'):
@@ -534,6 +586,7 @@ class RosTasks:
 
     def validate_structure(self, data):
         validate_task(data)
+        if data.get('kind')=='compute':return None
         self.require_snapshot(data)
         schema = data.get('interface_schema')
         if not schema or 'field_schemas' not in schema:
@@ -543,11 +596,34 @@ class RosTasks:
 
     async def run(self, task_id, stop: threading.Event, feedback=None, *, definition=None, inputs=None):
         original = definition if definition is not None else self.get(task_id)
+        if getattr(self.robots, 'deployment', None):
+            await self.robots.deployment.require_tasks_ready([original])
         data = prepared_task(original, inputs, self.validate_structure(original))
         data.setdefault('_ros_domain', self.connection()['domain_id'])
+        if self.environments:
+            data.setdefault('_execution_environment', self.environments.snapshot(data))
+            data['_expected_schemas'] = {data['ros_type']: self.validate_structure(original)} if data['kind']!='compute' else {}
+            if data.get('schema_id'):
+                from .ros_interfaces import InterfaceLibrary
+                record = self.store.get('ros_schema', data['schema_id'])
+                data['_expected_schemas'].update(InterfaceLibrary(self.store, self._robot()).compile(record['definitions'], saved_definitions=False))
         result = await asyncio.to_thread(self._execute, data, stop, feedback)
         if isinstance(result, str):
             result = {'state':result,'response':data.get('payload',{})}
+        if original.get('stop_observation') and result.get('terminal_received') and original['kind']=='action':
+            confirmation={'kind':'compute','operation':'wait_stationary','payload':original['stop_observation'],
+                          'timeout_s':original['stop_observation'].get('timeout_s',5),'_ros_domain':original.get('_ros_domain',self.connection()['domain_id'])}
+            # Cancellation must still wait for measured standstill after the action reaches a terminal state
+            try:
+                measured=await asyncio.to_thread(self.environments.compute,self.environments.snapshot(original),confirmation,threading.Event())
+            except Exception:
+                measured={'state':'UNKNOWN'}
+            if measured['state']!='SUCCEEDED':
+                result.update(state='UNKNOWN',stop_confirmed=False,error={'code':'stop_unconfirmed','reason':'动作已结束但关节停止尚未确认','retryable':False})
+            else:
+                result.update(state=result.get('terminal_state',result['state']),stop_confirmed=True)
+                if result.get('error',{}).get('code')=='stop_unconfirmed':
+                    result['error']={'code':'action_failed','reason':'动作未成功完成，已确认关节停止','retryable':False} if result['state']=='FAILED' else None
         if result['state']=='SUCCEEDED' and not _matches_value(result.get('response',{}),data.get('success_condition',{})):
             result['state']='FAILED'
             result['error']={'code':'completion_condition_failed','reason':'返回结果未满足完成条件','retryable':False}
@@ -561,6 +637,18 @@ class RosTasks:
         return result
 
     def _execute(self, data, stop, feedback):
+        if self.environments:
+            config = data.pop('_execution_environment')
+            try:
+                unchanged = self.environments.signature(config) == config.get('signature')
+            except OSError:
+                unchanged = False
+            if not unchanged:
+                return {'state':'FAILED','stop_confirmed':True,'response':{},'error':{'code':'environment_changed','reason':'冻结的工作区执行环境已变化，请重新加载','retryable':False}}
+            expected = data.pop('_expected_schemas', {})
+            if data['kind']=='compute':
+                return self.environments.compute(config,data,stop)
+            return self.environments.call(config, {'op':'run','task':data,'expected':expected}, stop, feedback)
         with self._context_lock:
             domain_id=data.pop('_ros_domain',None)
             if self._context is not None and self._domain!=domain_id:
@@ -582,6 +670,7 @@ class RosTasks:
             with self._context_lock:self._context_active-=1
 
     def close(self):
+        if self.environments: self.environments.close()
         with self._context_lock:
             if self._context_active:fail('$.connection','connection_busy','当前环境仍有消息读取或任务，请稍后切换')
             if self._context is not None:
@@ -590,174 +679,4 @@ class RosTasks:
                 self._context = None
 
 
-def _ros_modules():
-    try:
-        import rclpy
-        from rosidl_runtime_py.utilities import get_message, get_service, get_action
-        from rosidl_runtime_py.set_message import set_message_fields
-        return rclpy, (get_message, get_service, get_action), set_message_fields, None
-    except ImportError:
-        fail('$.ros', 'ros_not_installed', '当前环境未找到 ROS 2 Python 环境，请先 source ROS 2 与机器人工作空间')
-
-
-def _message_as_dict(msg):
-    from rosidl_runtime_py.convert import message_to_ordereddict
-    return message_to_ordereddict(msg)
-
-
-def _matches(msg, cond):
-    return _matches_value(_message_as_dict(msg),cond)
-
-
-def _matches_value(value, cond):
-    op = cond.get('operator', 'any')
-    if op == 'any':
-        return True
-    if cond.get('field') != '$':
-        for segment in cond.get('field', '').split('.'):
-            if isinstance(value, dict) and segment in value:
-                value = value[segment]
-            elif isinstance(value, list) and segment.isdigit() and int(segment) < len(value):
-                value = value[int(segment)]
-            else:
-                return False
-    right = cond.get('value')
-    if op == 'equals': return value == right
-    if op == 'not_equals': return value != right
-    if type(value) not in (int, float) or type(right) not in (int, float): return False
-    return value > right if op == 'greater' else value < right
-
-
-def _run_task(data, stop, feedback=None, *, context=None):
-    rclpy, (get_message, get_service, get_action), fill, _ = _ros_modules()
-    from rclpy.executors import SingleThreadedExecutor
-    from rclpy.action import ActionClient
-    owns_context=context is None
-    if owns_context:
-        context = rclpy.context.Context()
-        rclpy.init(context=context)
-    node = None
-    executor = None
-    action_goal = None
-    kind = data['kind']
-    deadline = time.monotonic() + data.get('timeout_s', 15)
-    def remaining():
-        return max(0.0, deadline - time.monotonic())
-    def spin_until(future):
-        while not future.done():
-            if stop.is_set() or remaining() <= 0:
-                return False
-            executor.spin_once(timeout_sec=min(.05, remaining()))
-        return True
-    def message(cls, payload):
-        msg = cls()
-        try:
-            fill(msg, payload)
-        except Exception as exc:
-            fail('$.payload', 'invalid_fields', '消息字段与 ROS 2 接口定义不匹配: ' + str(exc))
-        return msg
-    try:
-        node = rclpy.create_node('atil_task_' + uuid4().hex[:8], context=context)
-        executor = SingleThreadedExecutor(context=context)
-        executor.add_node(node)
-        interface = data['interface']
-        ros_type = data['ros_type']
-        if kind in ('publish_once', 'publish_periodic'):
-            cls = get_message(ros_type)
-            from rclpy.qos import QoSProfile, ReliabilityPolicy
-            qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT if data.get('qos_reliability') == 'best_effort' else ReliabilityPolicy.RELIABLE)
-            pub = node.create_publisher(cls, interface, qos)
-            msg = message(cls, data.get('payload', {}))
-            if kind == 'publish_once':
-                if stop.is_set(): return 'CANCELED'
-                pub.publish(msg)
-                executor.spin_once(timeout_sec=.08)
-                return 'SUCCEEDED'
-            final = message(cls, data['stop_payload'])
-            delay = 1.0 / data.get('rate_hz', 5)
-            while not stop.is_set() and remaining() > 0:
-                pub.publish(msg)
-                executor.spin_once(timeout_sec=min(delay, .05))
-                if delay > .05:
-                    stop.wait(delay - .05)
-            # 不论正常超时还是取消，退出持续发布前都发送安全停止消息
-            for _ in range(3):
-                pub.publish(final)
-                executor.spin_once(timeout_sec=.035)
-            return 'CANCELED' if stop.is_set() else 'FAILED'
-        if kind == 'subscribe_wait':
-            cls = get_message(ros_type)
-            from rclpy.qos import QoSProfile, ReliabilityPolicy
-            qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT if data.get('qos_reliability', 'best_effort') == 'best_effort' else ReliabilityPolicy.RELIABLE)
-            matched = threading.Event()
-            response = {}
-            def observe(msg):
-                nonlocal response
-                if _matches(msg, data.get('condition', {})):
-                    response = _message_as_dict(msg)
-                    matched.set()
-            sub = node.create_subscription(cls, interface, observe, qos)
-            while not matched.is_set() and not stop.is_set() and remaining() > 0:
-                executor.spin_once(timeout_sec=min(.05, remaining()))
-            return {'state': 'CANCELED' if stop.is_set() else 'SUCCEEDED' if matched.is_set() else 'FAILED', 'response': response}
-        if kind == 'service':
-            cls = get_service(ros_type)
-            client = node.create_client(cls, interface)
-            while not client.wait_for_service(timeout_sec=.1):
-                if stop.is_set(): return 'CANCELED'
-                if remaining() <= 0: return 'FAILED'
-            future = client.call_async(message(cls.Request, data.get('payload', {})))
-            if not spin_until(future):
-                future.cancel()
-                # 服务请求可能已到达设备，取消本地等待并不等于服务端停止执行
-                raise RuntimeError('Service 请求已发出但未收到响应，设备执行状态未知，请人工核对')
-            result = future.result()
-            if feedback:
-                feedback(_message_as_dict(result))
-            # 服务响应仅表示服务调用结束，并不证明实体动作已经完成
-            return {'state': 'SUCCEEDED', 'response': _message_as_dict(result)}
-        if kind == 'action':
-            cls = get_action(ros_type)
-            client = ActionClient(node, cls, interface)
-            while not client.wait_for_server(timeout_sec=.1):
-                if stop.is_set(): return 'CANCELED'
-                if remaining() <= 0: return 'FAILED'
-            def progress(event):
-                if feedback:
-                    feedback(_message_as_dict(event.feedback))
-            future = client.send_goal_async(message(cls.Goal, data.get('payload', {})), feedback_callback=progress)
-            if not spin_until(future):
-                # 请求尚未接受时无法确认 goal 已取消，不允许假装停止成功
-                raise RuntimeError('Action Goal 尚未确认接受，无法确认取消状态，请人工核对设备')
-            action_goal = future.result()
-            if not action_goal.accepted:
-                return 'FAILED'
-            result_future = action_goal.get_result_async()
-            while not result_future.done():
-                if stop.is_set() or remaining() <= 0:
-                    cancel_future = action_goal.cancel_goal_async()
-                    cancel_limit = time.monotonic() + 5
-                    while not cancel_future.done() and time.monotonic() < cancel_limit:
-                        executor.spin_once(timeout_sec=.05)
-                    if not cancel_future.done() or not cancel_future.result().goals_canceling:
-                        raise RuntimeError('Action 取消未被服务端确认，请人工核对设备停止状态')
-                    # 必须等待最终结果，否则只能判定停止未确认
-                    result_limit = time.monotonic() + 5
-                    while not result_future.done() and time.monotonic() < result_limit:
-                        executor.spin_once(timeout_sec=.05)
-                    if not result_future.done():
-                        raise RuntimeError('Action 取消后未收到最终结果，请人工核对设备停止状态')
-                    return 'CANCELED'
-                executor.spin_once(timeout_sec=min(.05, remaining()))
-            result = result_future.result()
-            from action_msgs.msg import GoalStatus
-            if feedback:
-                feedback(_message_as_dict(result.result))
-            return {'state': 'SUCCEEDED' if result.status == GoalStatus.STATUS_SUCCEEDED else 'CANCELED' if result.status == GoalStatus.STATUS_CANCELED else 'FAILED', 'response': _message_as_dict(result.result)}
-        raise ValueError('unsupported ROS task')
-    finally:
-        if executor:
-            executor.shutdown()
-        if node:
-            node.destroy_node()
-        if owns_context:rclpy.shutdown(context=context)
+from .ros_transport import _ros_modules, _message_as_dict, _matches, _matches_value, _run_task

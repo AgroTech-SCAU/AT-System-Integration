@@ -812,7 +812,12 @@ class TaskDocuments:
             raw=(self.assets.example/'assets/camera_to_arm.json').read_bytes();asset_path=root/'camera_to_arm.json';asset_path.write_bytes(raw);asset_path.chmod(0o400)
             manifest['assets']['camera_to_arm']['path']='camera_to_arm.json'
         else:
-            manifest={'kind':draft['policy'],'assets':{},'parameters':draft['document']['inputs'],'max_targets':8,'max_recovery_attempts':0,'timeout_ms':30000}
+            budgets = {task['id']: task.get('timeout_s',15) for task in frozen_tasks}
+            # The outer deadline must leave time for each declared ROS task and cancellation
+            duration = sum(budgets.get(node['registration_id'][8:],0) for tree in draft['document']['trees'].values()
+                           for node in tree['nodes'].values() if node['registration_id'].startswith('RosTask_'))
+            manifest={'kind':draft['policy'],'assets':{},'parameters':draft['document']['inputs'],'max_targets':8,'max_recovery_attempts':0,
+                      'timeout_ms':min(3660000,max(30000,int((duration+30)*1000)))}
         (root/'task.task.json').write_text(encoded(manifest));(root/'task.task.json').chmod(0o400)
         definition={'id':key_definition,'draft_id':key,'revision':revision,'system_snapshot_id':self.context.snapshot_id,'model_digest':checked['model_digest'],'document':draft['document'],'layout':draft['layout'],'xml':compiled['xml'],'xml_sha256':checked['xml_sha256'],'manifest':manifest,'parameters':draft['parameters'],'node_mapping':checked['node_mapping'],'blackboard':checked['blackboard'],'task_ref':str(xml),'immutable':True,'robot_system_id':draft.get('robot_system_id'),'ros_tasks':frozen_tasks}
         definition['name'] = self.behavior_name(draft)

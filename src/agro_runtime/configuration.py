@@ -52,8 +52,22 @@ class WorkspaceStore:
 
     def put(self, kind, key, value):
         identifier(key)
+        previous = self.db.execute('SELECT body FROM documents WHERE kind=? AND id=?',(kind,key)).fetchone()
         with self.db:
             self.db.execute('INSERT OR REPLACE INTO documents VALUES (?,?,?)',(kind,key,encoded(value)))
+        if kind in {'robot_system','ros_task','ros_binding','ros_resource','ros_connection',
+                    'interface_workspace','interface_foundation','tree_draft','tree_definition',
+                    'state_machine','execution_environment','subsystem_module','plan','asset'}:
+            from .robot_profiles import RobotProfiles
+            try:
+                RobotProfiles(self).flush(value.get('robot_system_id') or value.get('project_id') or key)
+            except BaseException:
+                with self.db:
+                    if previous:
+                        self.db.execute('INSERT OR REPLACE INTO documents VALUES (?,?,?)',(kind,key,previous[0]))
+                    else:
+                        self.db.execute('DELETE FROM documents WHERE kind=? AND id=?',(kind,key))
+                raise
         return value
 
     def put_many(self, kind, items):
