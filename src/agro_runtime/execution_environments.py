@@ -24,7 +24,7 @@ class WorkspaceEnvironments:
         self.lock = threading.RLock()
         self.computers = {}
 
-    def manage(self, robot, action, workspace_id, python=''):
+    def manage(self, robot, action, workspace_id, python='', setup=''):
         from types import SimpleNamespace
         from .configuration import WorkspaceStore
         store = WorkspaceStore(self.store.root.parent)
@@ -33,7 +33,7 @@ class WorkspaceEnvironments:
         manager.computers = self.computers
         try:
             with self.lock:
-                return getattr(manager, action)(workspace_id, python)
+                return getattr(manager, action)(workspace_id, python, setup)
         except (EnvironmentFailure, subprocess.SubprocessError) as error:
             fail('$.environment', 'environment_not_ready', str(error))
         finally:
@@ -62,30 +62,53 @@ class WorkspaceEnvironments:
         from .interface_sources import InterfaceWorkspaces
         record = InterfaceWorkspaces(self.store, self._robot()).get(workspace_id)
         root = Path(record['path']) if record.get('path') else None
-        setup = root / 'setup.bash' if root and (root / 'setup.bash').is_file() else root / 'install/setup.bash' if root else None
+        active = self.active(workspace_id)
+        reports = self.store.list('environment_report')
+        report = next((v for v in reports if v['id'] == workspace_id), None)
+        setup_candidates = []
+        for value in [(report or {}).get('setup'), (active or {}).get('setup'),
+                      str(root / 'setup.bash') if root else '', str(root / 'install/setup.bash') if root else '']:
+            if value and Path(value).is_file() and value not in setup_candidates:
+                setup_candidates.append(value)
         candidates = []
         if root:
             for path in (root / '.venv/bin/python', root / 'venv/bin/python', root / '.install/venv/bin/python'):
                 if path.is_file(): candidates.append(str(path))
         if Path('/usr/bin/python3').is_file(): candidates.append('/usr/bin/python3')
-        active = self.active(workspace_id)
-        reports = self.store.list('environment_report')
-        report = next((v for v in reports if v['id'] == workspace_id), None)
-        return {'workspace_id': workspace_id, 'setup': str(setup) if setup and setup.is_file() else '',
-                'candidates': candidates, 'report': report,
-                'active': active, 'loaded': bool(active and active['workspace_id'] == workspace_id)}
+        for value in [(report or {}).get('python'), (active or {}).get('python')]:
+            if value and os.access(value, os.X_OK) and value not in candidates:
+                candidates.insert(0, value)
+        loaded = False
+        if active:
+            try:
+                loaded = active.get('signature') == self.signature(active)
+            except OSError:
+                pass
+        return {'workspace_id': workspace_id, 'setup': next(iter(setup_candidates), ''),
+                'setup_candidates': setup_candidates, 'candidates': candidates, 'report': report,
+                'active': active, 'loaded': loaded}
 
-    def _configuration(self, workspace_id, python):
+    def _configuration(self, workspace_id, python, setup=''):
         state = self.status(workspace_id)
-        if not state['setup']:
+        if not isinstance(setup, str):
+            fail('$.setup', 'invalid_setup', '请选择安装环境 setup 文件的绝对路径')
+        setup = setup.strip() or state['setup']
+        if not setup:
             fail('$.environment', 'workspace_not_built', '没有工作区安装环境，请先构建工作区，再检查执行环境')
+        path = Path(setup).expanduser()
+        if not path.is_absolute():
+            fail('$.setup', 'invalid_setup', '请选择安装环境 setup 文件的绝对路径')
+        if path.is_dir():
+            path = path / 'setup.bash' if (path / 'setup.bash').is_file() else path / 'install/setup.bash'
+        if not path.is_file():
+            fail('$.setup', 'invalid_setup', '安装环境文件不存在，请选择已构建工作区的 setup.bash')
         python = python or (state['report'] or {}).get('python') or next(iter(state['candidates']), '')
         if not isinstance(python, str) or not Path(python).is_absolute() or not os.access(python, os.X_OK):
             fail('$.python', 'invalid_python', '请选择可执行的 Python 绝对路径')
         from .interface_sources import InterfaceWorkspaces
         workspace = InterfaceWorkspaces(self.store, self._robot()).get(workspace_id)
         return {'id': workspace_id, 'robot_system_id': self._robot(), 'workspace_id': workspace_id, 'name': workspace['name'],
-                'setup': state['setup'], 'python': python}
+                'setup': str(path.resolve()), 'python': python}
 
     def _expected(self, workspace_id):
         from .interface_sources import InterfaceWorkspaces
@@ -93,8 +116,8 @@ class WorkspaceEnvironments:
         return {v['ros_type']: self.store.get('ros_schema', v['schema_id'])['schema']
                 for v in resolution['types'] if v.get('available') and v.get('schema_id')}
 
-    def check(self, workspace_id, python=''):
-        config = self._configuration(workspace_id, python)
+    def check(self, workspace_id, python='', setup=''):
+        config = self._configuration(workspace_id, python, setup)
         expected = self._expected(workspace_id)
         try:
             response = self.call(config, {'op': 'probe', 'types': list(expected), 'expected': expected})
@@ -106,21 +129,21 @@ class WorkspaceEnvironments:
         self.store.put('environment_report', workspace_id, report)
         return self.status(workspace_id)
 
-    def load(self, workspace_id, python=''):
+    def load(self, workspace_id, python='', setup=''):
         self._idle()
-        state = self.check(workspace_id, python)
+        state = self.check(workspace_id, python, setup)
         if not state['report']['ready']:
             return state
-        config = self._configuration(workspace_id, state['report']['python'])
+        config = self._configuration(workspace_id, state['report']['python'], state['report']['setup'])
         self._idle()
         config['signature'] = self.signature(config)
         self.store.put('execution_environment', config['id'], config)
         return self.status(workspace_id)
 
-    def supplement(self, workspace_id, python=''):
+    def supplement(self, workspace_id, python='', setup=''):
         self._idle()
-        config = self._configuration(workspace_id, python)
-        state = self.check(workspace_id, config['python'])
+        config = self._configuration(workspace_id, python, setup)
+        state = self.check(workspace_id, config['python'], config['setup'])
         if state['report']['ready']:
             return state
         packages = {'numpy': 'numpy', 'yaml': 'PyYAML'}
@@ -132,7 +155,7 @@ class WorkspaceEnvironments:
             subprocess.run([config['python'], '-m', 'venv', '--system-site-packages', str(target)], check=True, capture_output=True, timeout=60)
         interpreter = str(target / 'bin/python')
         subprocess.run([interpreter, '-m', 'pip', 'install', packages[missing]], check=True, capture_output=True, timeout=180)
-        return self.check(workspace_id, interpreter)
+        return self.check(workspace_id, interpreter, config['setup'])
 
     @staticmethod
     def signature(config):

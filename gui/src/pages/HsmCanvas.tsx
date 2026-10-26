@@ -2,12 +2,14 @@ import {AnimatePresence, motion} from 'motion/react'
 import {AnchoredPopover} from '../components/AnchoredPopover'
 import {useStudioCamera, useAnimatedGeometry} from '../motion'
 import {useLocale} from '../locale'
-import {useCallback,useEffect,useId,useRef,useState,type PointerEvent,type MouseEvent} from 'react'
+import {useCallback,useEffect,useId,useMemo,useRef,useState,type PointerEvent,type MouseEvent} from 'react'
 
 import {nestedHsmLayout,projectedHsmEdges} from './hsm-layout'
+import {guardSummary,routeHsmEdges,roundedRoute} from './hsm-routing'
+import DisclosureCard from '../components/DisclosureCard'
 
 type State={id:string;label:string;parent?:string;initial?:string;entry?:string;do?:string;exit?:string}
-type Edge={source:string;target:string;event:string;guard?:{operator:string}}
+type Edge={source:string;target:string;event:string;guard?:{operator:string;key?:string;value?:unknown}}
 export type HsmLayout={positions:Record<string,[number,number]>}
 type View={x:number;y:number;scale:number}
 type Side='input'|'output'
@@ -16,9 +18,9 @@ type Drag={kind:'node';id:string;px:number;py:number;moved:boolean;localX:number
 const W=208,H=112
 const clamp=(value:number,min:number,max:number)=>Math.max(min,Math.min(max,value))
 
-export function automaticHsmLayout(states:State[],positions:Record<string,[number,number]>={}):HsmLayout{
+export function automaticHsmLayout(states:State[],positions:Record<string,[number,number]>={},transitions:Edge[]=[]):HsmLayout{
  const root=states.find(state=>!state.parent)?.id||''
- const nested=nestedHsmLayout(states,root,positions,new Set())
+ const nested=nestedHsmLayout(states,root,positions,new Set(),undefined,transitions)
  return {positions:Object.fromEntries(Object.entries(nested.boxes).map(([id,box])=>[id,[box.localX,box.localY]]))}
 }
 
@@ -31,7 +33,7 @@ export function hsmConnectionPath(a:{x:number;y:number;width:number},b:{x:number
 
 export default function HsmCanvas({states,transitions,layout,selected,onSelect,onMove,onReset,scope,reveal,selectedTransition,onSelectTransition,onConnect,onCreate,onRename,onEnter,onOpenPhase,onReparent,onCreateIn,onDelete,onDeleteTransition,onMakeInitial,readOnly=false,viewingHistory=false,transitionPreview,activePath=[],taskLabels={}}:{
  states:State[];transitions:Edge[];layout:HsmLayout;selected:string;scope?:string;selectedTransition?:number|null;activePath?:string[];taskLabels?:Record<string,string>
- onSelect:(id:string)=>void;onMove:(id:string,x:number,y:number)=>void;onReset:()=>void
+ onSelect:(id:string)=>void;onMove:(id:string,x:number,y:number)=>void;onReset:(all?:boolean,collapsed?:Set<string>)=>void
  readOnly?:boolean;viewingHistory?:boolean;transitionPreview?:{exited:string[];retained:string[];entered:string[]}|null
  reveal?:{id:string;nonce:number}
  onReparent?:(id:string,parent:string)=>void
@@ -46,29 +48,58 @@ export default function HsmCanvas({states,transitions,layout,selected,onSelect,o
  const [view,setView]=useState<View>({x:0,y:0,scale:1}),viewRef=useRef(view)
  const [size,setSize]=useState({width:700,height:400}),[preview,setPreview]=useState<{id:string;x:number;y:number}|null>(null)
  const [connection,setConnection]=useState<Connection|null>(null),[dragging,setDragging]=useState(false)
- const [renaming,setRenaming]=useState<string|null>(null),[name,setName]=useState(''),[externalOpen,setExternalOpen]=useState(false)
+ const [renaming,setRenaming]=useState<string|null>(null),[name,setName]=useState(''),[externalOpen,setExternalOpen]=useState(false),[layoutMenu,setLayoutMenu]=useState(false)
+ const layoutAnchor=useRef<HTMLButtonElement>(null)
  const scopeId=scope||states.find(s=>!s.parent)?.id||''
  const [collapsed,setCollapsed]=useState<Set<string>>(()=>new Set(states.filter(state=>state.parent&&states.some(parent=>parent.id===state.parent&&parent.parent)).map(state=>state.id))),[dropTarget,setDropTarget]=useState('')
  const menuAnchor=useRef<HTMLSpanElement>(null)
  const [menu,setMenu]=useState<{x:number;y:number;point:{x:number;y:number};state?:string;edge?:number;parent?:string}|null>(null)
- const nested=nestedHsmLayout(states,scopeId,layout.positions,collapsed,preview)
+ const nested=useMemo(()=>nestedHsmLayout(states,scopeId,layout.positions,collapsed,preview,transitions),[states,scopeId,layout.positions,collapsed,preview,transitions])
  const geometry=useAnimatedGeometry(nested.boxes,!!preview,scopeId)
  const visible=nested.shown,boxes=Object.fromEntries(Object.entries(nested.boxes).map(([id,box])=>[id,{...box,...geometry[id]}])),visibleIds=new Set(visible.map(state=>state.id))
  const positions=Object.fromEntries(Object.entries(boxes).map(([id,box])=>[id,[box.x,box.y] as [number,number]]))
  const positionRef=useRef(positions);positionRef.current=positions
  const boxRef=useRef(boxes);boxRef.current=boxes
- const shownEdges=projectedHsmEdges(states,transitions,visibleIds)
- const externalEdges=transitions.map((edge,index)=>({edge,index})).filter(({edge})=>(visibleIds.has(edge.source)||visibleIds.has(edge.target)||edge.source===scopeId)&&!(visibleIds.has(edge.source)&&visibleIds.has(edge.target)))
+ const projected=projectedHsmEdges(states,transitions,visibleIds)
+ const inherited=transitions.flatMap((edge,index)=>edge.source===scopeId&&visibleIds.has(edge.target)?[{index,edge,inherited:true}]:[])
+ const shownEdges=[...projected,...inherited].map(item=>({...item,inherited:'inherited' in item&&item.inherited===true}))
+ const edgeLabels=new Map(shownEdges.map(({edge,index,inherited})=>{const event=edge.event==='completed'?t('行为完成'):edge.event==='failed'?t('行为失败'):edge.event||t('未命名事件'),fallback=(!edge.guard?.operator||['always','otherwise'].includes(edge.guard.operator))&&transitions.filter(other=>other.source===transitions[index].source&&other.event===edge.event).length>1,condition=fallback?t('其他情况'):guardSummary(edge);return [index,(inherited?t('父层规则')+' · ':'')+event+(condition?' · '+condition:'')]}))
+ // Keep full obstacle routing tied to saved geometry; pointer previews only move nearby bends
+ const routingLayout=useMemo(()=>nestedHsmLayout(states,scopeId,layout.positions,collapsed,undefined,transitions),[states,scopeId,layout.positions,collapsed,transitions])
+ const geometryKey=JSON.stringify(routingLayout.boxes),edgeKey=JSON.stringify(shownEdges),labelKey=JSON.stringify([...edgeLabels])
+ const targetRoutes=useMemo(()=>routeHsmEdges(states,shownEdges,routingLayout.boxes,edgeLabels,scopeId),[states,geometryKey,edgeKey,labelKey,scopeId])
+ const routeTargets=useMemo(()=>Object.fromEntries(targetRoutes.flatMap(route=>[...route.points.slice(1,-1).map((point,index)=>[route.index+':point:'+index,{...point,width:0,height:0}] as const),[route.index+':label',{x:route.x-route.labelWidth/2,y:route.y-11,width:route.labelWidth,height:22}] as const])),[targetRoutes])
+ const routeGeometry=useAnimatedGeometry(routeTargets,!!preview,scopeId+':routes')
+ const routedEdges=targetRoutes.map(route=>{
+  const item=shownEdges.find(item=>item.index===route.index)!,source=boxes[item.edge.source],target=boxes[item.edge.target],label=routeGeometry[route.index+':label']||routeTargets[route.index+':label']
+  const first=route.points[0],last=route.points[route.points.length-1],start=source?{x:source.x+source.width+7,y:source.y+56}:first,end={x:target.x-9,y:target.y+56}
+  let points=route.points.map((point,index)=>index===0?start:index===route.points.length-1?end:routeGeometry[route.index+':point:'+(index-1)]||point),labelX=label.x,labelY=label.y
+  if(preview){
+   const dx=start.x-first.x,dy=start.y-first.y,tx=end.x-last.x,ty=end.y-last.y
+   if(Math.abs(dx-tx)<.5&&Math.abs(dy-ty)<.5){points=route.points.map(point=>({x:point.x+dx,y:point.y+dy}));labelX+=dx;labelY+=dy}
+   else if(points.length<=4){
+    const laneY=Math.abs(start.y-end.y)<40?Math.min(start.y,end.y)-80:(start.y+end.y)/2
+    points=[start,{x:start.x+26,y:start.y},{x:start.x+26,y:laneY},{x:end.x-26,y:laneY},{x:end.x-26,y:end.y},end]
+   }else{
+    points=route.points.map(point=>({...point}));points[0]=start;points[points.length-1]=end
+    points[1]={x:route.points[1].x+dx,y:start.y};points[2]={x:points[1].x,y:route.points[2].y}
+    const near=points.length-2;points[near]={x:route.points[near].x+tx,y:end.y};points[near-1]={x:points[near].x,y:route.points[near-1].y}
+   }
+  }
+  return {...route,points,path:roundedRoute(points),x:labelX+label.width/2,y:labelY+11,labelWidth:label.width}
+ })
+ const externalEdges=transitions.map((edge,index)=>({edge,index})).filter(({edge,index})=>(visibleIds.has(edge.source)||visibleIds.has(edge.target)||edge.source===scopeId)&&!shownEdges.some(item=>item.index===index))
  const updateView=useCallback((next:View,direct=false)=>{viewRef.current=next;camera.move(next,direct);setView(next)},[camera])
  const localPoint=(clientX:number,clientY:number)=>{const bounds=surface.current!.getBoundingClientRect();return {x:(clientX-bounds.left-viewRef.current.x)/viewRef.current.scale,y:(clientY-bounds.top-viewRef.current.y)/viewRef.current.scale}}
  const fit=useCallback(()=>{
   const bounds=surface.current?.getBoundingClientRect();if(!bounds?.width||!bounds.height)return
-  const points=visible.map(s=>positionRef.current[s.id]).filter(Boolean)
-  if(!points.length){updateView({x:0,y:0,scale:1});return}
-  const left=Math.min(0,...points.map(p=>p[0]))-32,top=Math.min(0,...points.map(p=>p[1]))-32,right=Math.max(...visible.map(s=>{const b=boxRef.current[s.id];return b?b.x+b.width:0}))+44,bottom=Math.max(...visible.map(s=>{const b=boxRef.current[s.id];return b?b.y+b.height:0}))+70
-  const scale=clamp(Math.min((bounds.width-44)/(right-left),(bounds.height-80)/(bottom-top)),.25,1)
+  const nodes=Object.values(nested.boxes)
+  if(!nodes.length){updateView({x:0,y:0,scale:1});return}
+  const routes=routeHsmEdges(states,shownEdges,nested.boxes,edgeLabels,scopeId)
+  const left=Math.min(0,...nodes.map(box=>box.x),...routes.map(route=>route.bounds.left))-36,top=Math.min(0,...nodes.map(box=>box.y),...routes.map(route=>route.bounds.top))-36,right=Math.max(...nodes.map(box=>box.x+box.width+24),...routes.map(route=>route.bounds.right))+36,bottom=Math.max(...nodes.map(box=>box.y+box.height+24),...routes.map(route=>route.bounds.bottom))+36
+  const scale=clamp(Math.min((bounds.width-48)/(right-left),(bounds.height-100)/(bottom-top)),.15,1)
   updateView({x:(bounds.width-(right-left)*scale)/2-left*scale,y:(bounds.height-(bottom-top)*scale)/2-top*scale,scale})
- },[visible,updateView])
+ },[nested,states,edgeKey,labelKey,scopeId,updateView])
  const fitRef=useRef(fit);fitRef.current=fit
  const zoomAt=(factor:number,clientX?:number,clientY?:number,direct=false)=>{
   const bounds=surface.current?.getBoundingClientRect();if(!bounds||!visible.length)return
@@ -76,7 +107,7 @@ export default function HsmCanvas({states,transitions,layout,selected,onSelect,o
   updateView({x:x-(x-current.x)/current.scale*scale,y:y-(y-current.y)/current.scale*scale,scale},direct)
  }
  useEffect(()=>{if(!surface.current)return;let first=true;const observer=new ResizeObserver(([entry])=>{setSize({width:entry.contentRect.width,height:entry.contentRect.height});if(first&&entry.contentRect.width&&entry.contentRect.height){first=false;if(!views.current[scopeId])fitRef.current()}});observer.observe(surface.current);return()=>observer.disconnect()},[scopeId])
- useEffect(()=>{setRenaming(null);setExternalOpen(false);setConnection(null);setMenu(null);const saved=views.current[scopeId];if(saved)updateView(saved);else requestAnimationFrame(()=>fitRef.current());return()=>{views.current[scopeId]=viewRef.current}},[scopeId,updateView])
+ useEffect(()=>{setRenaming(null);setExternalOpen(false);setLayoutMenu(false);setConnection(null);setMenu(null);const saved=views.current[scopeId];if(saved)updateView(saved);else requestAnimationFrame(()=>fitRef.current());return()=>{views.current[scopeId]=viewRef.current}},[scopeId,updateView])
  useEffect(()=>{
   if(!reveal)return
   setCollapsed(previous=>{const next=new Set(previous);let item=states.find(state=>state.id===reveal.id);for(let depth=0;item?.parent&&depth<states.length;depth++){next.delete(item.parent);item=states.find(state=>state.id===item?.parent)}return next})
@@ -153,21 +184,21 @@ export default function HsmCanvas({states,transitions,layout,selected,onSelect,o
    if(event.key==='+'||event.key==='='){event.preventDefault();zoomAt(1.15)}
    if(event.key==='-'){event.preventDefault();zoomAt(1/1.15)}
    if(event.key==='F2'){event.preventDefault();const state=states.find(s=>s.id===selected);if(state)beginRename(state)}
-   if(event.key==='Escape'){drag.current=null;setConnection(null);setPreview(null);setDragging(false);setExternalOpen(false);setMenu(null)}
+   if(event.key==='Escape'){drag.current=null;setConnection(null);setPreview(null);setDragging(false);setExternalOpen(false);setLayoutMenu(false);setMenu(null)}
   }} onKeyUp={event=>{if(event.code==='Space')space.current=false}} onBlur={()=>{space.current=false}}>
    <svg ref={svg} className="wb-graph" width={size.width} height={size.height} role="group" aria-label={t("{0}的子状态", {0: owner?.label||t("状态机")})} onPointerDown={blankDown} onPointerMove={move} onPointerUp={event=>finish(event)} onPointerCancel={event=>finish(event,true)} onContextMenu={event=>showMenu(event)} onDoubleClick={event=>{event.preventDefault()}}>
-    <defs><marker id={marker+'-arrow'} markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M1 1 L7 4 L1 7"/></marker></defs>
+    <defs><marker id={marker+'-arrow'} markerUnits="userSpaceOnUse" markerWidth={10/view.scale} markerHeight={10/view.scale} viewBox="0 0 10 10" refX="9" refY="5" orient="auto"><path d="M1 1 L9 5 L1 9 Z"/></marker></defs>
     <motion.g style={{x:camera.x,y:camera.y,scale:camera.scale,originX:0,originY:0,transformBox:"view-box"}}>
      {visible.length>0&&<g className="wb-scope-frame"><rect className="wb-scope-body" x="0" y="0" width={scopeWidth} height={scopeHeight} rx="12"/><text className="wb-scope-title" x="18" y="28">{owner?.label||t("状态机")}</text><text className="wb-scope-kind" x={scopeWidth-16} y="28" textAnchor="end">{owner?.parent?t("复合状态"):t("根状态")} · {t("{0} 个子状态",{0:states.filter(state=>state.parent===scopeId).length})}</text><path d={`M0 42 H${scopeWidth}`}/></g>}
      {visible.filter(state=>boxes[state.id].expanded).map(state=>{const b=boxes[state.id];return <rect x={b.x} y={b.y} width={b.width} height={b.height} key={'background'+state.id} className={'wb-container-bg'+(activePath.includes(state.id)?' is-live':'')} rx="9"/>})}
      {visible.filter(state=>boxes[state.id].expanded&&state.initial&&boxes[state.initial]).map(state=>{const b=boxes[state.initial!];return <g className="wb-initial" key={'initial'+state.id}><circle cx={b.x-17} cy={b.y+56} r="3"/><path d={`M${b.x-13} ${b.y+56} H${b.x-4}`} markerEnd={`url(#${marker}-arrow)`}/></g>})}
      {initial&&<g className="wb-initial" aria-label={t("初始状态")}><circle cx={initial[0]-32} cy={initial[1]+H/2} r="4"/><path d={`M${initial[0]-27} ${initial[1]+H/2} H${initial[0]-5}`} markerEnd={`url(#${marker}-arrow)`}/></g>}
-     {shownEdges.map(({edge,index})=>{
-      const same=transitions.slice(0,index).filter(item=>item.source===edge.source&&item.target===edge.target).length
-      const route=hsmConnectionPath(boxes[edge.source],boxes[edge.target],same),path=route.path,tx=route.x,ty=route.y
-      const label=edge.event==='completed'?t('行为完成'):edge.event==='failed'?t('行为失败'):edge.event||t("未命名事件"),labelWidth=Math.min(170,Math.max(52,label.length*6.7+18)),guarded=edge.guard?.operator&&edge.guard.operator!=='always'
-      return <g key={index} className={'wb-edge'+(selectedTransition===index?' is-selected':'')} role="button" tabIndex={0} aria-label={t("转换 {0} 从 {1} 到 {2}", {0: label, 1: states.find(s=>s.id===edge.source)?.label, 2: states.find(s=>s.id===edge.target)?.label})} onPointerDown={event=>event.stopPropagation()} onContextMenu={event=>showMenu(event,undefined,index)} onClick={event=>{event.stopPropagation();onSelectTransition?.(index)}} onKeyDown={event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();onSelectTransition?.(index)}}}>
-       <path className="wb-edge-hit" d={path}/><path className="wb-edge-line" d={path} markerEnd={`url(#${marker}-arrow)`}/><rect className="wb-edge-label-bg" x={tx-labelWidth/2} y={ty-11} width={labelWidth} height="21" rx="5"/><text x={tx} y={ty+3} textAnchor="middle">{guarded?'◇ ':''}{label.slice(0,23)}</text>
+     {routedEdges.map(route=>{
+      const {index,path,x:tx,y:ty,labelWidth,inherited}=route,edge=transitions[index],label=edgeLabels.get(index)||'',related=edge.source===selected||edge.target===selected||shownEdges.find(item=>item.index===index)?.edge.source===selected||shownEdges.find(item=>item.index===index)?.edge.target===selected
+      return <g key={index} className={'wb-edge'+(selectedTransition===index?' is-selected':'')+(related?' is-related':'')+(inherited?' is-inherited':'')} style={{outlineWidth:3/view.scale,outlineOffset:4/view.scale}} role="button" tabIndex={0} aria-label={t("转换 {0} 从 {1} 到 {2}", {0: label, 1: states.find(s=>s.id===edge.source)?.label, 2: states.find(s=>s.id===edge.target)?.label})} onPointerDown={event=>event.stopPropagation()} onContextMenu={event=>showMenu(event,undefined,index)} onClick={event=>{event.stopPropagation();onSelectTransition?.(index)}} onKeyDown={event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();onSelectTransition?.(index)}}}>
+       <title>{label+' · '+(states.find(state=>state.id===edge.source)?.label||edge.source)+' → '+(states.find(state=>state.id===edge.target)?.label||edge.target)}</title>
+       <path className="wb-edge-hit" d={path}/><path className="wb-edge-line" vectorEffect="non-scaling-stroke" d={path} markerEnd={`url(#${marker}-arrow)`}/><rect className="wb-edge-label-bg" x={tx-labelWidth/2} y={ty-11} width={labelWidth} height="22" rx="5"/><text x={tx} y={ty+3} textAnchor="middle">{label.length>47?label.slice(0,46)+'…':label}</text>
+       {inherited&&<circle className="wb-inherited-origin" cx={route.points[0].x} cy={route.points[0].y} r="4"/>}
       </g>
      })}
      {connection&&(()=>{const anchor=boxes[connection.id],target=connection.target&&boxes[connection.target];if(!anchor)return null;const point={x:connection.x+(connection.side==='input'?-6:7),y:connection.y-56,width:0};const route=connection.side==='output'?hsmConnectionPath(anchor,target||point):hsmConnectionPath(target||point,anchor);return <path className="wb-connection-preview" d={route.path} markerEnd={`url(#${marker}-arrow)`}/>})()}
@@ -191,13 +222,14 @@ export default function HsmCanvas({states,transitions,layout,selected,onSelect,o
     </motion.g>
    </svg>
    {!visible.length&&<div className="wb-canvas-empty"><span className="wb-empty-glyph">＋</span><strong>{t("在这里组织状态")}</strong><span>{t("添加第一个状态，配置进入、期间与离开行为")}</span>{!readOnly&&<button onClick={()=>onCreate?.(80,90)}>{t("添加第一个状态")}</button>}</div>}
-   {visible.length>0&&<div className="wb-canvas-tools"><button onClick={()=>zoomAt(1/1.15)} aria-label={t("缩小画布")} title={t("缩小 −")}>−</button><button className="wb-zoom-value" onClick={()=>{const bounds=surface.current?.getBoundingClientRect();if(bounds)zoomAt(1/view.scale)}} title={t("恢复实际大小")}>{Math.round(view.scale*100)}%</button><button onClick={()=>zoomAt(1.15)} aria-label={t("放大画布")} title={t("放大 +")}>＋</button><span/><button onClick={fit} title={t("适合画布 0")}>{t("适合")}</button>{!readOnly&&<button onClick={()=>{onReset();requestAnimationFrame(()=>fitRef.current())}}>{t("整理")}</button>}</div>}
+   {visible.length>0&&<div className="wb-canvas-tools"><button onClick={()=>zoomAt(1/1.15)} aria-label={t("缩小画布")} title={t("缩小 −")}>−</button><button className="wb-zoom-value" onClick={()=>{const bounds=surface.current?.getBoundingClientRect();if(bounds)zoomAt(1/view.scale)}} title={t("恢复实际大小")}>{Math.round(view.scale*100)}%</button><button onClick={()=>zoomAt(1.15)} aria-label={t("放大画布")} title={t("放大 +")}>＋</button><span/><button onClick={fit} title={t("适合画布 0")}>{t("适合")}</button>{!readOnly&&<><button onClick={()=>{onReset(false,collapsed);requestAnimationFrame(()=>fitRef.current())}} title={t('整理当前层，保留内部排列')}>{t("整理")}</button><button ref={layoutAnchor} aria-label={t('更多整理选项')} aria-expanded={layoutMenu} onClick={()=>setLayoutMenu(!layoutMenu)}>⌄</button></>}</div>}
    <div className="wb-canvas-hint">{readOnly?t("单击状态查看详情 · 拖动画布平移"):connection?t("选择另一状态的连接点 · Esc 取消"):visible.length?t("左键拖动 · 滚轮缩放 · 右键菜单"):''}</div>
    <span ref={menuAnchor} className="wb-context-anchor" style={{left:menu?.x||0,top:menu?.y||0}} aria-hidden="true"/>
    <AnimatePresence>{menu&&menuAnchor.current&&<AnchoredPopover anchor={menuAnchor.current} positionKey={`${menu.x}:${menu.y}`} onClose={()=>setMenu(null)} label={t("画布菜单")} role="menu" className="wb-context-menu" align="start">
-    {menuState?<><small>{menuState.label}</small>{!readOnly&&<><button role="menuitem" onClick={()=>menuAction(()=>onCreateIn?.(menuState.id))}>{t("添加子状态")}</button><button role="menuitem" onClick={()=>menuAction(()=>beginRename(menuState))}>{t("重命名状态")}</button>{menuState.parent&&<button role="menuitem" disabled={states.find(state=>state.id===menuState.parent)?.initial===menuState.id} onClick={()=>menuAction(()=>onMakeInitial?.(menuState.id))}>{t("设为初始子状态")}</button>}</>}{states.some(state=>state.parent===menuState.id)&&<><button role="menuitem" onClick={()=>menuAction(()=>toggleChildren(menuState.id))}>{collapsed.has(menuState.id)?t("展开子状态"):t("折叠子状态")}</button><button role="menuitem" onClick={()=>menuAction(()=>onEnter?.(menuState.id))}>{t("进入子状态")}</button></>}{!readOnly&&onDelete&&menuState.parent&&<button role="menuitem" className="is-danger" onClick={()=>menuAction(()=>onDelete(menuState.id))}>{t("删除状态")}</button>}</>:menu.edge!==undefined?<><button role="menuitem" onClick={()=>menuAction(()=>onSelectTransition?.(menu.edge!))}>{t("编辑转换")}</button>{!readOnly&&onDeleteTransition&&<button role="menuitem" className="is-danger" onClick={()=>menuAction(()=>onDeleteTransition(menu.edge!))}>{t("删除转换")}</button>}</>:<>{!readOnly&&<button role="menuitem" onClick={()=>menuAction(()=>createAt(menu.point,menu.parent))}>{menu.parent?t("添加子状态"):t("添加状态")}</button>}<button role="menuitem" onClick={()=>menuAction(fit)}>{t("适合画布")}</button>{!readOnly&&<button role="menuitem" onClick={()=>menuAction(()=>{onReset();requestAnimationFrame(()=>fitRef.current())})}>{t("整理状态")}</button>}</>}
+    {menuState?<><small>{menuState.label}</small>{!readOnly&&<><button role="menuitem" onClick={()=>menuAction(()=>onCreateIn?.(menuState.id))}>{t("添加子状态")}</button><button role="menuitem" onClick={()=>menuAction(()=>beginRename(menuState))}>{t("重命名状态")}</button>{menuState.parent&&<button role="menuitem" disabled={states.find(state=>state.id===menuState.parent)?.initial===menuState.id} onClick={()=>menuAction(()=>onMakeInitial?.(menuState.id))}>{t("设为初始子状态")}</button>}</>}{states.some(state=>state.parent===menuState.id)&&<><button role="menuitem" onClick={()=>menuAction(()=>toggleChildren(menuState.id))}>{collapsed.has(menuState.id)?t("展开子状态"):t("折叠子状态")}</button><button role="menuitem" onClick={()=>menuAction(()=>onEnter?.(menuState.id))}>{t("进入子状态")}</button></>}{!readOnly&&onDelete&&menuState.parent&&<button role="menuitem" className="is-danger" onClick={()=>menuAction(()=>onDelete(menuState.id))}>{t("删除状态")}</button>}</>:menu.edge!==undefined?<><button role="menuitem" onClick={()=>menuAction(()=>onSelectTransition?.(menu.edge!))}>{t("编辑转换")}</button>{!readOnly&&onDeleteTransition&&<button role="menuitem" className="is-danger" onClick={()=>menuAction(()=>onDeleteTransition(menu.edge!))}>{t("删除转换")}</button>}</>:<>{!readOnly&&<button role="menuitem" onClick={()=>menuAction(()=>createAt(menu.point,menu.parent))}>{menu.parent?t("添加子状态"):t("添加状态")}</button>}<button role="menuitem" onClick={()=>menuAction(fit)}>{t("适合画布")}</button>{!readOnly&&<><button role="menuitem" onClick={()=>menuAction(()=>{onReset(false,collapsed);requestAnimationFrame(()=>fitRef.current())})}>{t("整理当前层")}</button><button role="menuitem" onClick={()=>menuAction(()=>{onReset(true,collapsed);requestAnimationFrame(()=>fitRef.current())})}>{t('整理全部层级')}</button></>}</>}
    </AnchoredPopover>}</AnimatePresence>
-   {externalEdges.length>0&&<div className="wb-external-edges"><button aria-expanded={externalOpen} onClick={()=>setExternalOpen(!externalOpen)}>↗ {t("{0} 条跨层转换",{0:externalEdges.length})}</button>{externalOpen&&<div className="wb-external-menu">{externalEdges.map(({edge,index})=><button key={index} onClick={()=>{onSelectTransition?.(index);setExternalOpen(false)}}><span>{edge.event}</span><small>{states.find(s=>s.id===edge.source)?.label} → {states.find(s=>s.id===edge.target)?.label}</small></button>)}</div>}</div>}
+   <AnimatePresence>{layoutMenu&&layoutAnchor.current&&<AnchoredPopover anchor={layoutAnchor.current} onClose={()=>setLayoutMenu(false)} label={t('整理选项')} role="menu" className="wb-context-menu"><button role="menuitem" onClick={()=>{setLayoutMenu(false);onReset(false,collapsed);requestAnimationFrame(()=>fitRef.current())}}>{t('整理当前层')}</button><button role="menuitem" onClick={()=>{setLayoutMenu(false);onReset(true,collapsed);requestAnimationFrame(()=>fitRef.current())}}>{t('整理全部层级')}</button></AnchoredPopover>}</AnimatePresence>
+   {externalEdges.length>0&&<div className="wb-external-edges"><button aria-expanded={externalOpen} onClick={()=>setExternalOpen(!externalOpen)}>↗ {t("{0} 条跨层转换",{0:externalEdges.length})}</button>{externalOpen&&<div className="wb-external-menu"><DisclosureCard title={t("跨层转换")} count={externalEdges.length}>{externalEdges.map(({edge,index})=><button key={index} onClick={()=>{onSelectTransition?.(index);setExternalOpen(false)}}><span>{edge.event}</span><small>{states.find(s=>s.id===edge.source)?.label} → {states.find(s=>s.id===edge.target)?.label}</small></button>)}</DisclosureCard></div>}</div>}
   </div>
  </div>
 }

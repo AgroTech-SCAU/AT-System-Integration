@@ -1,0 +1,42 @@
+.iw-card-detail{padding:24px 28px}
+.iw-workspace-sections{display:flex;flex-direction:column;gap:12px;max-width:1240px;margin:0 auto}
+.iw-overview-card{border:1px solid var(--line);background:var(--card);border-radius:10px;padding:18px 20px}
+.iw-overview-card .iw-detail-heading{margin:0 0 10px;align-items:center;flex-wrap:wrap;gap:12px}
+.iw-overview-title{display:flex;align-items:center;gap:13px;min-width:0}
+.iw-overview-title>.studio-task-icon{width:44px;height:44px;flex:none}
+.iw-overview-title h3{font-size:18px;margin:3px 0 0}
+.iw-overview-card .buttons{flex-wrap:wrap;gap:6px}
+.iw-overview-path{margin:0;color:var(--muted);font-size:11px;line-height:1.7;overflow-wrap:anywhere}
+.iw-overview-status{display:flex;flex-wrap:wrap;gap:9px 20px;margin-top:13px;font-size:11px;color:var(--muted)}
+.iw-metadata-editor{border-top:1px solid var(--line);margin-top:16px;padding-top:18px}
+.iw-metadata-editor .iw-metadata{align-items:flex-end}
+.iw-metadata-editor .ros-field-hint{margin-bottom:12px}
+.iw-workspace-card{border:1px solid var(--line)!important;background:var(--card)!important;border-radius:9px!important;margin-bottom:8px!important}
+.iw-workspace-card[aria-current=true]{background:var(--tint)!important;border-color:var(--accent-line,var(--line))!important}
+.iw-card-detail fieldset{border:0;padding:0;margin:0;min-width:0}
+.iw-card-detail .disclosure-card-content{font-size:12px;line-height:1.7;overflow-wrap:anywhere}
+.iw-card-detail .disclosure-card-content>.ros-field-hint:first-child{margin-top:0}
+.iw-card-detail .disclosure-card-content>.field:first-child{margin-top:0}
+.iw-object-cards{display:flex;flex-direction:column;gap:8px;margin:10px 0}
+.iw-object-cards>.disclosure-card{margin:0}
+.iw-card-search{margin:14px 0 12px}
+.iw-card-actions{margin:14px 0;flex-wrap:wrap}
+.iw-card-detail .ros-code{display:block;box-sizing:border-box;width:100%;max-width:100%;padding:12px;border:1px solid var(--line);border-radius:6px;background:var(--subtle);font:11px/1.7 ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere;resize:vertical}
+.iw-module-editor{margin-top:18px;padding-top:18px;border-top:1px solid var(--line)}
+.iw-module-editor>header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+.iw-module-editor h4{margin:0;font-size:13px;font-weight:550}
+.iw-module-editor>header button{border:0;background:none;padding:4px}
+.iw-module-editor fieldset>.disclosure-card{margin:10px 0}
+.iw-module-dependency{display:flex;align-items:center;gap:10px;padding:10px;border:1px solid var(--line);border-radius:7px;margin-top:7px;background:var(--card)}
+.iw-module-dependency small{display:block;color:var(--muted);font-size:10px}
+.iw-module-endpoints span{font-size:10px;color:var(--muted);margin-right:8px}
+.iw-affected-types{display:flex;flex-direction:column;gap:8px}
+.iw-environment-card .field .ros-select-trigger{margin-bottom:8px}
+.iw-environment-card fieldset>.buttons{flex-wrap:wrap;margin:12px 0}
+.iw-environment-card fieldset>.disclosure-card{margin-top:12px}
+@media(max-width:1150px){.iw-card-detail{padding:20px}.iw-overview-card{padding:16px}.iw-overview-card .iw-detail-heading>.buttons{width:100%}.iw-metadata-editor .iw-metadata{align-items:flex-start}}
+@media(max-width:800px){.iw-card-detail .ros-form-grid{grid-template-columns:minmax(0,1fr)}.iw-overview-status{gap:8px 13px}}
+.iw-environment-problem{display:block;margin-top:5px;font-size:11px;line-height:1.6;white-space:normal;overflow-wrap:anywhere}
+.iw-workspace-sections>.disclosure-card{margin:0}
+.iw-metadata-editor .iw-metadata .field{margin-bottom:10px}
+.iw-metadata-editor .iw-metadata{gap:14px}

@@ -49,3 +49,28 @@
 .hsm-workbench .wb-behavior-link{font-size:11px;color:var(--muted);gap:6px;padding:6px 0}.hsm-workbench .wb-event-log button[aria-pressed=true]{background:var(--tint)}
 .hsm-workbench .wb-picker-context{font-size:11px;color:var(--muted);margin:10px 0 6px}.hsm-workbench .wb-behavior-options{max-height:320px}.hsm-workbench .wb-behavior-group{padding:0;margin:0 0 12px}.hsm-workbench .wb-behavior-group h4{display:flex;align-items:center;justify-content:space-between;font-size:11px;font-weight:500;margin:10px 0 7px}.hsm-workbench .wb-behavior-group h4 small{font-weight:400}.hsm-workbench .wb-behavior-group>p{font-size:11px;color:var(--muted);margin:8px 0}.hsm-workbench .wb-behavior-card{display:flex;align-items:center;gap:9px;width:100%;text-align:left;padding:11px 9px;border:1px solid var(--line);border-radius:8px;background:var(--subtle);margin-bottom:7px;min-height:52px}.hsm-workbench .wb-behavior-card:hover,.hsm-workbench .wb-behavior-card[aria-pressed=true]{background:var(--tint);border-color:var(--accent)}.hsm-workbench .wb-behavior-card>span:not(.studio-task-icon){flex:1;min-width:0}.hsm-workbench .wb-behavior-card strong{font-size:12px;font-weight:500;display:block}.hsm-workbench .wb-behavior-card small{display:block;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;margin-top:4px}.hsm-workbench .wb-behavior-card>.studio-task-icon{width:28px;height:28px;flex:none}.hsm-workbench .wb-behavior-card>svg{width:22px;height:22px;flex:none;color:var(--muted)}.hsm-workbench .wb-phase-create{border:0;border-top:1px solid var(--line);border-radius:0;background:transparent;margin-top:12px;padding:6px 0 0}.hsm-workbench .wb-phase-create button{font-size:11px;min-height:30px}
 .hsm-workbench .wb-check-summary{display:flex;flex-direction:column;gap:7px;font-size:12px;padding:0 4px 10px}.hsm-workbench .wb-check-summary strong{font-weight:500}.hsm-workbench .wb-check-summary small{font-size:11px;color:var(--muted)}.hsm-workbench .wb-check-summary.passed strong{color:var(--green)}.hsm-workbench .wb-check-summary.failed strong{color:var(--red)}.hsm-workbench .wb-check-summary.stale strong{color:var(--muted)}
+
+.hsm-workbench .wb-edge-line{stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.hsm-workbench .wb-edge{outline:none}
+.hsm-workbench .wb-edge.is-selected,.hsm-workbench .wb-edge:focus-visible{outline:3px dotted var(--accent);outline-offset:4px}
+.hsm-workbench .wb-edge.is-related .wb-edge-line{stroke:var(--muted)}
+.hsm-workbench .wb-edge.is-selected .wb-edge-line,.hsm-workbench .wb-edge:hover .wb-edge-line{stroke:var(--accent);stroke-width:2}
+.hsm-workbench .wb-edge.is-inherited .wb-edge-line{stroke-dasharray:6 4}
+.hsm-workbench .wb-graph marker path{fill:var(--muted);stroke:none}
+.hsm-workbench .wb-inherited-origin{fill:var(--muted);stroke:var(--card);stroke-width:1}
+.hsm-workbench .wb-edge-label-bg{fill:var(--card);stroke:var(--line);stroke-width:.6}
+.hsm-workbench .wb-edge text{font-family:inherit;font-size:11px;fill:var(--muted)}
+.hsm-workbench .wb-edge.is-related text{fill:var(--text)}
+.hsm-workbench .wb-edge.is-inherited text{font-weight:500}
+.hsm-workbench .wb-canvas-tools>button[aria-expanded]{min-width:21px;padding-inline:3px}
+.hsm-workbench .wb-inspector-scroll>.disclosure-card{margin-bottom:12px}
+.hsm-workbench .wb-state-behaviors .wb-phase-data{margin-top:10px}
+.hsm-workbench .wb-variable-list .disclosure-card-title code{font-size:11px}
+.hsm-workbench .wb-bottom-panel>.disclosure-card{margin-top:10px}
+.hsm-workbench .wb-behavior-group .disclosure-card-content{padding:8px}
+.hsm-workbench .wb-phase-data .disclosure-card-content{padding:8px}
+.hsm-workbench .wb-external-menu .disclosure-card{width:100%;margin:0}
+.hsm-workbench .wb-external-menu .disclosure-card-content>button{display:grid;gap:3px;text-align:left;justify-content:start;width:100%}
+.hsm-workbench .wb-transition-preview.disclosure-card .disclosure-card-content>div{display:grid;gap:4px;margin-top:10px;font-size:12px}
+.hsm-workbench .wb-transition-preview.disclosure-card .disclosure-card-content>small{color:var(--muted);font-size:11px}
+.hsm-workbench .wb-transition-preview.disclosure-card>.disclosure-card-collapse{display:block;margin:0;font-size:inherit}

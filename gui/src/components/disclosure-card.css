@@ -1,0 +1,38 @@
+.disclosure-card{border:1px solid var(--line);border-radius:12px;background:var(--card);min-width:0;margin:12px 0;overflow:clip}
+.disclosure-card-heading{display:flex;align-items:center;gap:8px;margin:0;min-width:0}
+.disclosure-card-toggle{display:flex;align-items:center;gap:10px;flex:1;min-width:0;width:100%;padding:14px 16px;border:0;border-radius:11px;background:transparent;color:var(--text);text-align:left;box-shadow:none;cursor:pointer}
+.disclosure-card-toggle:hover{background:var(--subtle)}
+.disclosure-card-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:-3px}
+.disclosure-card-chevron{display:flex;align-items:center;justify-content:center;flex:none;color:var(--muted)}
+.disclosure-card-chevron svg{width:15px;height:15px}
+.disclosure-card-label{display:flex;flex-direction:column;gap:5px;min-width:0;flex:1}
+.disclosure-card-title{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px;font-weight:600;line-height:1.5;overflow-wrap:anywhere}
+.disclosure-card-count{font-size:11px;font-variant-numeric:tabular-nums;font-weight:400;border:1px solid var(--line);border-radius:6px;padding:0 6px;min-width:20px;text-align:center;color:var(--muted);background:var(--subtle)}
+.disclosure-card-summary{display:flex;align-items:center;flex-wrap:wrap;gap:5px 10px;font-size:11px;font-weight:400;line-height:1.6;color:var(--muted);overflow-wrap:anywhere}
+.disclosure-card-summary code{font-size:10px}
+.disclosure-card-status{flex:none;max-width:42%;font-size:11px;line-height:1.5;font-weight:400;color:var(--muted);text-align:right;overflow-wrap:anywhere}
+.disclosure-card-actions{display:flex;align-items:center;gap:6px;padding-right:12px;flex:none}
+.disclosure-card-collapse{overflow:hidden;min-width:0}
+.disclosure-card-content{border-top:1px solid var(--line);padding:15px 16px;min-width:0}
+.disclosure-card-content>.disclosure-card:first-child{margin-top:0}
+.disclosure-card-content>.disclosure-card:last-child{margin-bottom:0}
+.disclosure-card-content>p:first-child{margin-top:0}
+.disclosure-card-content>p:last-child{margin-bottom:0}
+.disclosure-card.is-compact .disclosure-card-toggle{padding:10px 12px}
+.disclosure-card.is-compact .disclosure-card-content{padding:12px}
+.disclosure-card.is-pending .disclosure-card-status{color:var(--accent)}
+.disclosure-card.is-error .disclosure-card-status{color:var(--red)}
+.list-card{border:1px solid var(--line);background:var(--card);border-radius:10px;margin:5px 0}
+.list-card:hover{background:var(--subtle)}
+.list-card.active,.list-card.selected,.list-card[aria-current="true"],.list-card[aria-current="page"]{border-color:color-mix(in srgb,var(--accent) 42%,var(--line));background:var(--tint)}
+.ros-task-row.list-card{border:1px solid var(--line);background:var(--card);padding:0;margin:6px;gap:0;width:auto;border-radius:10px}
+.ros-task-row.list-card:hover,.interface-list>button.list-card:hover,.records-list>button.list-card:hover{background:var(--subtle)}
+.ros-task-row.list-card.selected,.interface-list>button.list-card[aria-current="true"],.records-list>button.list-card[aria-current="true"]{background:var(--tint);border-color:color-mix(in srgb,var(--accent) 42%,var(--line))}
+.interface-list>button.list-card,.records-list>button.list-card{border:1px solid var(--line);background:var(--card);border-radius:10px}
+.ros-inspector .disclosure-card-toggle{flex-wrap:wrap}
+.ros-inspector .disclosure-card-status{max-width:100%;flex-basis:100%;padding-left:25px;text-align:left}
+.run-launch>.deployment-plan{flex-basis:100%;width:100%}
+.ros-resource-fields{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;padding:10px 0}
+.ros-resource-fields>.ros-select-trigger{grid-column:1;max-width:100%;min-width:0}
+.ros-resource-fields>button:last-child{grid-column:2;grid-row:1/span 2;align-self:center}
+@media(max-width:620px){.disclosure-card-toggle{padding:12px;gap:7px;align-items:flex-start}.disclosure-card-chevron{margin-top:3px}.disclosure-card-status{max-width:32%}.disclosure-card-content{padding:12px}.disclosure-card-actions{padding-right:8px}}

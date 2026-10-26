@@ -693,7 +693,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
         if action in ('load','supplement') and any(v['state'] in ('ACCEPTED','RUNNING','CANCELING') for v in tasks.store.list()):
             fail('$.environment','environment_busy','任务运行期间不能更换执行环境')
         return await asyncio.to_thread(ros_tasks.environments.manage, ros_tasks._robot(), action,
-                                       workspace_id, body.get('python',''))
+                                       workspace_id, body.get('python',''), body.get('setup',''))
 
     @api.post('/ros/interface-workspaces/detect')
     async def interface_workspace_detect(body: dict):

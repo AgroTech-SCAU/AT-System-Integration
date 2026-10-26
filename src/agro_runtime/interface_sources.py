@@ -232,13 +232,30 @@ class InterfaceWorkspaces:
 
     def communications(self, record):
         from .offline_communications import scan_communications
-        if 'communications' not in record:
-            result = scan_communications(record['path'], record['mode']) if record.get('path') else {
+        modules = [v for v in self.store.list('subsystem_module')
+                   if v.get('robot_system_id') == self.project_id and v.get('workspace_id') == record['id']]
+        selected = record.get('communication_module_id', '')
+        module = next((v for v in modules if v['id'] == selected), None)
+        signature = hashlib.sha256(json.dumps(module, sort_keys=True).encode()).hexdigest() if module else ''
+        previous = record.get('communications', {})
+        if 'communications' not in record or selected and signature != previous.get('module_signature'):
+            result = scan_communications(record['path'], record['mode'], previous.get('profile', ''),
+                                         previous.get('arguments', {}), module=module) if record.get('path') else {
                 'endpoints': [], 'profiles': [], 'profile': '', 'arguments': {},
                 'notices': ['仅导入接口定义，添加源码工作区可扫描通信声明']}
+            if selected and not module:
+                result['notices'].append('关联的启动模块已不存在，请重新选择通信解析来源')
+                for endpoint in result['endpoints']:
+                    endpoint.update(status='unresolved', reason='关联的启动模块已不存在')
+            result['module_signature'] = signature
             record['communications'] = result
             self.store.put('interface_workspace', record['id'], record)
-        return record['communications']
+        return {**record['communications'], 'selected_module_id': selected,
+                'module_profiles': [{key: copy.deepcopy(v.get(key)) for key in
+                                     ('id', 'name', 'kind', 'workspace_id', 'parameters', 'launch_arguments',
+                                      'namespace', 'node_name', 'remappings', 'parameter_files')} |
+                                    {'configuration': ' / '.join(filter(None, (v.get('package'), v.get('executable') or v.get('plugin'))))}
+                                    for v in modules]}
 
     def annotate(self, identity, raw):
         from .field_metadata import definition_key, validate_notes
@@ -313,13 +330,22 @@ class InterfaceWorkspaces:
             definitions, diagnostics = old['definitions'], old.get('diagnostics', [])
         record = {'id': identity or 'workspace_' + uuid4().hex, 'project_id': self.project_id,
                   'name': name.strip(), 'icon': icon, 'mode': mode, 'path': path, 'definitions': definitions, 'diagnostics': diagnostics}
+        selected_module = raw.get('communication_module_id', (old or {}).get('communication_module_id', ''))
+        if not isinstance(selected_module, str):
+            fail('$.communication_module_id', 'invalid_module', '请选择有效的通信解析来源')
+        if 'communication_module_id' in raw and selected_module and not any(
+            v['id'] == selected_module and v.get('workspace_id') == record['id'] and v.get('robot_system_id') == self.project_id
+            for v in self.store.list('subsystem_module')):
+            fail('$.communication_module_id', 'unknown_module', '通信解析来源必须属于当前子系统')
+        if selected_module:
+            record['communication_module_id'] = selected_module
         if old and 'field_notes' in old:
             record['field_notes'] = old['field_notes']
         if old and not refresh:
             for key in ('communications', 'field_notes'):
                 if key in old:
                     record[key] = old[key]
-        if path and (refresh or 'communication_profile' in raw or 'communication_arguments' in raw):
+        if path and (refresh or any(key in raw for key in ('communication_profile', 'communication_arguments', 'communication_module_id'))):
             from .offline_communications import scan_communications
             previous = (old or {}).get('communications', {})
             profile = raw.get('communication_profile', previous.get('profile', ''))
@@ -327,7 +353,12 @@ class InterfaceWorkspaces:
             if not isinstance(profile, str) or len(profile) > 1024 or not isinstance(arguments, dict) or len(arguments) > 64 or any(
                 not isinstance(key, str) or not isinstance(value, str) or len(key) > 128 or len(value) > 1024 for key, value in arguments.items()):
                 fail('$.communication_arguments', 'invalid_arguments', '启动参数需要名称与文本值，最多 64 项')
+            if selected_module and ('communication_profile' in raw or 'communication_arguments' in raw):
+                fail('$.communication_arguments', 'module_configuration_linked', '通信解析已关联启动模块，请在启动配置中修改参数')
             record['communications'] = scan_communications(path, mode, profile, arguments)
+            # The linked module is resolved lazily against its current saved configuration
+            if selected_module:
+                record['communications']['module_signature'] = None
         self.store.put('interface_workspace', record['id'], record)
         return self.summary(record)
 

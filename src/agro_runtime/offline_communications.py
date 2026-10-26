@@ -377,7 +377,7 @@ def _xml_launch(text, packages, supplied):
     return nodes, [{'name': name, 'default': default, 'value': supplied.get(name, default)} for name, default in defaults.items()]
 
 
-def scan_communications(root, mode='source', profile='', arguments=None):
+def scan_communications(root, mode='source', profile='', arguments=None, module=None):
     root, arguments = Path(root).resolve(), arguments or {}
     if not root.is_dir():
         return {'endpoints': [], 'profiles': [], 'profile': profile, 'arguments': arguments, 'mode': mode,
@@ -425,6 +425,45 @@ def scan_communications(root, mode='source', profile='', arguments=None):
     def package_for(path):
         matches = [(len(folder), name) for name, folder in packages.items() if path.is_relative_to(Path(folder))]
         return max(matches)[1] if matches else ''
+    def static_value(value):
+        # Resolve file/package references as data; never import a workspace or run launch code
+        if isinstance(value, list):
+            return [static_value(v) for v in value]
+        if not isinstance(value, dict):
+            return value
+        if '$package' in value:
+            folder = packages.get(value['$package'])
+            return str(Path(folder) / value.get('path', '')) if folder else None
+        if '$file' in value or '$yaml' in value:
+            target = static_value(value.get('$file', value.get('$yaml')))
+            if not isinstance(target, str):
+                return None
+            try:
+                path = Path(target)
+                if path.stat().st_size > 1048576:
+                    return None
+                content = path.read_text()
+                return yaml.safe_load(content) if '$yaml' in value else content
+            except (OSError, ValueError, UnicodeError, yaml.YAMLError):
+                return None
+        if '$merge' in value:
+            parts = [static_value(v) for v in value['$merge']]
+            if not all(isinstance(v, dict) for v in parts):
+                return None
+            return {k: v for part in parts for k, v in part.items()}
+        if any(k.startswith('$') for k in value):
+            return None
+        return {k: static_value(v) for k, v in value.items()}
+
+    if module and module.get('kind') == 'launch':
+        matches = [path for path, _ in files if path.name == module.get('executable') and package_for(path) == module.get('package')]
+        profile = str(matches[0].relative_to(root)) if len(matches) == 1 else '__module_launch_unresolved__'
+        arguments = {k: str(value) if value is not None else None
+                     for k, v in module.get('launch_arguments', {}).items() for value in [static_value(v)]}
+        if any(v is None for v in arguments.values()):
+            notices.append('部分启动参数无法静态解析，请核对启动模块中的参数来源')
+    elif module:
+        arguments = {}
     declarations, configs, profiles = [], {}, []
     for path, text in files:
         relative = str(path.relative_to(root))
@@ -450,12 +489,39 @@ def scan_communications(root, mode='source', profile='', arguments=None):
         except (ValueError, TypeError, SyntaxError, RecursionError, OverflowError) as error:
             notices.append('部分通信声明未能解析，已保留此前识别的结果：' + relative + '（' + type(error).__name__ + '）')
     selected = next((p for p in profiles if p['id'] == profile), None)
+    if module and module.get('kind') in ('node', 'component'):
+        relevant = [v for v in declarations if v['package'] == module.get('package')]
+        matches = [v for v in relevant if module.get('executable') in (Path(v['source']).stem, v['node'])]
+        identities = {v['node'] or v['source'] for v in relevant}
+        if not matches and len(identities) == 1:
+            matches = relevant
+        if len({v['node'] or v['source'] for v in matches}) > 1:
+            matches = []
+        nodes = []
+        for identity in sorted({v['node'] or v['source'] for v in matches}):
+            original = next(v for v in matches if (v['node'] or v['source']) == identity)
+            parameters = [static_value(v) for v in module.get('parameter_files', [])]
+            parameters.append(static_value(module.get('parameters', {})))
+            cli_overrides = any(v in ('-p', '--param', '-r', '--remap', '--params-file') for v in module.get('arguments', []))
+            nodes.append({'package': module['package'], 'executable': module.get('executable'),
+                          'name': module.get('node_name') or module['id'], '_source_node': original['node'],
+                          '_source_file': original['source'], 'namespace': module.get('namespace', ''),
+                          'parameters': parameters, 'remappings': module.get('remappings', []),
+                          'unknown': ['parameters'] if cli_overrides else []})
+        if not nodes:
+            notices.append('无法从源码唯一确认启动模块对应的节点，请核对入口与源码声明')
+        declarations = matches if nodes else relevant
+        selected = {'id': module['name'], 'kind': 'module', 'nodes': nodes}
+    elif module and module.get('kind') == 'process':
+        notices.append('独立程序的通信配置需要人工确认，不能从程序参数推断 ROS 名称')
+        selected = {'id': module['name'], 'kind': 'module', 'nodes': []}
     endpoints = []
     for original in declarations:
         variants = [None]
-        if selected and selected['kind'] == 'launch':
+        if selected and selected['kind'] in ('launch', 'module'):
             matches = [node for node in selected['nodes'] if node.get('package') == original['package'] and
-                       (node.get('name') == original['node'] or node.get('executable') in (Path(original['source']).stem, original['node']))]
+                       (node.get('_source_file') == original['source'] or node.get('_source_node', node.get('name')) == original['node'] or
+                        node.get('executable') in (Path(original['source']).stem, original['node']))]
             variants = matches or [None]
         for index, node in enumerate(variants):
             item = {**original, 'id': original['id'] + ':' + str(index), 'profile': profile, 'status': 'resolved', 'reason': '', 'configuration': []}
@@ -463,11 +529,20 @@ def scan_communications(root, mode='source', profile='', arguments=None):
             node_name = item['node']
             params, unknown = {}, []
             def apply_config(path):
+                path = str(Path(path))
+                if path not in configs and module:
+                    try:
+                        file = Path(path)
+                        if file.is_file() and file.stat().st_size <= 1048576:
+                            configs[path] = _yaml_parameters(file.read_text())
+                    except (OSError, ValueError, UnicodeError, yaml.YAMLError):
+                        pass
                 for target, values in configs.get(str(Path(path)), []):
                     full_node = '/' + '/'.join(p for p in (namespace.strip('/'), node_name) if p)
                     if target in ('/**', '/' + node_name, full_node) and (node_name or target == '/**'):
                         params.update(values)
-                        item['configuration'].append(str(Path(path).relative_to(root)))
+                        source = Path(path)
+                        item['configuration'].append(str(source.relative_to(root)) if source.is_relative_to(root) else str(source))
             if selected and selected['kind'] == 'parameters':
                 apply_config(root / selected['id'])
             if node:
@@ -479,7 +554,7 @@ def scan_communications(root, mode='source', profile='', arguments=None):
                 unknown.extend(k for k in node['unknown'] if k in ('name', 'namespace', 'parameters', 'remappings', 'condition', 'group namespace / remapping', 'global namespace / remapping'))
                 for entry in node.get('parameters') or []:
                     if isinstance(entry, str):
-                        if entry in configs:
+                        if entry in configs or module and Path(entry).is_file():
                             apply_config(entry)
                         else:
                             unknown.append('参数文件 ' + entry)
@@ -488,8 +563,8 @@ def scan_communications(root, mode='source', profile='', arguments=None):
                     else:
                         unknown.append('parameters')
                 item['configuration'].append(selected['id'])
-            elif selected and selected['kind'] == 'launch':
-                unknown.append('此启动文件未静态定位到对应节点')
+            elif selected and selected['kind'] in ('launch', 'module'):
+                unknown.append('此启动配置未静态定位到对应节点')
             if item['parameter'] in params:
                 name = params[item['parameter']]
             parameter_key = 'node:' + (node_name or item['package']) + ':' + item['parameter']

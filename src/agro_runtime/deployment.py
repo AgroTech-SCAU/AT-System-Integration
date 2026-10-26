@@ -58,6 +58,8 @@ class Deployment:
         if value['kind']=='process' and (not value.get('argv') or any(not isinstance(v,str) or '\0' in v for v in value['argv'])):
             fail('$.argv','argv_required','请逐项填写程序及参数')
         if not isinstance(value.get('parameters',{}),dict): fail('$.parameters','invalid_module','参数应为对象')
+        if not isinstance(value.get('launch_arguments',{}),dict):
+            fail('$.launch_arguments','invalid_module','launch 启动参数应为对象')
         for endpoint in value.get('provides',[]):
             if endpoint.get('kind') not in ('action','service','topic') or not re.fullmatch(r'/[\w/]+',endpoint.get('name','')):
                 fail('$.provides','invalid_endpoint','请填写模块提供的通信接口')
