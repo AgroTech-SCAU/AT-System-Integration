@@ -8,16 +8,17 @@ import {AnimatePresence, motion} from 'motion/react'
 import {springs, fade} from '../motion'
 import {SpatialPanel} from '../components/SpatialPanel'
 import {useLocale} from '../locale'
-import {useCallback,useEffect,useMemo,useRef,useState,type DragEvent,type ReactNode} from 'react'
+import {useCallback,useEffect,useMemo,useRef,useState,type CSSProperties,type DragEvent,type ReactNode} from 'react'
 import HsmCanvas,{automaticHsmLayout} from './HsmCanvas'
 import type {RosTask} from './RosTaskLibrary'
 import {ApiError} from '../api'
 import type {Json,PageProps} from './shared'
 import type {Workspace} from '../types'
-import {activeStatus,blankMachine,canReparent,descendants,diagnoseMachine,eventBranches,fingerprint,isFallback,isIdentifier,normalizeInitials,snapshotOf,statePath,transitionPlan,type Diagnostic,type MachineSnapshot,type MachineState,type SavedMachine,type Scalar,type Transition} from './hsm-model'
+import {activeStatus,blankMachine,canReparent,descendants,diagnoseMachine,eventBranches,fingerprint,isFallback,isIdentifier,normalizeInitials,reorderState,snapshotOf,statePath,transitionPlan,type Diagnostic,type MachineSnapshot,type MachineState,type SavedMachine,type Scalar,type Transition} from './hsm-model'
 import './hsm-workbench.css'
 
 type Phase='entry'|'do'|'exit'
+type StateDrop={target:string;placement:'before'|'inside'|'after';parent:string}
 type CheckIssue=Diagnostic&{taskId?:string;path?:string;phase?:Phase}
 type CheckResult={key:string;status:'checking'|'passed'|'failed';message:string;issues:CheckIssue[]}
 export type OpenStateTask={kind:'ros'|'tree';reference?:string;stateId:string;stateLabel:string;phase:Phase;machineId?:string}
@@ -55,7 +56,8 @@ export default function StateMachineEditor({client,onNavigate,onOpenRos,onOpenTa
  const [outlineOpen,setOutlineOpen]=useState(true),[inspectorOpen,setInspectorOpen]=useState(false)
  const [sectionOpen,setSectionOpen]=useState<Record<string,boolean>>({})
  const sectionProps=(name:string)=>({open:!!sectionOpen[selected+':'+name],onOpenChange:(open:boolean)=>setSectionOpen(previous=>({...previous,[selected+':'+name]:open}))})
- const [collapsed,setCollapsed]=useState<Set<string>>(new Set(['workflow'])),[filter,setFilter]=useState(''),[dragOver,setDragOver]=useState('')
+ const [collapsed,setCollapsed]=useState<Set<string>>(new Set(['workflow'])),[filter,setFilter]=useState(''),[dropTarget,setDropTarget]=useState<StateDrop|null>(null)
+ const draggedState=useRef('')
  const [bottom,setBottom]=useState<'runtime'|'variables'|'diagnostics'|null>(null),[session,setSession]=useState<Json|null>(null),[statusConnected,setStatusConnected]=useState(true)
  const [notice,setNotice]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState<'save'|'run'|'delete'|'copy'|'check'|null>(null),busyRef=useRef(false)
  const [variableName,setVariableName]=useState(''),[variableType,setVariableType]=useState('boolean'),[addMenu,setAddMenu]=useState(false),[phaseMenu,setPhaseMenu]=useState<Phase|null>(null)
@@ -68,6 +70,7 @@ export default function StateMachineEditor({client,onNavigate,onOpenRos,onOpenTa
  const state=document.states.find(s=>s.id===selected),transition=edgeIndex===null?undefined:document.transitions[edgeIndex]
  const currentRunning=activeStatus(session?.status)&&session?.machine_id===current?.id
  const children=(id:string)=>document.states.filter(s=>s.parent===id)
+ const selectedSiblings=state?.parent?children(state.parent):[],selectedOrder=selectedSiblings.findIndex(item=>item.id===selected)
  const references=useMemo(()=>new Set([...rosTasks.map(task=>'ros:'+task.id),...definitions.map(item=>String(item.id))]),[rosTasks,definitions])
  const diagnostics=useMemo<Diagnostic[]>(()=>[...diagnoseMachine(snapshot,references,t),...Object.keys(invalidFields).filter(key=>invalidFields[key]&&(key.startsWith('variable:')?key.slice(9) in document.variables:key==='guard:'+edgeIndex)).map(key=>({message:key.startsWith('variable:')?t("变量 {0} 的格式需要修正", {0: key.slice(9)}):t("转换条件值的格式需要修正")}))],[snapshot,references,invalidFields,edgeIndex])
  const fieldValidity=(key:string,valid:boolean)=>setInvalidFields(previous=>Boolean(previous[key])===!valid?previous:{...previous,[key]:!valid})
@@ -87,8 +90,10 @@ export default function StateMachineEditor({client,onNavigate,onOpenRos,onOpenTa
  const undo=useCallback((redo=false)=>{
   const h=history.current,source=redo?h.future:h.past;if(!source.length)return
   const next=source.pop()!;if(redo)h.past.push(snapshotRef.current);else h.future.push(snapshotRef.current)
+  const previousParent=snapshotRef.current.document.states.find(item=>item.id===selected)?.parent,nextParent=next.document.states.find(item=>item.id===selected)?.parent
+  if(previousParent!==nextParent)setScope(nextParent||next.document.initial)
   h.key='';setEditor(next);setEdgeIndex(null);setNotice('');setSaveFailedAt('');setHistoryCount({past:h.past.length,future:h.future.length})
- },[setEditor])
+ },[setEditor,selected])
  function changeState(id:string,updates:Partial<MachineState>){edit(draft=>{draft.document.states=draft.document.states.map(s=>s.id===id?{...s,...updates}:s)},'state:'+id+':'+Object.keys(updates).join(','))}
  function changeTransition(updates:Partial<Transition>){if(edgeIndex===null)return;edit(draft=>{draft.document.transitions[edgeIndex]={...draft.document.transitions[edgeIndex],...updates}},'edge:'+edgeIndex+':'+Object.keys(updates).join(','))}
  function moveBranch(index:number,direction:-1|1){
@@ -128,10 +133,50 @@ export default function StateMachineEditor({client,onNavigate,onOpenRos,onOpenTa
  }
  function reparent(child:string,parent:string){
   if(!canReparent(document,child,parent)){setNotice(t("无法移动到自身或下级状态"));return}
+  if(document.states.find(item=>item.id===child)?.parent===parent)return
   edit(draft=>{freezePositions(draft);draft.document=normalizeInitials({...draft.document,states:draft.document.states.map(s=>s.id===child?{...s,parent}:s)});delete draft.layout.positions[child]})
   setScope(parent);setSelected(child);setEdgeIndex(null)
  }
- function dropState(event:DragEvent,parent:string){event.preventDefault();event.stopPropagation();setDragOver('');const child=event.dataTransfer.getData('application/x-hsm-state');if(child)reparent(child,parent)}
+ function endStateDrag(){draggedState.current='';setDropTarget(null)}
+ function stateDrop(event:DragEvent<HTMLDivElement>,target:string,child=draggedState.current):StateDrop|null{
+  const moving=document.states.find(item=>item.id===child),item=document.states.find(item=>item.id===target)
+  if(!moving||!item||child===target||child===document.initial)return null
+  const bounds=event.currentTarget.getBoundingClientRect(),offset=(event.clientY-bounds.top)/bounds.height
+  const placement=!item.parent?'inside':offset<.25?'before':offset>.75?'after':'inside',parent=placement==='inside'?target:item.parent
+  if(!parent||!canReparent(document,child,parent)||placement==='inside'&&moving.parent===parent)return null
+  return {target,placement,parent}
+ }
+ function overState(event:DragEvent<HTMLDivElement>,id:string){
+  if(!event.dataTransfer.types.includes('application/x-hsm-state'))return
+  event.preventDefault();event.stopPropagation()
+  const next=stateDrop(event,id);event.dataTransfer.dropEffect=next?'move':'none'
+  setDropTarget(previous=>previous?.target===next?.target&&previous?.placement===next?.placement?previous:next)
+ }
+ function leaveState(event:DragEvent<HTMLDivElement>,id:string){
+  const related=event.relatedTarget
+  if(related instanceof Node&&event.currentTarget.contains(related))return
+  const bounds=event.currentTarget.getBoundingClientRect()
+  if(event.clientX>=bounds.left&&event.clientX<bounds.right&&event.clientY>=bounds.top&&event.clientY<bounds.bottom)return
+  setDropTarget(previous=>previous?.target===id?null:previous)
+ }
+ function dropState(event:DragEvent<HTMLDivElement>,id:string){
+  event.preventDefault();event.stopPropagation()
+  const child=event.dataTransfer.getData('application/x-hsm-state'),target=stateDrop(event,id,child)
+  endStateDrag();if(!target)return
+  const changedParent=document.states.find(item=>item.id===child)?.parent!==target.parent
+  edit(draft=>{
+   if(changedParent){freezePositions(draft);draft.document=normalizeInitials({...draft.document,states:draft.document.states.map(item=>item.id===child?{...item,parent:target.parent}:item)});delete draft.layout.positions[child]}
+   if(target.placement!=='inside')draft.document.states=reorderState(draft.document.states,child,target.target,target.placement)
+  })
+  setCollapsed(previous=>{const next=new Set(previous);for(const parent of statePath(snapshotRef.current.document,target.parent))next.delete(parent);return next})
+  setSelected(child);setEdgeIndex(null);if(changedParent)setScope(target.parent)
+ }
+ function moveState(id:string,direction:-1|1){
+  const item=document.states.find(item=>item.id===id);if(!item?.parent)return
+  const siblings=children(item.parent),index=siblings.findIndex(item=>item.id===id),other=siblings[index+direction]
+  if(!other)return
+  edit(draft=>{draft.document.states=reorderState(draft.document.states,id,other.id,direction===-1?'before':'after')});setSelected(id);setEdgeIndex(null)
+ }
  function bindPhase(stateId:string,phase:Phase,reference:string){changeState(stateId,{[phase]:reference||undefined});setPhaseMenu(null);setPhaseQuery('')}
  function openTask(phase:Phase,kind?:'ros'|'tree',stateId=selected){
   const item=document.states.find(s=>s.id===stateId);if(!item)return
@@ -297,10 +342,11 @@ export default function StateMachineEditor({client,onNavigate,onOpenRos,onOpenTa
    const target=event.target as HTMLElement,input=target.closest('input,textarea,select,[contenteditable="true"]')
    if((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==='s'){event.preventDefault();void save();return}
    if(input)return
+   if(event.altKey&&!event.ctrlKey&&!event.metaKey&&edgeIndex===null&&(event.key==='ArrowUp'||event.key==='ArrowDown')&&editor.current.contains(target)){event.preventDefault();moveState(selected,event.key==='ArrowUp'?-1:1);return}
    if((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==='z'){event.preventDefault();undo(event.shiftKey);return}
    if((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==='y'){event.preventDefault();undo(true);return}
    if(event.key==='Delete'||event.key==='Backspace'){event.preventDefault();removeSelection()}
-   if(event.key==='Escape'){setAddMenu(false);setPhaseMenu(null);setEdgeIndex(null)}
+   if(event.key==='Escape'){setAddMenu(false);setPhaseMenu(null);setEdgeIndex(null);endStateDrag()}
    if(event.key==='F2'){setInspectorOpen(true);requestAnimationFrame(()=>{nameInput.current?.focus();nameInput.current?.select()})}
   };window.addEventListener('keydown',keydown);return()=>window.removeEventListener('keydown',keydown)
  })
@@ -343,9 +389,10 @@ export default function StateMachineEditor({client,onNavigate,onOpenRos,onOpenTa
   const item=document.states.find(s=>s.id===id);if(!item||level>48)return null
   const sub=children(id),matches=!filter||[...descendants(document,id)].some(key=>document.states.find(s=>s.id===key)?.label.toLowerCase().includes(filter.toLowerCase())),closed=collapsed.has(id)&&!filter
   if(!matches)return null
-  return <div key={id} className="wb-outline-group"><div className={'wb-outline-row'+(selected===id&&edgeIndex===null?' is-current':'')+(dragOver===id?' is-drop-target':'')} style={{paddingLeft:8+level*14}} onDragOver={event=>{if(event.dataTransfer.types.includes('application/x-hsm-state')){event.preventDefault();event.stopPropagation()}}} onDragEnter={event=>{event.stopPropagation();if(event.dataTransfer.types.includes('application/x-hsm-state'))setDragOver(id)}} onDragLeave={()=>setDragOver('')} onDrop={event=>dropState(event,id)}>
+  const drop=dropTarget?.target===id?dropTarget:null
+  return <div key={id} className="wb-outline-group"><div className={'wb-outline-row'+(selected===id&&edgeIndex===null?' is-current':'')+(drop?' is-drop-'+drop.placement:'')} style={{paddingLeft:8+level*14,'--wb-outline-indent':`${8+level*14}px`} as CSSProperties} onDragOver={event=>overState(event,id)} onDragEnter={event=>overState(event,id)} onDragLeave={event=>leaveState(event,id)} onDrop={event=>dropState(event,id)}>
    <button className={'wb-disclosure'+(closed?' is-closed':'')} aria-label={(closed?t("展开 "):t("折叠 "))+item.label} disabled={!sub.length} onClick={()=>setCollapsed(previous=>{const next=new Set(previous);next.has(id)?next.delete(id):next.add(id);return next})}>{tinyIcon('chevron')}</button>
-   <button className="wb-outline-select" draggable={id!==document.initial} onDragStart={event=>{event.dataTransfer.setData('application/x-hsm-state',id);event.dataTransfer.effectAllowed='move'}} onClick={()=>selectState(id,true)} onDoubleClick={()=>openScope(id)} title={item.label}>{tinyIcon(sub.length?'branch':'state')}<span>{item.label}</span>{viewedPath.includes(id)&&<i className="wb-live-dot"/>}{document.states.find(s=>s.id===item.parent)?.initial===id&&<span className="wb-initial-badge" title={t("初始子状态")}>{t("初始")}</span>}</button>
+   <button className="wb-outline-select" draggable={id!==document.initial} onDragStart={event=>{draggedState.current=id;setDropTarget(null);event.dataTransfer.setData('application/x-hsm-state',id);event.dataTransfer.effectAllowed='move'}} onDragEnd={endStateDrag} onClick={()=>selectState(id,true)} onDoubleClick={()=>openScope(id)} title={item.label}>{tinyIcon(sub.length?'branch':'state')}<span>{item.label}</span>{viewedPath.includes(id)&&<i className="wb-live-dot"/>}{drop?.placement==='inside'?<span className="wb-drop-label">{t('设为子状态')}</span>:document.states.find(s=>s.id===item.parent)?.initial===id&&<span className="wb-initial-badge" title={t("初始子状态")}>{t("初始")}</span>}</button>
   </div><AnimatePresence initial={false}>{!closed&&<motion.div initial={{height:0,opacity:0}} animate={{height:'auto',opacity:1}} exit={{height:0,opacity:0}} transition={{...springs.spatial,opacity:fade}} style={{overflow:'hidden'}}>{sub.map(child=>lineage(child.id,level+1))}</motion.div>}</AnimatePresence></div>
  }
  const behaviorPorts=(reference:string|undefined)=>{
@@ -402,7 +449,7 @@ export default function StateMachineEditor({client,onNavigate,onOpenRos,onOpenTa
    <div className="wb-toolbar-group wb-toolbar-end"><span className={'wb-save-state'+(saveFailedAt?' is-error':'')} aria-live="polite">{busy==='save'?t("保存中"):saveFailedAt?t("尚未保存"):dirty?(currentRunning?t("草稿待保存"):t("有未保存修改")):current?t("已保存"):t('尚未保存')}</span><button className="wb-save-button" disabled={!!busy||!loaded||!dirty&&!!current} onClick={()=>void save()}>{t("保存")}</button><button className="wb-save-button" disabled={!!busy||!loaded} onClick={()=>void check()}>{t("校验")}</button><button className="wb-run-button" title={currentRunning?t("取消活动行为并等待停止确认，不执行状态退出任务"):undefined} aria-label={currentRunning?t("取消运行"):t("运行状态机")} disabled={!!busy||!loaded||(!currentRunning&&(!current||dirty||diagnostics.length>0||activeStatus(session?.status)))} onClick={()=>void execute(currentRunning?'stop':'start')}>{tinyIcon(currentRunning?'stop':'play')}<span>{currentRunning?t("取消运行"):t("运行")}</span></button><button className="wb-icon-button" title={t("显示检查器")} aria-label={t("显示检查器")} aria-pressed={inspectorOpen} onClick={()=>setInspectorOpen(!inspectorOpen)}>{tinyIcon('inspect')}</button></div>
   </header>
   <div className="wb-body">
-   <AnimatePresence initial={false}>{hasOutline&&<SpatialPanel width="var(--state-outline-width)" className="wb-navigator" aria-label={t("状态目录")}><div className="wb-pane-title"><span>{t("状态目录")}</span><span>{document.states.filter(item=>item.parent).length}</span></div><div className="wb-project-name"><input aria-label={t("状态机名称")} value={title} maxLength={80} onChange={event=>edit(draft=>{draft.title=event.target.value},'title')}/></div><input className="wb-outline-search" type="search" aria-label={t("筛选状态")} placeholder={t("查找状态")} value={filter} onChange={event=>setFilter(event.target.value)}/><div className="wb-state-tree">{lineage(document.initial)}</div><div className="wb-outline-footer"><button onClick={()=>addState()}>{tinyIcon('plus')}{t("添加状态")}</button><button className="wb-icon-button" aria-label={t("更多工程操作")} onClick={()=>setAddMenu(!addMenu)}>•••</button>{addMenu&&<div className="wb-outline-menu"><button onClick={()=>{addState(selected);setAddMenu(false)}}>{t("在选中状态内添加")}</button><button onClick={()=>{setBottom('variables');setAddMenu(false)}}>{t("编辑状态变量")}</button><button className="wb-danger" disabled={!current||currentRunning||!!busy} onClick={()=>{setAddMenu(false);void deleteMachine()}}>{t("删除状态机")}</button></div>}</div></SpatialPanel>}</AnimatePresence>
+   <AnimatePresence initial={false}>{hasOutline&&<SpatialPanel width="var(--state-outline-width)" className="wb-navigator" aria-label={t("状态目录")}><div className="wb-pane-title"><span>{t("状态目录")}</span><span>{document.states.filter(item=>item.parent).length}</span></div><div className="wb-project-name"><input aria-label={t("状态机名称")} value={title} maxLength={80} onChange={event=>edit(draft=>{draft.title=event.target.value},'title')}/></div><input className="wb-outline-search" type="search" aria-label={t("筛选状态")} placeholder={t("查找状态")} value={filter} onChange={event=>setFilter(event.target.value)}/><p className="wb-outline-hint">{t('拖动边缘排序，中间设为子状态')}</p><div className="wb-state-tree" onDragEnd={endStateDrag}>{lineage(document.initial)}</div><div className="wb-outline-footer"><button onClick={()=>addState()}>{tinyIcon('plus')}{t("添加状态")}</button><div className="wb-outline-order"><button className="wb-icon-button wb-order-up" aria-label={t('上移状态「{0}」',{0:state?.label||''})} title={t('上移')+' · Alt ↑'} disabled={!!busy||edgeIndex!==null||selectedOrder<=0} onClick={()=>moveState(selected,-1)}>{tinyIcon('chevron')}</button><button className="wb-icon-button wb-order-down" aria-label={t('下移状态「{0}」',{0:state?.label||''})} title={t('下移')+' · Alt ↓'} disabled={!!busy||edgeIndex!==null||selectedOrder<0||selectedOrder>=selectedSiblings.length-1} onClick={()=>moveState(selected,1)}>{tinyIcon('chevron')}</button></div><button className="wb-icon-button" aria-label={t("更多工程操作")} onClick={()=>setAddMenu(!addMenu)}>•••</button>{addMenu&&<div className="wb-outline-menu"><button onClick={()=>{addState(selected);setAddMenu(false)}}>{t("在选中状态内添加")}</button><button onClick={()=>{setBottom('variables');setAddMenu(false)}}>{t("编辑状态变量")}</button><button className="wb-danger" disabled={!current||currentRunning||!!busy} onClick={()=>{setAddMenu(false);void deleteMachine()}}>{t("删除状态机")}</button></div>}</div></SpatialPanel>}</AnimatePresence>
    <main className={"wb-main"+(historyEvent?" is-history":"")}><div className="wb-document-bar"><nav aria-label={t("画布层级")} className="wb-breadcrumb">{ancestors.map((item,index)=><span key={item.id}>{index>0&&tinyIcon('chevron')}<button aria-current={index===ancestors.length-1?'location':undefined} onClick={()=>openScope(item.id)}>{item.label}</button></span>)}</nav><button className="wb-icon-button" title={t("添加状态")} aria-label={t("添加状态")} onClick={()=>addState()}>{tinyIcon('plus')}</button></div>
     {historyEvent&&<div className="wb-history-banner"><span>{t('正在查看历史转换')} · {historyEvent.event} · {stateNames([historyEvent.source,historyEvent.target].filter(Boolean))}</span><button onClick={()=>setHistoryEvent(null)}>{t('返回实时状态')}</button></div>}
     <HsmCanvas states={document.states} transitions={document.transitions} layout={layout} selected={selected} scope={scope} reveal={reveal} selectedTransition={edgeIndex} onSelect={id=>selectState(id)} onSelectTransition={selectEdge} onEnter={openScope} onReparent={reparent} onCreateIn={(parent,x,y)=>addState(parent,x,y)} onDelete={id=>removeSelection(id,null)} onDeleteTransition={index=>removeSelection(selected,index)} onMakeInitial={id=>{const child=document.states.find(item=>item.id===id);if(child?.parent)changeState(child.parent,{initial:id})}} onMove={(id,x,y)=>edit(draft=>{draft.layout.positions[id]=[x,y]})} onReset={(all,collapsed)=>edit(draft=>{draft.layout.positions=arrangeHsmPositions(draft.document.states,draft.document.transitions,draft.layout.positions,all?draft.document.initial:scope,!!all,collapsed)})} onConnect={connect} onCreate={(x,y)=>addState(scope,x,y)} onRename={(id,label)=>changeState(id,{label})} onOpenPhase={(id,phase)=>{const item=document.states.find(s=>s.id===id);if(item?.[phase])openTask(phase,undefined,id);else{setSelected(id);setEdgeIndex(null);setInspectorOpen(true);setSectionOpen(previous=>({...previous,[id+':behaviors']:true}));setPhaseMenu(phase)}}} activePath={viewedPath} viewingHistory={!!historyEvent} transitionPreview={preview||historyPlan} taskLabels={taskLabels}/>

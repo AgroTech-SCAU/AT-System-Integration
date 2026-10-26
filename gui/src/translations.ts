@@ -1,4 +1,8 @@
 export const english: Record<string, string> = {
+  "拖动边缘排序，中间设为子状态": "Drag to an edge to reorder, or the middle to nest",
+  "设为子状态": "Nest here",
+  "上移状态「{0}」": "Move state {0} up",
+  "下移状态「{0}」": "Move state {0} down",
   " · 离线缓存": " · offline cache",
   "待配置": "Not configured",
   "可发送的事件": "Available events",

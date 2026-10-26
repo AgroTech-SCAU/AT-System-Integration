@@ -52,6 +52,17 @@ export function canReparent(document:MachineDocument,child:string,parent:string)
  return child!==document.initial&&document.states.some(s=>s.id===parent)&&!descendants(document,child).has(parent)
 }
 
+export function reorderState(states:MachineState[],id:string,targetId:string,placement:'before'|'after'):MachineState[]{
+ const moving=states.find(state=>state.id===id),target=states.find(state=>state.id===targetId)
+ if(!moving||!target||id===targetId||moving.parent!==target.parent)return states
+ const siblings=states.filter(state=>state.parent===moving.parent&&state.id!==id)
+ const targetIndex=siblings.findIndex(state=>state.id===targetId)
+ siblings.splice(targetIndex+(placement==='after'?1:0),0,moving)
+ let index=0
+ const reordered=states.map(state=>state.parent===moving.parent?siblings[index++]:state)
+ return reordered.every((state,index)=>state===states[index])?states:reordered
+}
+
 export function normalizeInitials(document:MachineDocument):MachineDocument{
  return {...document,states:document.states.map(state=>{
   const children=document.states.filter(child=>child.parent===state.id)
