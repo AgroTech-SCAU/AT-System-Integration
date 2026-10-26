@@ -165,11 +165,19 @@ class DataContext:
         step=finite(p.get('max_step_m',.01),'单步距离');limit=finite(p.get('max_travel_m',.25),'总距离')
         if not 0<tolerance<standoff or standoff<p.get('min_standoff_m',.05) or min(step,limit)<=0:raise ValueError('距离约束不合法')
         direction=matrix_quaternion(context['orientation'])[:,2]
-        delta=point-direction*standoff-position;distance=float(np.linalg.norm(delta));done=distance<=tolerance
-        if not done and context['steps']>=p.get('max_steps',30):raise ValueError('已达到最大步数，停止继续步进')
-        length=0 if done else min(distance,step)
+        delta=point-direction*standoff-position;distance=float(np.linalg.norm(delta));within=distance<=tolerance
+        confirmations=p.get('convergence_samples',1);max_cycles=p.get('max_cycles',100)
+        if type(confirmations) is not int or confirmations<1 or type(max_cycles) is not int or max_cycles<confirmations:raise ValueError('收敛确认次数与观测循环上限不合法')
+        sample_stamp=stamp_ns({'stamp':target['stamp']})
+        if sample_stamp<=context.get('last_sample_ns',0):raise ValueError('观测时间未前进，不能重复使用同一帧确认收敛')
+        cycles=context.get('cycles',0)+1
+        if cycles>max_cycles:raise ValueError('已达到观测循环上限，停止继续伺服')
+        stable=context.get('stable_samples',0)+1 if within else 0
+        done=stable>=confirmations
+        if not within and context['steps']>=p.get('max_steps',30):raise ValueError('已达到最大步数，停止继续步进')
+        length=0 if within else min(distance,step)
         if context['travel']+length>limit:raise ValueError('下一步超过累计运动距离上限')
         next_position=position+(delta/distance*length if distance else 0)
-        context.update(target=target['point'],label=target['label'],travel=context['travel']+length,steps=context['steps']+(0 if done else 1))
+        context.update(target=target['point'],label=target['label'],travel=context['travel']+length,steps=context['steps']+(0 if within else 1),last_sample_ns=sample_stamp,cycles=cycles,stable_samples=stable)
         goal={'header':{'frame_id':target['frame_id'],'stamp':{'sec':0,'nanosec':0}},'pose':{'position':dict(zip(('x','y','z'),map(float,next_position))),'orientation':context['orientation']}}
-        return {'goal':goal,'tracking':context,'done':done,'remaining_distance':distance,'steps':context['steps']}
+        return {'goal':goal,'tracking':context,'done':done,'next_step':'complete' if done else 'confirm' if within else 'move','remaining_distance':distance,'steps':context['steps']}
