@@ -47,6 +47,8 @@ class TypeDescriptor(ContractModel):
     frame_id: QualifiedName | None = None
     clock_domain: QualifiedName | None = None
     max_age_s: Positive | None = None
+    frame_path: StrictStr | None = None
+    stamp_path: StrictStr | None = None
 
     @model_validator(mode='after')
     def check_type(self):
@@ -66,8 +68,14 @@ class TypeDescriptor(ContractModel):
             for field in ('frame_id', 'clock_domain', 'max_age_s'):
                 if getattr(self, field) is None:
                     invalid((field,), 'required_field', '位姿描述必须声明坐标系、时间域和有效期')
-        elif any(getattr(self, f) is not None for f in ('frame_id', 'clock_domain', 'max_age_s')):
-            invalid(('frame_id',), 'invalid_type', '位姿约束只能用于 stamped_pose')
+        for name in ('frame_path', 'stamp_path'):
+            path = getattr(self, name)
+            if path is not None and (self.type != 'json' or not __import__('re').fullmatch(r'[A-Za-z_]\w*(?:\.(?:[A-Za-z_]\w*|[0-9]+))*', path)):
+                invalid((name,), 'invalid_semantic_path', '字段路径需要对应 JSON 消息中的字段')
+        if self.frame_path and not self.frame_id:
+            invalid(('frame_id',), 'required_field', '坐标系字段需要声明期望坐标系')
+        if self.stamp_path and (self.max_age_s is None or self.clock_domain not in ('ros', 'system')):
+            invalid(('stamp_path',), 'invalid_clock', '采样时间需要有效期和明确的 ros 或 system 时间域')
         if self.choices is not None:
             if not self.choices:
                 invalid(('choices',), 'invalid_choices', '可选值不能为空')
@@ -107,6 +115,13 @@ def scalar_error(spec, value, *, check_choices=True):
             validate_schema_value(value, spec.extensions['ros_shape'], '$.value')
         except ContractValidationError:
             return 'ros_shape_mismatch', '数据不符合声明的 ROS 字段结构或范围'
+    if spec.frame_path:
+        from .data_contracts import field_at_path
+        try:
+            if field_at_path(value, spec.frame_path) != spec.frame_id:
+                return 'frame_mismatch', '数据中的坐标系与端口声明不同'
+        except (KeyError, IndexError, TypeError, ValueError):
+            return 'missing_frame', '数据中缺少声明的坐标系字段'
     return None, None
 
 

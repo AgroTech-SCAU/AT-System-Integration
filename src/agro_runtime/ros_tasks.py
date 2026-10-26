@@ -20,6 +20,12 @@ KINDS = {'service', 'action', 'publish_once', 'publish_periodic', 'subscribe_wai
 WAIT_MODES = {'response', 'result', 'message', 'sent', 'until_stopped'}
 
 
+def execution_policy(task):
+    readonly = task.get('kind') == 'subscribe_wait' or task.get('kind') == 'compute' and task.get('operation') in {'wait_stationary','transform_targets','bounded_pose_step','copy_fields'}
+    defaults = {'readonly':readonly, 'repeatable':readonly, 'cancelable':readonly, 'concurrent':readonly}
+    return {**defaults, **task.get('execution_policy', {})}
+
+
 def validate_task(raw):
     if not isinstance(raw, dict):
         fail('$.task', 'invalid_task', 'ROS 2 任务必须是对象')
@@ -35,6 +41,13 @@ def validate_task(raw):
     labels = data.get('resource_labels', {})
     if not isinstance(labels, dict) or any(not isinstance(key, str) or not isinstance(value, str) or not 1 <= len(value.strip()) <= 80 for key, value in labels.items()):
         fail('$.resource_labels', 'invalid_resources', '请填写设备或互斥对象名称')
+    if not isinstance(data.get('path_fields',[]),list) or any(not isinstance(p,str) or not re.fullmatch(r'payload(?:\.(?:[A-Za-z_]\w*|[0-9]+))+',p) for p in data.get('path_fields',[])):
+        fail('$.path_fields','invalid_paths','任务文件路径需要明确指向 payload 中的字段')
+    policy = data.get('execution_policy', {})
+    if not isinstance(policy, dict) or set(policy) - {'readonly','repeatable','cancelable','concurrent'} or any(type(v) is not bool for v in policy.values()):
+        fail('$.execution_policy', 'invalid_policy', '执行语义需要明确的布尔声明')
+    if data.get('kind') in {'action','publish_once','publish_periodic'} and policy.get('readonly'):
+        fail('$.execution_policy', 'invalid_policy', '发送目标或消息的任务不能声明为只读')
     kind = data.get('kind')
     if not isinstance(kind, str) or kind not in KINDS:
         fail('$.kind', 'invalid_kind', '选择话题发布、话题订阅、服务或动作')
@@ -53,8 +66,10 @@ def validate_task(raw):
     data['ros_type'] = ros_type
     if kind == 'compute':
         from .data_operations import OPERATIONS
-        if data.get('operation') not in OPERATIONS:
+        if data.get('operation') not in OPERATIONS and data.get('operation') != 'extension':
             fail('$.operation','invalid_operation','请选择已支持的数据处理操作')
+        if data.get('operation')=='extension' and not re.fullmatch(r'[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*:[A-Za-z_]\w*',data.get('compute_entrypoint','')):
+            fail('$.compute_entrypoint','invalid_entrypoint','计算扩展入口使用 module:function')
     if data.get('execution_workspace_id') and data['execution_workspace_id'] not in data.get('workspace_ids',[]):
         fail('$.execution_workspace_id','invalid_provider','执行子系统需要包含在任务选择的工作区内')
     if not isinstance(data.get('module_ids',[]),list) or any(not isinstance(v,str) for v in data.get('module_ids',[])):
@@ -541,7 +556,8 @@ class RosTasks:
     def verify_support(self, data):
         if data.get('kind')=='compute':
             self.validate_structure(data)
-            self.environments.snapshot(data)
+            config=self.environments.snapshot(data)
+            self.environments.call(config,{'op':'compute_probe','operation':data.get('operation'),'entrypoint':data.get('compute_entrypoint') if data.get('operation')=='extension' else ''})
             return
         from .ros_interfaces import InterfaceLibrary, PRIMITIVES, installed_schema
         identity = data['id']

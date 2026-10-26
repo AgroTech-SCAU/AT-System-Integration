@@ -38,8 +38,6 @@ def stamp_ns(header):
 class DataContext:
     """Continuous TF history is retained across workflow steps in one isolated worker."""
     def __init__(self, domain):
-        # Resolve the numerical dependency before any hardware modules are started
-        import numpy
         import rclpy
         from rclpy.executors import MultiThreadedExecutor
         from tf2_ros import Buffer, TransformListener

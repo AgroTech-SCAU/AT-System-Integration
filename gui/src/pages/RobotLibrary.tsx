@@ -1,3 +1,4 @@
+import ProfileResources from './ProfileResources'
 import {requestNavigation, reportError} from '../components/StudioDialogs'
 import {AnimatePresence, motion} from 'motion/react'
 import {springs, fade} from '../motion'
@@ -188,6 +189,7 @@ export default function RobotLibrary({client, directory, onRefresh, onReconnect,
                         onClick={event => setMenu(menu?.robot.id === robot.id ? null : {robot, anchor: event.currentTarget})}><Icon name="more"/></button>
                 </motion.li>
             })}{!filtered.length && <li className="robot-manager-empty"><Icon name={query ? 'search' : 'association'}/><strong>{query ? t("没有找到机器人") : t("还没有机器人")}</strong><p>{query ? t("试试其他名称或命名空间") : t("新建一个机器人，或导入已有工程")}</p>{!query && <button disabled={locked} onClick={() => changeSection('create')}>{t("新建机器人")}<Icon name="plus"/></button>}</li>}</ul>
+            {client&&directory?.selected_id&&systems.some(robot=>robot.id===directory.selected_id&&robot.storage_path)&&<ProfileResources client={client} robotId={directory.selected_id}/>}
             {switchReason && systems.some(robot => robot.id !== directory?.selected_id) && <p className="robot-switch-note"><Icon name="info"/>{t(switchReason)}</p>}
         </> : section === 'create' ? <form className="robot-manager-form" onSubmit={event => {event.preventDefault(); void create()}}>
             <fieldset disabled={locked}><label className="field robot-manager-name"><span>{t("机器人名称")}</span><input data-initial-focus value={name} onChange={event => setName(event.target.value)} maxLength={60} placeholder={t("机器人名称")} required/></label>

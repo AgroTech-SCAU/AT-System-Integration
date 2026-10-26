@@ -2,7 +2,7 @@ import type {Translator} from '../locale'
 import type {HsmLayout} from './HsmCanvas'
 
 export type Scalar = string | number | boolean | null | Scalar[] | {[key:string]:Scalar}
-export type MachineState = {id:string;label:string;parent?:string;initial?:string;entry?:string;do?:string;exit?:string;bindings?:Partial<Record<'entry'|'do'|'exit',{inputs?:Record<string,string>;outputs?:Record<string,string>}>>}
+export type MachineState = {id:string;label:string;parent?:string;initial?:string;outcome?:'success'|'failure';entry?:string;do?:string;exit?:string;bindings?:Partial<Record<'entry'|'do'|'exit',{inputs?:Record<string,string>;outputs?:Record<string,string>}>>}
 export type Transition = {source:string;target:string;event:string;guard?:{operator:string;key?:string;value?:Scalar}}
 export type MachineDocument = {variable_contracts?:Record<string,import('../data-contracts').DataContract>;initial:string;states:MachineState[];transitions:Transition[];variables:Record<string,Scalar>}
 export type MachineSnapshot = {title:string;document:MachineDocument;layout:HsmLayout}
@@ -49,7 +49,7 @@ export function descendants(document:MachineDocument,id:string){
 }
 
 export function canReparent(document:MachineDocument,child:string,parent:string){
- return child!==document.initial&&document.states.some(s=>s.id===parent)&&!descendants(document,child).has(parent)
+ return child!==document.initial&&document.states.some(s=>s.id===parent&&!s.outcome)&&!descendants(document,child).has(parent)
 }
 
 export function reorderState(states:MachineState[],id:string,targetId:string,placement:'before'|'after'):MachineState[]{
@@ -78,6 +78,7 @@ export function diagnoseMachine(snapshot:MachineSnapshot,references:Set<string>,
  const ids=new Set(document.states.map(s=>s.id))
  for(const state of document.states){
   const children=document.states.filter(s=>s.parent===state.id)
+  if(state.outcome&&(children.length||state.do||document.transitions.some(edge=>edge.source===state.id)))issues.push({message:t('终态不能包含子状态、期间行为或向外转换'),stateId:state.id})
   if(!state.label.trim())issues.push({message:t("为状态填写名称"),stateId:state.id})
   if(children.length&&!children.some(s=>s.id===state.initial))issues.push({message:t("{0} 需要初始子状态", {0: state.label}),stateId:state.id})
   for(const phase of ['entry','do','exit'] as const){if(state[phase]&&!references.has(state[phase]!))issues.push({message:t("{0} 的 {1} 任务已不可用", {0: state.label, 1: phase==='entry'?'Entry':phase==='do'?'Do':'Exit'}),stateId:state.id});for(const mapping of Object.values(state.bindings?.[phase]||{})){for(const variable of Object.values(mapping)){if(!(variable in document.variables))issues.push({message:t("{0} 的 {1} 绑定变量 {2} 已不存在", {0: state.label, 1: phase, 2: variable}),stateId:state.id})}}}
@@ -93,7 +94,7 @@ export function diagnoseMachine(snapshot:MachineSnapshot,references:Set<string>,
   if(!ids.has(edge.source)||!ids.has(edge.target))issues.push({message:t("转换连接的状态不存在"),edgeIndex})
   if(edge.guard?.operator&&!isFallback(edge)){
    if(!edge.guard.key||!(edge.guard.key in document.variables))issues.push({message:t("{0} 需要选择有效变量", {0: edge.event||t("转换")}),edgeIndex})
-   if(['greater','less'].includes(edge.guard.operator)&&(typeof document.variables[edge.guard.key||'']!=='number'||typeof edge.guard.value!=='number'))issues.push({message:t("{0} 的大小比较需要数值变量和数值比较值", {0: edge.event||t("转换")}),edgeIndex})
+   if(['greater','less'].includes(edge.guard.operator)&&((typeof document.variables[edge.guard.key||'']!=='number'&&!['number','integer'].includes(document.variable_contracts?.[edge.guard.key||'']?.type||''))||typeof edge.guard.value!=='number'))issues.push({message:t("{0} 的大小比较需要数值变量和数值比较值", {0: edge.event||t("转换")}),edgeIndex})
   }
  })
  for(const [name,value] of Object.entries(document.variables))if(typeof value==='number'&&!Number.isFinite(value))issues.push({message:t("变量 {0} 需要有效数值", {0: name})})

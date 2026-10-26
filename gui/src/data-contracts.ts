@@ -2,7 +2,7 @@ import type {FieldSchema} from './pages/SchemaMessageForm'
 export type DataContract={type:string;unit?:string;[key:string]:any}
 function stable(value:any):string{return value&&typeof value==='object'&&!Array.isArray(value)?JSON.stringify(Object.fromEntries(Object.keys(value).sort().map(key=>[key,JSON.parse(stable(value[key]))]))):JSON.stringify(value)}
 export function contractReason(source:DataContract,target:DataContract):string{
- for(const [key,label] of [['type','数据类型'],['unit','单位'],['frame_id','坐标系'],['clock_domain','时间域']])if(target[key]!=null&&source[key]!==target[key])return label+'不一致，需要明确转换'
+ for(const [key,label] of [['type','数据类型'],['unit','单位'],['frame_id','坐标系'],['clock_domain','时间域'],['frame_path','坐标系字段'],['stamp_path','采样时间字段']])if(target[key]!=null&&source[key]!==target[key])return label+'不一致，需要明确转换'
  const a=source.extensions||{},b=target.extensions||{}
  if(b.ros_type&&a.ros_type!==b.ros_type)return 'ROS 字段类型不一致或尚未声明'
  if(b.ros_shape&&stable(a.ros_shape||{})!==stable(b.ros_shape))return '消息结构或数组边界不一致'

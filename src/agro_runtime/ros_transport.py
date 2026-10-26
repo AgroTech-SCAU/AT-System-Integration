@@ -79,6 +79,25 @@ def _run_task(data, stop, feedback=None, *, context=None, unconfirmed=None):
         node = rclpy.create_node('atil_task_' + uuid4().hex[:8], context=context)
         executor = SingleThreadedExecutor(context=context)
         executor.add_node(node)
+        try:
+            from .data_contracts import field_at_path, semantic_reason
+        except ImportError:
+            from data_contracts import field_at_path, semantic_reason
+        def check_semantics(direction, value):
+            mapping = data.get('input_bindings' if direction == 'inputs' else 'output_bindings', {})
+            for left, right in mapping.items():
+                path, name = (left, right) if direction == 'inputs' else (right, left)
+                contract = data.get(direction, {}).get(name, {})
+                if not contract.get('stamp_path') and not contract.get('frame_path'): continue
+                reason = semantic_reason(contract, field_at_path(value, path), {'ros':node.get_clock().now().nanoseconds})
+                if reason: raise ValueError(name + ' · ' + reason)
+        def outcome(result):
+            if result.get('state') == 'SUCCEEDED':
+                try: check_semantics('outputs', result.get('response', {}))
+                except (ValueError, KeyError, TypeError, IndexError) as error:
+                    result.update(state='FAILED', error={'code':'output_semantics','reason':str(error),'retryable':False})
+            return result
+        check_semantics('inputs', data.get('payload', {}))
         interface = data['interface']
         ros_type = data['ros_type']
         if kind in ('publish_once', 'publish_periodic'):
@@ -118,7 +137,7 @@ def _run_task(data, stop, feedback=None, *, context=None, unconfirmed=None):
             sub = node.create_subscription(cls, interface, observe, qos)
             while not matched.is_set() and not stop.is_set() and remaining() > 0:
                 executor.spin_once(timeout_sec=min(.05, remaining()))
-            return {'state': 'CANCELED' if stop.is_set() else 'SUCCEEDED' if matched.is_set() else 'FAILED', 'response': response}
+            return outcome({'state': 'CANCELED' if stop.is_set() else 'SUCCEEDED' if matched.is_set() else 'FAILED', 'response': response})
         if kind == 'service':
             cls = get_service(ros_type)
             client = node.create_client(cls, interface)
@@ -134,7 +153,7 @@ def _run_task(data, stop, feedback=None, *, context=None, unconfirmed=None):
             if feedback:
                 feedback(_message_as_dict(result))
             # 服务响应仅表示服务调用结束，并不证明实体动作已经完成
-            return {'state': 'SUCCEEDED', 'response': _message_as_dict(result)}
+            return outcome({'state': 'SUCCEEDED', 'response': _message_as_dict(result)})
         if kind == 'action':
             cls = get_action(ros_type)
             client = ActionClient(node, cls, interface)
@@ -202,11 +221,11 @@ def _run_task(data, stop, feedback=None, *, context=None, unconfirmed=None):
                         'error': {'code': 'stop_unconfirmed', 'reason': str(reason), 'retryable': False}}
             if cancel_reason == 'timeout':
                 state, reason = 'FAILED', '任务整体超时，设备停止已确认'
-            outcome = {'state': state, 'terminal_received': True, 'terminal_state': state, 'response': response, 'stop_confirmed': True}
+            result_value = {'state': state, 'terminal_received': True, 'terminal_state': state, 'response': response, 'stop_confirmed': True}
             if state == 'FAILED':
-                outcome['error'] = {'code': 'task_timeout' if cancel_reason == 'timeout' else 'action_failed',
+                result_value['error'] = {'code': 'task_timeout' if cancel_reason == 'timeout' else 'action_failed',
                                     'reason': str(reason), 'retryable': False}
-            return outcome
+            return outcome(result_value)
         raise ValueError('unsupported ROS task')
     finally:
         if executor:

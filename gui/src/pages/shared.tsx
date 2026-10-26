@@ -9,6 +9,12 @@ import type { Language, Observation } from '../types'
 export type Json = Record<string, any>
 export interface PageProps { client: ApiClient; observation: Observation | null; language: Language; changed(): Promise<void> }
 export function ErrorFields({value,title}:{value:unknown;title?:string}) { return <ErrorNotice value={value} title={title}/> }
+export function JsonParameterInput({value,onChange,disabled=false,placeholder}:{value:unknown;onChange:(value:unknown)=>void;disabled?:boolean;placeholder?:string}){
+ const {t}=useLocale(),serialized=value===undefined?'':JSON.stringify(value,null,2)
+ const [text,setText]=useState(serialized),[invalid,setInvalid]=useState(false)
+ useEffect(()=>{setText(serialized);setInvalid(false)},[serialized])
+ return <><textarea disabled={disabled} rows={4} value={text} placeholder={placeholder} aria-invalid={invalid} onChange={event=>{setText(event.target.value);setInvalid(false)}} onBlur={()=>{try{onChange(text.trim()?JSON.parse(text):undefined);setInvalid(false)}catch{setText(serialized);setInvalid(true)}}}/>{invalid&&<small role="alert" className="error">{t('JSON 无效，未应用修改')}</small>}</>
+}
 export function Parameters({ specs, value, onChange }: {specs: Json; value: Json; onChange(value: Json): void}) {
  const {t}=useLocale()
 
@@ -17,6 +23,7 @@ export function Parameters({ specs, value, onChange }: {specs: Json; value: Json
     return <Field key={name} label={`${name}${spec.unit ? ` (${spec.unit})` : ''}${spec.required ? ' *' : ''}`}>
       {spec.choices ? <select value={value[name] === undefined ? '' : JSON.stringify(value[name])} onChange={e => update(e.target.value === '' ? undefined : JSON.parse(e.target.value))}><option value="">{t("使用缺省值")}</option>{spec.choices.map((x: unknown,i:number) => <option key={i} value={JSON.stringify(x)}>{String(x)}</option>)}</select>
         : spec.type === 'boolean' ? <select value={value[name] === undefined ? '' : String(value[name])} onChange={e => update(e.target.value === '' ? undefined : e.target.value === 'true')}><option value="">{t("使用缺省值")}</option><option value="true">true</option><option value="false">false</option></select>
+        : spec.type==='json' ? <JsonParameterInput value={value[name]} onChange={update} placeholder={spec.default===undefined?t('使用缺省值'):JSON.stringify(spec.default)}/>
         : <input type={spec.type === 'string' ? 'text' : 'number'} step={spec.type === 'integer' ? 1 : 'any'} min={spec.minimum} max={spec.maximum} value={value[name] ?? ''} placeholder={spec.default === undefined ? t("未设置") : String(spec.default)} onChange={e => update(e.target.value === '' ? undefined : spec.type === 'string' ? e.target.value : Number(e.target.value))} />}
       <small className="muted">{spec.minimum !== undefined ? t("最小 {0} ", {0: spec.minimum}) : ''}{spec.maximum !== undefined ? t("最大 {0} ", {0: spec.maximum}) : ''} · {spec.apply_policy}</small>
     </Field>

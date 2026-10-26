@@ -240,6 +240,16 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
         record = profiles.open(body.get('path', ''))
         return record
 
+    @api.get('/robot-profiles/{robot_id}/dependencies')
+    async def profile_dependencies(robot_id: str):
+        return profiles.dependencies(robot_id)
+
+    @api.post('/robot-profiles/{robot_id}/references')
+    async def profile_references(robot_id: str, body: dict):
+        robot_systems.require_stopped()
+        if hsm.running() or deployment.has_processes():fail('$.profile','robot_busy','停止运行后才能重定位工程依赖')
+        return profiles.update_references(robot_id, body.get('mapping'), body.get('collect'))
+
     class RobotSystemActivate(BaseModel):
         request_id: str
 
@@ -448,6 +458,9 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
         kind: Literal['service', 'action', 'publish_once', 'publish_periodic', 'subscribe_wait', 'compute']
         operation: str = ''
         stop_observation: dict = Field(default_factory=dict)
+        execution_policy: dict[str, bool] = Field(default_factory=dict)
+        path_fields: list[str] = Field(default_factory=list, max_length=64)
+        compute_entrypoint: str = ''
         interface: str = ''
         ros_type: str
         schema_id: str | None = None
@@ -496,8 +509,8 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
         return ros_operations.cancel(operation_id)
 
     @api.post('/ros/operations/{operation_id}/confirm-stop')
-    async def ros_confirm_stop(operation_id: str):
-        result=await ros_operations.confirm_stop(operation_id)
+    async def ros_confirm_stop(operation_id: str, body: dict):
+        result=await ros_operations.confirm_stop(operation_id, body)
         hsm.refresh_stop_confirmation()
         return result
 
@@ -634,6 +647,14 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
         from .interface_sources import InterfaceWorkspaces
         workspace=InterfaceWorkspaces(store,ros_tasks._robot()).get(workspace_id)
         return await asyncio.to_thread(scan_modules,workspace['path'])
+
+    @api.get('/deployment/workspaces/{workspace_id}/manifest')
+    async def subsystem_manifest(workspace_id: str):
+        return deployment.manifest(workspace_id)
+
+    @api.post('/deployment/workspaces/{workspace_id}/manifest')
+    async def import_subsystem_manifest(workspace_id: str, body: dict):
+        return deployment.manifest(workspace_id, body)
 
     @api.post('/deployment/modules')
     async def deployment_save(body: dict):

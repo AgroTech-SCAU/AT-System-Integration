@@ -2,7 +2,7 @@
 
 
 def contract_reason(source, target):
-    for key, label in (('type', '数据类型'), ('unit', '单位'), ('frame_id', '坐标系'), ('clock_domain', '时间域')):
+    for key, label in (('type', '数据类型'), ('unit', '单位'), ('frame_id', '坐标系'), ('clock_domain', '时间域'), ('frame_path', '坐标系字段'), ('stamp_path', '采样时间字段')):
         if target.get(key) is not None and source.get(key) != target[key]:
             return label + '不一致，需要明确转换'
     a, b = source.get('extensions', {}), target.get('extensions', {})
@@ -49,3 +49,31 @@ def valid_shape(shape, depth=0):
     if shape['kind'] == 'array':
         return valid_shape(shape.get('item'), depth + 1)
     return True
+
+
+def field_at_path(value, path):
+    if path == '$': return value
+    for part in path.split('.'):
+        value = value[int(part)] if isinstance(value, list) else value[part]
+    return value
+
+
+def semantic_reason(contract, value, clocks=None):
+    """Validate actual frame/sample time, without refreshing the sample timestamp."""
+    try:
+        if contract.get('frame_path') and field_at_path(value, contract['frame_path']) != contract.get('frame_id'):
+            return '数据中的坐标系与端口声明不同'
+        if contract.get('stamp_path'):
+            stamp = field_at_path(value, contract['stamp_path'])
+            if not isinstance(stamp, dict) or type(stamp.get('sec')) is not int or type(stamp.get('nanosec')) is not int or not 0 <= stamp['nanosec'] < 1000000000:
+                return '采样时间需要 sec 与 nanosec 字段'
+            import time
+            now = (clocks or {}).get(contract.get('clock_domain'))
+            if now is None and contract.get('clock_domain') == 'system': now = time.time_ns()
+            if now is None: return '无法读取声明的时间域，不能确认数据有效期'
+            age = (now - stamp['sec'] * 1000000000 - stamp['nanosec']) / 1e9
+            if stamp['sec'] * 1000000000 + stamp['nanosec'] <= 0 or not 0 <= age <= contract['max_age_s']:
+                return '采样数据已过期或时间戳超前'
+    except (KeyError, IndexError, TypeError, ValueError):
+        return '数据中缺少声明的语义字段'
+    return ''

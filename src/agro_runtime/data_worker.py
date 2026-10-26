@@ -24,7 +24,23 @@ def main():
             task=jobs.get()
             if task is None:break
             try:
-                result=context.run(task['operation'],task.get('payload',{}),stop)
+                from data_contracts import field_at_path, semantic_reason
+                def validate_semantics(direction,value):
+                    for left,right in task.get('input_bindings' if direction=='inputs' else 'output_bindings',{}).items():
+                        path,name=(left,right) if direction=='inputs' else (right,left)
+                        contract=task.get(direction,{}).get(name,{})
+                        if not contract.get('stamp_path') and not contract.get('frame_path'):continue
+                        reason=semantic_reason(contract,field_at_path(value,path),{'ros':context.now()})
+                        if reason:raise ValueError(name+' · '+reason)
+                validate_semantics('inputs',task.get('payload',{}))
+                if task['operation']=='extension':
+                    import importlib
+                    module, function=task['compute_entrypoint'].split(':')
+                    result=getattr(importlib.import_module(module),function)(task.get('payload',{}),stop)
+                    if not isinstance(result,dict):raise ValueError('计算扩展必须返回 JSON 对象')
+                else:
+                    result=context.run(task['operation'],task.get('payload',{}),stop)
+                validate_semantics('outputs',result)
                 value={'state':'SUCCEEDED','response':result,'stop_confirmed':True}
             except Exception as error:
                 value={'state':'CANCELED' if isinstance(error,InterruptedError) else 'FAILED','response':{},'stop_confirmed':True,

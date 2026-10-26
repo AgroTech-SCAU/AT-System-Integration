@@ -91,6 +91,8 @@ class TaskDocuments:
             model = nodes[name]
             model.update(ros_task_id=task['id'], label=task['name'], description=task['name'],
                          capability_id='ros.'+task['id'], resources=task.get('resources', []))
+            from .ros_tasks import execution_policy
+            model['execution_policy'] = execution_policy(task)
             model['ports'] = {'node_id':{'type':'string','direction':'INPUT','required':False}}
             for direction, key, prefix in (('INPUT','inputs',''), ('OUTPUT','outputs','out_')):
                 for port_name, spec in task.get(key, {}).items():
@@ -153,6 +155,7 @@ class TaskDocuments:
                 if cap is None:continue
                 model['capability_id']=cap_id
                 model['resources']=[r.model_dump(mode='json') for r in cap.resources]
+                model['execution_policy']=cap.extensions.get('execution_policy', {})
                 model['backends']=[b for b,c in self.context.bound.capabilities if c==cap_id]
                 model['roles']=[r for r,c in self.context.bound.roles.items() if c.capability.capability_id==cap_id]
                 model['description']=cap.description
@@ -311,12 +314,12 @@ class TaskDocuments:
             for name,value in node['ports'].items():
                 if value['kind']!='blackboard_reference':continue
                 spec=specs.get(name,{})
-                typ={k:spec[k] for k in ('type','unit','frame_id','clock_domain','max_age_s','minimum','maximum','choices','extensions') if spec.get(k) is not None}
+                typ={k:spec[k] for k in ('type','unit','frame_id','clock_domain','max_age_s','minimum','maximum','choices','extensions','frame_path','stamp_path') if spec.get(k) is not None}
                 if spec.get('direction')!='OUTPUT' and value['key'] not in known:read.setdefault(value['key'],typ)
             for name,value in node['ports'].items():
                 spec=specs.get(name,{})
                 if value['kind']=='blackboard_reference' and spec.get('direction')=='OUTPUT':
-                    written[value['key']]={k:spec[k] for k in ('type','unit','frame_id','clock_domain','max_age_s','minimum','maximum','choices','extensions') if spec.get(k) is not None}
+                    written[value['key']]={k:spec[k] for k in ('type','unit','frame_id','clock_domain','max_age_s','minimum','maximum','choices','extensions','frame_path','stamp_path') if spec.get(k) is not None}
                     known.add(value['key'])
             if registration in {'Fallback','ReactiveFallback'}:
                 branches=[visit(child,known) for child in node['children']]
@@ -499,7 +502,7 @@ class TaskDocuments:
                 for port,value in node['ports'].items():
                     spec=specs.get(port,{})
                     if spec.get('direction')=='OUTPUT' and value['kind']=='blackboard_reference':
-                        out={k:spec[k] for k in ('type','unit','frame_id','clock_domain','max_age_s','minimum','maximum','choices','extensions') if spec.get(k) is not None}
+                        out={k:spec[k] for k in ('type','unit','frame_id','clock_domain','max_age_s','minimum','maximum','choices','extensions','frame_path','stamp_path') if spec.get(k) is not None}
                         if registration in {'ForEachTarget','SelectTarget','TargetsFromPose'}:
                             source=node['ports'].get('targets' if registration!='TargetsFromPose' else 'target')
                             if source and source['kind']=='blackboard_reference' and source['key'] in env:
@@ -579,14 +582,14 @@ class TaskDocuments:
             specs={k:parse(ParameterDescriptor,v) for k,v in definitions.items()}
             try:
                 effective=_values(parameters,specs,'$.parameters',parameters=True)
-                for name,value in effective.items():blackboard[name]={'type':specs[name].type,'unit':specs[name].unit,'value':value}
+                for name,value in effective.items():blackboard[name]={**specs[name].model_dump(mode='json',exclude_none=True),'value':value}
                 if policy=='tomato_picker' and 'calibration_offset_x' not in blackboard:
                     fixture=self.assets.builtin['metadata']
                     blackboard['calibration_offset_x']={'type':'number','unit':'m','value':fixture['translation_m'][0]}
             except ContractValidationError as exc:
                 for issue in exc.issues:error(issue.code,issue.reason,port=issue.path)
         else:error('unknown_task_policy','任务策略不支持')
-        main=document['main_tree_id'];initial={k:{**{a:v[a] for a in ('type','unit') if a in v},'_producers':[{'tree_id':main,'port':k,'kind':'task_input'}]} for k,v in blackboard.items()}
+        main=document['main_tree_id'];initial={k:{**{a:v[a] for a in ('type','unit','minimum','maximum','choices','extensions','frame_id','clock_domain','max_age_s','frame_path','stamp_path') if a in v},'_producers':[{'tree_id':main,'port':k,'kind':'task_input'}]} for k,v in blackboard.items()}
         flow(main,trees[main]['root_id'],initial,[main])
         stage_by_editor={};stage_by_instance={}
         try:
@@ -618,8 +621,23 @@ class TaskDocuments:
                         stage_by_editor[item['editor_id']]=stage
                         stage_by_instance[item['instance_path']]=stage
             # XML 可加载不能授权物理动作重入
-            physical=any((models['nodes'][n['registration_id']].get('capability_id') not in readonly_caps) for n in instances if models['nodes'][n['registration_id']].get('capability_id'))
-            if physical and any(n['registration_id'] in {'RetryUntilSuccessful','Repeat','ReactiveSequence','ReactiveFallback','Parallel'} for t in trees.values() for n in t['nodes'].values()):error('physical_reentry_forbidden','含副作用能力的重试、响应式重入或并发策略未开放')
+            # Validate only descendants of the relevant control node, including expanded subtrees
+            def check_effects(node, required=frozenset()):
+                registration = node['registration_id']
+                extra = ({'repeatable'} if registration in {'RetryUntilSuccessful','Repeat'} else
+                         {'repeatable','cancelable'} if registration in {'ReactiveSequence','ReactiveFallback'} else
+                         {'concurrent','cancelable'} if registration == 'Parallel' else set())
+                required = required | extra
+                model = models['nodes'][registration]
+                if model.get('capability_id'):
+                    policy = model.get('execution_policy', {})
+                    missing = sorted(key for key in required if not isinstance(policy,dict) or policy.get(key) is not True)
+                    if missing:
+                        labels = {'repeatable':'允许重复执行','cancelable':'可确认取消','concurrent':'允许并发'}
+                        error('execution_policy_required', '任务需要声明：' + '、'.join(labels[key] for key in missing), node.get('tree_id'), node.get('editor_id'))
+                for child in node.get('expanded_children', []):
+                    check_effects(child, required)
+            check_effects(self.expanded(document))
         except (ContractValidationError,KeyError,RecursionError) as exc:error('invalid_expansion','子树无法安全展开 '+str(exc))
         result={'valid':not diagnostics,'diagnostics':diagnostics,'sources':sources,'model_digest':models['digest'],'system_snapshot_id':self.context.snapshot_id,'blackboard':blackboard,'stage_by_editor':stage_by_editor,'stage_by_instance':stage_by_instance}
         if result['valid'] and engine:

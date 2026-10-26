@@ -188,6 +188,26 @@ class WorkspaceEnvironments:
             fail('$.environment', 'environment_changed', '工作区执行环境已变化，请重新检查并加载')
         return copy.deepcopy(config)
 
+    def record_worker(self, process, operation):
+        if not operation: return
+        from .runtime import LocalProcessManager
+        from .robot_profiles import atomic_json
+        directory = self.store.root / 'execution_processes'
+        directory.mkdir(exist_ok=True)
+        atomic_json(directory / (operation + '.json'), {'pid':process.pid, 'identity':LocalProcessManager._identity(process.pid)})
+
+    def previous_worker_stopped(self, operation):
+        from .runtime import LocalProcessManager
+        path = self.store.root / 'execution_processes' / (operation + '.json')
+        if not path.is_file(): return None
+        record = json.loads(path.read_text())
+        expected = record.get('identity')
+        if not expected: return None
+        boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+        if expected['boot'] != boot: return True
+        # A surviving descendant may still own the original process group
+        return not LocalProcessManager._group_alive(record['pid'])
+
     def call(self, config, request, stop=None, feedback=None):
         # Positional shell arguments avoid interpreting paths as shell commands
         env = dict(os.environ)
@@ -205,6 +225,10 @@ class WorkspaceEnvironments:
                 return {'state':'FAILED','stop_confirmed':True,'response':{},
                         'error':{'code':'environment_not_ready','reason':str(error),'retryable':False}}
             raise EnvironmentFailure(str(error)) from error
+        try:self.record_worker(process, request.get('task', {}).get('_operation_id'))
+        except BaseException:
+            process.terminate();process.communicate(timeout=5)
+            raise
         events = queue.Queue()
         def reader():
             try:
@@ -314,6 +338,7 @@ class WorkspaceEnvironments:
         with computer['lock']:
             if stop.is_set():return {'state':'CANCELED','response':{},'stop_confirmed':True}
             process=computer['process'];events=computer['events']
+            self.record_worker(process, data.get('_operation_id'))
             process.stdin.write(json.dumps(data)+'\n');process.stdin.flush()
             deadline=time.monotonic()+data.get('timeout_s',15)+2;sent=False
             while True:

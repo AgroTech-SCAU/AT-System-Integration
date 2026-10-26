@@ -49,6 +49,10 @@ def validate(spec, definitions=(), ros_tasks=(), *, ready=True):
             visited.add(p)
             p = by_id[p].get('parent')
         children = [n['id'] for n in states if n.get('parent') == s['id']]
+        if s.get('outcome') not in (None, 'success', 'failure'):
+            fail('$.states.' + s['id'] + '.outcome', 'invalid_outcome', '请选择普通状态、成功终态或失败终态')
+        if s.get('outcome') and (children or s.get('do')):
+            fail('$.states.' + s['id'], 'invalid_terminal', '终态不能包含子状态或状态期间行为')
         if ready and children and s.get('initial') not in children:
             fail('$.states.'+s['id']+'.initial', 'initial_required', '包含子状态时需要指定初始子状态')
         if not children and s.get('initial'):
@@ -59,6 +63,8 @@ def validate(spec, definitions=(), ros_tasks=(), *, ready=True):
     for edge in edges:
         if not isinstance(edge, dict) or edge.get('source') not in ids or edge.get('target') not in ids:
             fail('$.transitions', 'unknown_state', '转换源状态或目标状态不存在')
+        if ready and by_id[edge['source']].get('outcome'):
+            fail('$.transitions', 'terminal_transition', '终态不能配置离开转换')
         event = edge.get('event')
         if not isinstance(event, str) or ready and not IDENT.fullmatch(event):
             fail('$.transitions', 'invalid_event', '事件标识应使用小写字母数字下划线')
@@ -99,7 +105,7 @@ def validate(spec, definitions=(), ros_tasks=(), *, ready=True):
                 continue
             if guard.get('key') not in variables:
                 fail('$.transitions.guard', 'unknown_variable', '转换条件需要选择已声明的变量')
-            if operator in ('greater', 'less') and (type(variables[guard['key']]) not in (int, float) or type(guard.get('value')) not in (int, float)):
+            if operator in ('greater', 'less') and ((type(variables[guard['key']]) not in (int, float) and contracts.get(guard['key'], {}).get('type') not in ('number', 'integer')) or type(guard.get('value')) not in (int, float)):
                 fail('$.transitions.guard', 'invalid_comparison', '大小比较需要数值变量和数值比较值')
     for state in states:
         bindings = state.get('bindings', {})
@@ -235,7 +241,10 @@ class StateMachines:
                 inputs = behavior.get('inputs', {}) if ros else behavior.get('document', {}).get('inputs', {})
                 outputs = behavior.get('outputs', {}) if ros else {name: port['type'] for name, port in tree.get('ports', {}).items() if port['direction'] == 'OUTPUT'}
                 for direction, ports in (('inputs', inputs), ('outputs', outputs)):
-                    for port, variable in state.get('bindings', {}).get(phase, {}).get(direction, {}).items():
+                    explicit = state.get('bindings', {}).get(phase, {}).get(direction, {})
+                    effective = {name:explicit.get(name,name) for name in ports if explicit.get(name,name) in spec['variables']}
+                    effective.update(explicit)
+                    for port, variable in effective.items():
                         target = ports.get(port)
                         reason = '行为中已不存在此输入输出字段' if not target else ''
                         if target and variable in variable_contracts:
@@ -258,6 +267,8 @@ class StateMachines:
                     diagnostics.extend({'message': task.get('name', '') + ' · ' + issue.reason,
                                         'task_id': task.get('id'), 'path': issue.path,
                                         **task_origins.get(task.get('id'), {})} for issue in exc.issues)
+        from .flow_validation import check_dataflow
+        diagnostics.extend(check_dataflow(spec, {**trees, **task_map}))
         return {'valid': not diagnostics, 'diagnostics': diagnostics, 'behaviors': len(checked),
                 'message': '离线配置检查通过' if not diagnostics else '运行前需补充配置'}
 
@@ -361,7 +372,13 @@ class StateMachines:
 
     def _clear_outputs(self, state_id, phase):
         values = copy.deepcopy(self._session['variables'])
-        for variable in self._bindings(state_id, phase).get('outputs', {}).values():
+        state=next((s for s in self._spec['states'] if s['id']==state_id),{})
+        reference=state.get(phase,'')
+        behavior=self._dependencies.get(reference,{})
+        tree=behavior.get('document',{}).get('trees',{}).get(behavior.get('document',{}).get('main_tree_id'),{})
+        outputs=behavior.get('outputs',{}) if reference.startswith('ros:') else {name:port for name,port in tree.get('ports',{}).items() if port['direction']=='OUTPUT'}
+        mapping=self._bindings(state_id,phase).get('outputs',{})
+        for variable in {mapping.get(name,name) for name in outputs}|set(mapping.values()):
             if variable in self._spec.get('variable_contracts', {}):
                 values[variable] = None
         self._persist(variables=values)
@@ -539,8 +556,27 @@ class StateMachines:
         except Exception as exc:
             await self._abort(exc)
 
+    async def _finish_terminal(self, by_id):
+        leaf = by_id[self._session['active']]
+        if not leaf.get('outcome'):
+            return False
+        self._persist(status='TRANSITIONING')
+        self._activation += 1
+        self._events.clear()
+        await self._cancel_tree()
+        for identity in reversed(self._session['path']):
+            if await self._tree(by_id[identity].get('exit'), 'exit', identity) != 'SUCCEEDED':
+                raise RuntimeError('终态退出行为未成功，流程尚未结束')
+        self._release_control()
+        self._persist(status='SUCCEEDED' if leaf['outcome'] == 'success' else 'FAILED',
+                      action=None, pending_events=0, attention=[], result=copy.deepcopy(self._session['variables']),
+                      error=None if leaf['outcome'] == 'success' else '流程进入失败终态')
+        return True
+
     async def _launch_do(self, by_id):
         if not self._session or self._session['status'] != 'RUNNING':
+            return
+        if await self._finish_terminal(by_id):
             return
         async def watch(owner, reference):
             try:
@@ -577,7 +613,10 @@ class StateMachines:
     async def start(self,identity,mode='auto',confirm_safety=False):
         async with self._lock:
             if self.running():fail('$.machine','running','已有状态机正在运行')
-            self.check(identity)
+            checked = self.check(identity)
+            if not checked['valid']:
+                from .errors import ContractValidationError, ValidationIssue
+                raise ContractValidationError([ValidationIssue(path='$.states.' + item.get('state_id', '') + '.' + item.get('phase', '') + '.' + item.get('path', ''), code='workflow_not_ready', reason=item['message']) for item in checked['diagnostics']])
             machine=self.get(identity)
             spec=validate(machine['document'],self.definitions(),self.ros_definitions())
             robot=self.robots.selected()

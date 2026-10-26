@@ -65,6 +65,9 @@ class RobotProfiles:
 
     @staticmethod
     def paths(value, root, writing):
+        if writing:
+            from .profile_references import encode_paths
+            return encode_paths(value, root)
         if isinstance(value, dict):
             return {k: RobotProfiles.paths(v, root, writing) for k, v in value.items() if k != 'storage_path'}
         if isinstance(value, list):
@@ -72,9 +75,6 @@ class RobotProfiles:
         if isinstance(value, str):
             if not writing and value.startswith('profile-path:'):
                 return str((root / value[13:]).resolve())
-            if writing and value.startswith('/') and not value.startswith(('/usr/','/opt/','/bin/','/lib/')) and Path(value).exists():
-                # ROS names like /arm/move remain names; only real filesystem paths are rewritten
-                return 'profile-path:' + os.path.relpath(value, root)
         return value
 
     def attach(self, robot, directory):
@@ -186,6 +186,48 @@ class RobotProfiles:
                 target.parent.mkdir(exist_ok=True)
                 target.write_bytes(source.read_bytes())
         return {**self.store.get('robot_system', robot), 'storage_path': str(root)}
+
+    def dependencies(self, robot):
+        from .profile_references import dependency_report
+        return {'storage_path':str(self.path(robot) or ''), 'references':dependency_report(self.records(robot))}
+
+    def update_references(self, robot, mapping=None, collect=None):
+        from .profile_references import relocate, dependency_report
+        from .configuration import encoded
+        root=self.path(robot)
+        if not root:fail('$.profile','profile_required','此机器人尚未关联工程目录')
+        documents={kind:[copy.deepcopy(v) for v in self.store.list(kind) if self._owned(kind,v,robot)] for kind in PROJECT_KINDS}
+        mapping=copy.deepcopy(mapping) if mapping is not None else {}
+        if not isinstance(mapping,dict) or any(not isinstance(a,str) or not isinstance(b,str) or not Path(a).is_absolute() or not Path(b).is_absolute() for a,b in mapping.items()):
+            fail('$.mapping','invalid_paths','重定位需要旧路径和新路径的绝对路径映射')
+        if any(not Path(value).exists() for value in mapping.values()):fail('$.mapping','missing_path','重定位目标不存在')
+        report={v['path']:v for v in dependency_report(documents)}
+        if collect is not None and (not isinstance(collect,list) or len(collect)>128 or any(not isinstance(v,str) for v in collect)):
+            fail('$.collect','invalid_files','请选择有效的工程资源文件列表')
+        files=[]
+        total=0
+        for source in collect or []:
+            item=report.get(source)
+            if not item or not item['packable'] or not item['file']:fail('$.collect','not_packable','只能收集已声明的参数或数据文件')
+            path=Path(source)
+            if path.stat().st_size>16*1024*1024:fail('$.collect','resource_too_large','单个工程资源不能超过 16 MiB')
+            content=path.read_bytes();destination=root/'assets'/'resources'/(hashlib.sha256(content).hexdigest()+path.suffix)
+            total+=len(content)
+            if total>64*1024*1024:fail('$.collect','resources_too_large','一次收集的工程资源不能超过 64 MiB')
+            files.append((destination,content))
+            mapping[source]=str(destination)
+        for destination,content in files:
+            destination.parent.mkdir(parents=True,exist_ok=True)
+            if not destination.exists():destination.write_bytes(content)
+        updated=relocate(documents,mapping)
+        previous=[(kind,v['id'],encoded(v)) for kind,rows in documents.items() for v in rows]
+        with self.store.db:
+            self.store.db.executemany('INSERT OR REPLACE INTO documents VALUES (?,?,?)',[(kind,v['id'],encoded(v)) for kind,rows in updated.items() for v in rows])
+        try:self.flush(robot)
+        except BaseException:
+            with self.store.db:self.store.db.executemany('INSERT OR REPLACE INTO documents VALUES (?,?,?)',previous)
+            raise
+        return self.dependencies(robot)
 
     def restore(self):
         for entry in self.entries():

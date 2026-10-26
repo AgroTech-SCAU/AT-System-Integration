@@ -1,4 +1,4 @@
-export type HierarchyState={id:string;label:string;parent?:string;initial?:string;entry?:string;do?:string;exit?:string}
+export type HierarchyState={id:string;label:string;parent?:string;initial?:string;outcome?:'success'|'failure';entry?:string;do?:string;exit?:string}
 export type HierarchyEdge={source:string;target:string;event?:string}
 export type StateBox={x:number;y:number;width:number;height:number;depth:number;parent?:string;expanded:boolean;localX:number;localY:number}
 type Measured={state:HierarchyState;box:StateBox;inside?:Group}

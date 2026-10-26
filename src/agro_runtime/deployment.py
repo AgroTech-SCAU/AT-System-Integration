@@ -32,7 +32,7 @@ class Deployment:
     def modules(self):
         return [v for v in self.store.list('subsystem_module') if v['robot_system_id'] == self.ros._robot()]
 
-    def save(self, raw):
+    def save(self, raw, *, catalog=None, persist=True):
         self.robots.require_stopped()
         value = copy.deepcopy(raw)
         value['id'] = value.get('id') or 'module_' + uuid4().hex
@@ -61,16 +61,79 @@ class Deployment:
         if not isinstance(value.get('launch_arguments',{}),dict):
             fail('$.launch_arguments','invalid_module','launch 启动参数应为对象')
         for endpoint in value.get('provides',[]):
-            if endpoint.get('kind') not in ('action','service','topic') or not re.fullmatch(r'/[\w/]+',endpoint.get('name','')):
+            if not isinstance(endpoint,dict) or endpoint.get('role','publisher') not in ('publisher','subscriber') or endpoint.get('kind') not in ('action','service','topic') or not re.fullmatch(r'/[\w/]+',endpoint.get('name','')):
                 fail('$.provides','invalid_endpoint','请填写模块提供的通信接口')
+        if not isinstance(value.get('path_fields',[]),list) or any(not isinstance(p,str) or not re.fullmatch(r'(?:parameters|launch_arguments|arguments|argv)(?:\.(?:[A-Za-z_]\w*|[0-9]+))+',p) for p in value.get('path_fields',[])):
+            fail('$.path_fields','invalid_paths','文件字段需要明确指向参数或程序参数中的路径')
+        from .module_health import validate_checks
+        try: validate_checks(value.get('health_checks', []))
+        except (ValueError, TypeError, AttributeError) as error: fail('$.health_checks', 'invalid_health_check', str(error))
+        value.setdefault('health_interval_s', 5)
+        if type(value['health_interval_s']) not in (int,float) or not 1<=value['health_interval_s']<=60:
+            fail('$.health_interval_s','invalid_interval','健康检查间隔应在 1 至 60 秒')
         value.setdefault('dependencies',[]); value.setdefault('provides',[])
         value.setdefault('startup_timeout_s',60); value.setdefault('stop_timeout_s',15)
         if any(type(value[k]) not in (int,float) or not 1<=value[k]<=300 for k in ('startup_timeout_s','stop_timeout_s')):
             fail('$.timeout','invalid_timeout','启动和停止等待需在 1 至 300 秒之间')
-        proposed = {v['id']:v for v in self.modules()}; proposed[value['id']]=value
+        proposed = dict(catalog) if catalog is not None else {v['id']:v for v in self.modules()}
+        proposed[value['id']]=value
         self.order([value['id']],proposed)
         encoded(value)
-        return self.store.put('subsystem_module',value['id'],value)
+        return self.store.put('subsystem_module',value['id'],value) if persist else value
+
+    def manifest(self, workspace_id, content=None):
+        from .interface_sources import InterfaceWorkspaces
+        workspace=InterfaceWorkspaces(self.store,self.ros._robot()).get(workspace_id)
+        root=Path(workspace.get('path') or '.')
+        from .profile_references import references
+        if content is None:
+            rows=copy.deepcopy([v for v in self.modules() if v['workspace_id']==workspace_id])
+            for row in rows:
+                row.pop('robot_system_id',None);row.pop('workspace_id',None)
+            for container,key,_,_ in references({'subsystem_module':rows}):
+                path=Path(container[key])
+                if path.is_absolute() and path.is_relative_to(root):container[key]='workspace-path:'+str(path.relative_to(root))
+            return {'format':'atil.subsystem','modules':rows}
+        self.robots.require_stopped()
+        if not isinstance(content,dict) or content.get('format')!='atil.subsystem' or not isinstance(content.get('modules'),list) or len(content['modules'])>128:
+            fail('$.manifest','invalid_manifest','接入声明需要 atil.subsystem 格式和 modules 列表')
+        rows=copy.deepcopy(content['modules']);identities={}
+        from .configuration import identifier
+        for row in rows:
+            if not isinstance(row,dict):fail('$.modules','invalid_module','启动模块应为对象')
+            identifier(row.get('id'))
+            if not isinstance(row.get('dependencies',[]),list) or any(not isinstance(v,str) for v in row.get('dependencies',[])):
+                fail('$.dependencies','invalid_dependencies','模块依赖应为标识列表')
+            if row['id'] in identities:fail('$.modules','duplicate_id','接入声明包含重复模块标识')
+            identities[row['id']]='module_'+hashlib.sha256((workspace_id+':'+row['id']).encode()).hexdigest()[:24]
+        existing={v['id']:v for v in self.modules()}
+        # Reimport the same declaration updates its entries; local IDs remain stable
+        for row in rows:
+            source=row['id']; row['id']=next((v['id'] for v in existing.values() if v.get('workspace_id')==workspace_id and v.get('manifest_key')==source), source if existing.get(source,{}).get('workspace_id')==workspace_id else identities[source])
+            identities[source]=row['id'];row['manifest_key']=source;row['workspace_id']=workspace_id
+        for row in rows:row['dependencies']=[identities.get(key,key) for key in row.get('dependencies',[])]
+        for container,key,_,_ in references({'subsystem_module':rows}):
+            value=container[key]
+            if value.startswith('workspace-path:'):
+                path=(root/value[15:]).resolve()
+                if not path.is_relative_to(root.resolve()):fail('$.paths','invalid_path','工作区资源不能越出所选工作区')
+                container[key]=str(path)
+        proposed={**existing,**{v['id']:v for v in rows}}
+        prepared=[self.save(row,catalog=proposed,persist=False) for row in rows]
+        with self.store.db:
+            self.store.db.executemany('INSERT OR REPLACE INTO documents VALUES (?,?,?)', [('subsystem_module',v['id'],encoded(v)) for v in prepared])
+        try:
+            from .robot_profiles import RobotProfiles
+            RobotProfiles(self.store).flush(self.ros._robot())
+        except BaseException:
+            with self.store.db:
+                for value in prepared:
+                    if value['id'] in existing:
+                        self.store.db.execute('INSERT OR REPLACE INTO documents VALUES (?,?,?)',('subsystem_module',value['id'],encoded(existing[value['id']])))
+                    else:
+                        self.store.db.execute('DELETE FROM documents WHERE kind=? AND id=?',('subsystem_module',value['id']))
+            raise
+        return {'modules':prepared}
 
     @staticmethod
     def order(seeds, modules):
@@ -133,6 +196,7 @@ class Deployment:
                 endpoint_kind=task['kind'] if task['kind'] in ('action','service') else 'topic'
                 providers = [m for m in modules.values() if m['workspace_id'] in task.get('workspace_ids',[]) and
                              any(e['name']==task.get('interface') and e['kind']==endpoint_kind and
+                                 (endpoint_kind!='topic' or e.get('role','publisher')==('publisher' if task['kind']=='subscribe_wait' else 'subscriber')) and
                                  (not e.get('type') or e['type']==task.get('ros_type')) for e in m.get('provides',[]))]
                 if len(providers)==1: selected=[providers[0]['id']]
                 else:
@@ -152,7 +216,12 @@ class Deployment:
         return {'state':self.state,'reason':self.reason,'modules':rows}
 
     async def require_ready(self, kind, reference):
-        await self.require_tasks_ready(self.tasks_for(kind,reference))
+        tasks=self.tasks_for(kind,reference)
+        await self.require_tasks_ready(tasks)
+        for module in self.plan_tasks(tasks)['modules']:
+            if module.get('oneshot'):continue
+            health=await self.probe(module)
+            if not health['ready']:fail('$.modules','module_unhealthy',module['name']+' · '+'、'.join(health['missing']))
 
     async def require_tasks_ready(self, tasks):
         if self.stopping:fail('$.modules','deployment_stopping','子系统正在停止，请重新准备后再运行')
@@ -164,6 +233,7 @@ class Deployment:
                 fail('$.modules','modules_not_prepared','请先在运行台准备当前流程所需子系统')
             if not module.get('oneshot') and not (await self.manager.status(module['id'],RuntimeDescriptor(**record['descriptor'])))['running']:
                 fail('$.modules','module_not_running','启动模块已退出：'+module['name'])
+
 
     def descriptor(self, module, config):
         directory = self.root / self.ros._robot(); directory.mkdir(exist_ok=True)
@@ -233,14 +303,13 @@ class Deployment:
                         if not measured['running']:
                             process=self.manager.processes.get(identity)
                             if module.get('oneshot') and process and process.returncode==0:
-                                await self.manager.stop(identity,descriptor); break
+                                await self.manager.stop(identity,descriptor); ready={'ready':True,'missing':[],'level':'oneshot'}; break
                             raise RuntimeError(module['name']+' 已退出，请查看启动日志')
-                        endpoints=module.get('provides',[])
-                        ready=(await asyncio.to_thread(self.ros.environments.call,config,{'op':'ready','endpoints':endpoints,'domain_id':self.ros.connection()['domain_id']})) if endpoints else {'ready':not module.get('oneshot')}
+                        ready=await self.probe(module, config)
                         if ready['ready']:break
                         if asyncio.get_running_loop().time()>=deadline:raise RuntimeError(module['name']+' 等待接口就绪超时')
                         await asyncio.sleep(.2)
-                    row=self.store.get('deployment_module',identity);self.store.put('deployment_module',identity,{**row,'state':'READY'})
+                    row=self.store.get('deployment_module',identity);self.store.put('deployment_module',identity,{**row,'state':'READY','health':ready})
                 self.state='READY'
                 if self.monitor is None or self.monitor.done():self.monitor=asyncio.create_task(self.watch())
                 return {**plan,**await self.status()}
@@ -252,12 +321,35 @@ class Deployment:
                 if not self.has_processes():await asyncio.to_thread(self.ros.environments.close_computers)
                 raise
 
+    async def probe(self, module, config=None):
+        if not module.get('provides') and not module.get('health_checks'):
+            return {'ready':not module.get('oneshot'), 'missing':[], 'level':'process'}
+        config = config or self.ros.environments.snapshot(workspace_id=module['workspace_id'])
+        return await asyncio.to_thread(self.ros.environments.call, config, {'op':'ready',
+            'endpoints':module.get('provides',[]), 'health_checks':module.get('health_checks',[]),
+            'domain_id':self.ros.connection()['domain_id']})
+
     async def watch(self):
+        deadlines = {}
         while self.state=='READY' and not self.stopping:
+            modules = {v['id']:v for v in self.modules()}
             for record in self.store.list('deployment_module'):
-                if record['id'] not in self.manager.identities:continue
-                if not (await self.manager.status(record['id'],RuntimeDescriptor(**record['descriptor'])))['running']:
-                    self.state='FAILED';self.reason=record['name']+' 意外退出，运行已请求停止'
+                identity = record['id']
+                if identity not in self.manager.identities or identity not in modules:continue
+                try:
+                    if not (await self.manager.status(identity,RuntimeDescriptor(**record['descriptor'])))['running']:
+                        raise RuntimeError('模块进程已退出')
+                    now=asyncio.get_running_loop().time()
+                    if now < deadlines.get(identity,0):continue
+                    module=modules[identity]
+                    health=await self.probe(module)
+                    if self.stopping or self.state!='READY':return
+                    deadlines[identity]=now+module.get('health_interval_s',5)
+                    self.store.put('deployment_module',identity,{**record,'health':health})
+                    if not health['ready']:raise RuntimeError('健康条件失效：'+'、'.join(health['missing']))
+                except Exception as error:
+                    self.state='FAILED';self.reason=record['name']+' · '+str(error)
+                    self.store.put('deployment_module',identity,{**record,'state':'FAILED','health':{'ready':False,'reason':str(error)}})
                     if self.hsm.running():self.hsm.request_stop()
                     await self.robots.context.tasks.stop_all()
                     return

@@ -61,28 +61,18 @@ def main():
         from module_worker import inspect
         emit('result', inspect(request['module']))
         return
+    if op == 'compute_probe':
+        if request.get('entrypoint'):
+            import importlib
+            module,function=request['entrypoint'].split(':')
+            if not callable(getattr(importlib.import_module(module),function)):raise ValueError('计算入口不可调用')
+        elif request.get('operation') in ('transform_targets','bounded_pose_step'):
+            import numpy
+        emit('result', {'ready':True})
+        return
     if op == 'ready':
-        import rclpy
-        context = rclpy.context.Context()
-        rclpy.init(context=context, domain_id=request.get('domain_id') or 0)
-        node = rclpy.create_node('atil_readiness', context=context)
-        try:
-            import time
-            deadline = time.monotonic() + 2
-            while time.monotonic() < deadline:
-                rclpy.spin_once(node, timeout_sec=.1)
-            services = dict(node.get_service_names_and_types())
-            topics = dict(node.get_topic_names_and_types())
-            missing = []
-            for endpoint in request.get('endpoints', []):
-                kind, name = endpoint['kind'], endpoint['name']
-                actual = topics.get(name, []) if kind == 'topic' else services.get(name + '/_action/send_goal' if kind == 'action' else name, [])
-                wanted = endpoint.get('type')
-                if kind == 'action' and wanted: wanted += '_SendGoal'
-                if not actual or wanted and wanted not in actual: missing.append(name)
-            emit('result', {'ready':not missing, 'missing':missing})
-        finally:
-            node.destroy_node(); rclpy.shutdown(context=context)
+        from module_health import probe
+        emit('result', probe(request))
         return
     if op in ('probe', 'verify'):
         import rclpy

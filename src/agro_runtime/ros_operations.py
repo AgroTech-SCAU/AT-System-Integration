@@ -3,6 +3,7 @@ import asyncio
 import copy
 import hashlib
 import json
+from pathlib import Path
 import threading
 from uuid import uuid4
 
@@ -33,10 +34,11 @@ class RosOperations:
                 context.engine.control.resources.restore([(record['id'],record['definition'].get('resources', []))])
 
     def snapshot(self, identity):
-        return copy.deepcopy(self.store.get('ros_operation', identity)['snapshot'])
+        record=self.store.get('ros_operation', identity)
+        return {**copy.deepcopy(record['snapshot']), 'previous_session':record.get('executor_session') != self.ros_tasks.environments.session_id}
 
     def operations(self, task_id):
-        return [{**r['snapshot'], 'task_run_id':task_id, 'node_id':r['node_id'],
+        return [{**self.snapshot(r['id']), 'task_run_id':task_id, 'node_id':r['node_id'],
                  'capability_id':'ros.'+r['ros_task_id'], 'input':r['input'], 'parameters':{}}
                 for r in self.store.list('ros_operation') if r['task_run_id']==task_id]
 
@@ -110,7 +112,7 @@ class RosOperations:
                 self._update(identity,state='CANCELED',stop_state='NOT_APPLICABLE')
                 return
             dispatched = True
-            execution = asyncio.create_task(self.ros_tasks.run(definition['id'],stop,feedback,definition=definition,inputs=inputs))
+            execution = asyncio.create_task(self.ros_tasks.run(definition['id'],stop,feedback,definition={**definition,'_operation_id':identity},inputs=inputs))
             while not execution.done():
                 try:
                     control.validate_control(token,resources)
@@ -145,16 +147,35 @@ class RosOperations:
             return self._update(identity,state='CANCELING',cancel_requested=True,cancel_accepted=True)
         return snapshot
 
-    async def confirm_stop(self, identity):
+    async def confirm_stop(self, identity, evidence=None):
         record = self.store.get('ros_operation', identity)
         definition = record['definition']
         if definition.get('robot_system_id') != self.ros_tasks._robot():
             fail('$.operation','ownership','操作不属于当前机器人')
         if record['snapshot']['state'] in ACTIVE or record['snapshot']['stop_state'] != 'UNCONFIRMED':
             fail('$.operation','invalid_state','仅可核对停止未确认的操作')
-        if record.get('executor_session') != self.ros_tasks.environments.session_id:
-            fail('$.operation','executor_session_changed','执行会话已改变，需先核对先前进程与设备，不能直接解除原资源占用')
+        evidence = evidence or {}
+        previous_session = record.get('executor_session') != self.ros_tasks.environments.session_id
         service = definition.get('stop_recovery_service')
+        if previous_session:
+            if evidence.get('previous_executor_stopped') is not True or not isinstance(evidence.get('note'),str) or not 4 <= len(evidence['note'].strip()) <= 1000:
+                fail('$.evidence','review_required','请核对旧执行进程与设备，并填写核对依据')
+            stopped = self.ros_tasks.environments.previous_worker_stopped(identity)
+            if stopped is False:
+                fail('$.operation','previous_executor_alive','旧通信进程组仍然存活，请先停止旧执行进程')
+            from .runtime import LocalProcessManager
+            task_ids=[record['task_run_id']]
+            if record['task_run_id'].startswith('session_'):
+                session=self.store.get('hsm_session',record['task_run_id'])
+                task_ids=[v.get('task_run_id') for v in session.get('behaviors',[]) if v.get('task_run_id')]
+            for task_id in task_ids:
+                saved=self.tasks.store.status(task_id).get('process_identity') or {}
+                process=saved.get('identity') or {}
+                if process.get('boot')==Path('/proc/sys/kernel/random/boot_id').read_text().strip() and LocalProcessManager._group_alive(process.get('group',saved.get('pid',0))):
+                    fail('$.operation','previous_executor_alive','旧行为树进程组仍然存活，请先停止旧执行进程')
+            service = evidence.get('service') or service
+            if not isinstance(service,str) or not __import__('re').fullmatch(r'/[A-Za-z_][A-Za-z0-9_/]*',service):
+                fail('$.service','recovery_service_required','跨会话恢复需要能确认没有活动目标且设备已停止的核对服务')
         observation = definition.get('stop_observation')
         if not service and not observation:
             fail('$.operation','missing_recovery_service','任务未配置设备停止确认服务')
@@ -166,26 +187,27 @@ class RosOperations:
         config = definition.get('_execution_environment') or self.ros_tasks.environments.snapshot(definition)
         task = {'kind':'service','interface':service,'ros_type':'std_srvs/srv/Trigger','payload':{},'timeout_s':5,
                 '_ros_domain':definition.get('_ros_domain',self.ros_tasks.connection()['domain_id'])}
-        if observation:
+        if observation and not previous_session:
             if not record['snapshot'].get('terminal_received'):
                 fail('$.operation','terminal_unconfirmed','尚未收到动作终态，仅有静止反馈不能证明目标已经结束')
             result=await asyncio.to_thread(self.ros_tasks.environments.compute,config,{'operation':'wait_stationary','payload':observation,'timeout_s':observation.get('timeout_s',5),'_ros_domain':task['_ros_domain']},threading.Event())
         else:
             result = await asyncio.to_thread(self.ros_tasks.environments.call,config,{'op':'run','task':task},threading.Event())
-        if result.get('state') != 'SUCCEEDED' or not observation and result.get('response',{}).get('success') is not True:
+        if result.get('state') != 'SUCCEEDED' or (previous_session or not observation) and result.get('response',{}).get('success') is not True:
             fail('$.operation','stop_unconfirmed',result.get('response',{}).get('message') or '设备尚未确认停止，资源占用继续保留')
-        snapshot = self._update(identity,state='FAILED',stop_state='CONFIRMED',error={'code':'stop_recovered','reason':'设备已确认停止，可重新发起任务','retryable':False})
+        snapshot = self._update(identity,state='FAILED',stop_state='CONFIRMED',recovery={'previous_session':previous_session,'note':evidence.get('note',''),'service':service,'response':result.get('response',{})},error={'code':'stop_recovered','reason':'设备已确认停止，可重新发起任务','retryable':False})
         resources = [parse(ResourceRequirement,r) for r in definition.get('resources',[])]
         self.context.engine.control.resources.settle(identity,resources,StopState.CONFIRMED)
         task_id = record['task_run_id']
         if task_id.startswith('session_'):
+            self._settle_recovered_sessions(task_id, definition['robot_system_id'])
             return snapshot
         status = self.tasks.store.status(task_id)
         process = self.tasks.processes.get(task_id)
         operations = self.tasks._operations(task_id)
         if (status['state'] == 'UNKNOWN' and operations and (process is None or process.returncode is not None)
                 and all(o['state'] not in ACTIVE and o['stop_state'] in ('CONFIRMED','NOT_APPLICABLE') for o in operations)
-                and (status.get('error') or {}).get('code') not in ('restart_requires_review','task_monitor_failed')):
+                and ((status.get('error') or {}).get('code') not in ('restart_requires_review','task_monitor_failed') or previous_session)):
             status.update(state='FAILED', stop_confirmed=True, error={'code':'stop_recovered','reason':'设备已确认停止，原任务未成功完成'})
             if status.get('business_result'):
                 status['business_result']['outcome']='failed'
@@ -195,7 +217,28 @@ class RosOperations:
             if (not self.tasks.store.snapshot(task_id).get('shared_control') and control.mode == RobotMode.AUTO
                     and not control.resources.unavailable and not any(item['state'] in ACTIVE for item in self.tasks.store.list())):
                 control.set_mode(RobotMode.STANDBY)
+        self._settle_recovered_sessions(task_id, definition['robot_system_id'])
         return snapshot
+
+    def _settle_recovered_sessions(self, task_id, robot):
+        for session in self.store.list('hsm_session'):
+            if session.get('robot_system_id',robot)!=robot or session['status']!='UNKNOWN':continue
+            behaviors=session.get('behaviors',[])
+            if session['id']!=task_id and not any(v.get('task_run_id')==task_id for v in behaviors):continue
+            operations=self.operations(session['id'])
+            if any(o['state'] in ACTIVE|{'UNKNOWN'} or o['stop_state'] not in ('CONFIRMED','NOT_APPLICABLE') for o in operations):continue
+            ready=True
+            for behavior in behaviors:
+                child=behavior.get('task_run_id')
+                if child:
+                    status=self.tasks.store.status(child)
+                    if status['state'] in ACTIVE|{'UNKNOWN'} or not status.get('stop_confirmed'):ready=False
+                elif behavior.get('operation_id'):
+                    status=self.snapshot(behavior['operation_id'])
+                    if status['state'] in ACTIVE|{'UNKNOWN'} or status['stop_state'] not in ('CONFIRMED','NOT_APPLICABLE'):ready=False
+                elif behavior.get('status') in ACTIVE|{'UNKNOWN'}:ready=False
+            if ready:
+                self.store.put('hsm_session',session['id'],{**session,'status':'FAILED','error':'已核对设备停止，原流程未完成','attention':[]})
 
     async def close(self):
         self._closed = True
