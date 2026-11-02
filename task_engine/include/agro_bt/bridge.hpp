@@ -94,6 +94,7 @@ class Executor {
   bool instance_ids_;
   uint64_t event_sequence_ = 0;
   Json events_ = Json::array();
+  Json output_contracts_ = Json::object(), output_ = Json::object();
   std::vector<BT::TreeNode::StatusChangeSubscriber> subscriptions_;
 
 public:

@@ -86,9 +86,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     from .robot_profiles import RobotProfiles
     profiles = RobotProfiles(store)
     profiles.restore()
-    if robot_profile:
-        selected_profile=profiles.open(robot_profile)
-        store.put('robot_selection','current',{'id':'current','system_id':selected_profile['id']})
+    selected_profile = profiles.open(robot_profile) if robot_profile else None
     configuration = ConfigurationService(runtime, store)
     TaskManager(runtime.current, executable=task_engine, endpoint=endpoint, session_secret=session_secret)
     class CurrentTasks:
@@ -129,19 +127,40 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     @asynccontextmanager
     async def lifespan(app):
-        yield
-        if tutorial is not None:
-            await tutorial.close()
-        for task in jobs.values():
-            if task and not task.done():
-                await task
-        await hsm.close()
-        await tasks.stop_all()
-        await deployment.stop()
-        await ros_operations.close()
-        await asyncio.to_thread(ros_tasks.close)
-        await runtime.aclose()
-        store.db.close()
+        try:
+            if selected_profile:
+                same_selection = robot_systems.selected_id() == selected_profile['id']
+                if selected_profile.get('configured'):
+                    if not same_selection or not robot_systems.active(selected_profile):
+                        await robot_systems.activate(selected_profile['id'], lambda phase: None)
+                elif not same_selection:
+                    robot_systems.choose_blank(selected_profile['id'])
+        except BaseException:
+            # No device has been started by startup configuration; release local
+            # handles without marking a recovering runtime or its history stopped
+            await ros_operations.close()
+            await asyncio.to_thread(ros_tasks.close)
+            await tasks.close()
+            await runtime.engine.aclose()
+            runtime.records.close()
+            runtime._owner.close()
+            store.db.close()
+            raise
+        try:
+            yield
+        finally:
+            if tutorial is not None:
+                await tutorial.close()
+            for task in jobs.values():
+                if task and not task.done():
+                    await task
+            await hsm.close()
+            await tasks.stop_all()
+            await deployment.stop()
+            await ros_operations.close()
+            await asyncio.to_thread(ros_tasks.close)
+            await runtime.aclose()
+            store.db.close()
 
     app = FastAPI(title='Agro runtime management',
                   lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)

@@ -16,6 +16,10 @@ from .errors import fail
 WORKER = Path(__file__).with_name('ros_worker.py')
 
 
+def _executable_file(path):
+    return Path(path).is_file() and os.access(path, os.X_OK)
+
+
 class WorkspaceEnvironments:
     def __init__(self, store, robots):
         self.store, self.robots = store, robots
@@ -73,15 +77,15 @@ class WorkspaceEnvironments:
         candidates = []
         if root:
             for path in (root / '.venv/bin/python', root / 'venv/bin/python', root / '.install/venv/bin/python'):
-                if path.is_file(): candidates.append(str(path))
-        if Path('/usr/bin/python3').is_file(): candidates.append('/usr/bin/python3')
+                if _executable_file(path): candidates.append(str(path))
+        if _executable_file('/usr/bin/python3'): candidates.append('/usr/bin/python3')
         for value in [(report or {}).get('python'), (active or {}).get('python')]:
-            if value and os.access(value, os.X_OK) and value not in candidates:
+            if value and _executable_file(value) and value not in candidates:
                 candidates.insert(0, value)
         loaded = False
         if active:
             try:
-                loaded = active.get('signature') == self.signature(active)
+                loaded = _executable_file(active['python']) and active.get('signature') == self.signature(active)
             except OSError:
                 pass
         return {'workspace_id': workspace_id, 'setup': next(iter(setup_candidates), ''),
@@ -103,7 +107,7 @@ class WorkspaceEnvironments:
         if not path.is_file():
             fail('$.setup', 'invalid_setup', '安装环境文件不存在，请选择已构建工作区的 setup.bash')
         python = python or (state['report'] or {}).get('python') or next(iter(state['candidates']), '')
-        if not isinstance(python, str) or not Path(python).is_absolute() or not os.access(python, os.X_OK):
+        if not isinstance(python, str) or not Path(python).is_absolute() or not _executable_file(python):
             fail('$.python', 'invalid_python', '请选择可执行的 Python 绝对路径')
         from .interface_sources import InterfaceWorkspaces
         workspace = InterfaceWorkspaces(self.store, self._robot()).get(workspace_id)
@@ -184,6 +188,8 @@ class WorkspaceEnvironments:
         config = self.active(workspace_id)
         if not config:
             fail('$.environment', 'environment_not_loaded', '请在子系统工作区中加载执行环境，接口定义仍可离线编辑')
+        if not _executable_file(config['python']):
+            fail('$.python', 'invalid_python', '请选择可执行的 Python 绝对路径')
         if not Path(config['setup']).is_file() or config.get('signature') != self.signature(config):
             fail('$.environment', 'environment_changed', '工作区执行环境已变化，请重新检查并加载')
         return copy.deepcopy(config)

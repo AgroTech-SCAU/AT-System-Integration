@@ -3,11 +3,13 @@ import os
 import sqlite3
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from agro_runtime.configuration import WorkspaceStore
 from agro_runtime.errors import ContractValidationError
+from agro_runtime.execution_environments import WorkspaceEnvironments
 from agro_runtime.ros_interfaces import InterfaceLibrary, _identity
 
 
@@ -111,6 +113,108 @@ class OfflineInterfaces(unittest.TestCase):
         self.assertEqual(self.library.describe('subscribe_wait','std_msgs/msg/String')['source'],'cached')
         with self.assertRaises(ContractValidationError):
             self.library.describe('service','std_msgs/msg/String')
+
+
+class WorkspaceEnvironmentFiles(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.root = Path(self.directory.name)
+        self.store = WorkspaceStore(self.directory.name)
+        self.store.put('interface_workspace', 'subsystem', {
+            'id':'subsystem', 'project_id':'robot', 'name':'Subsystem', 'path':str(self.root),
+            'mode':'source', 'definitions':{}, 'diagnostics':[],
+        })
+        self.setup = self.root / 'install/setup.bash'
+        self.setup.parent.mkdir()
+        self.setup.write_text('# Offline environment\n')
+        self.environments = WorkspaceEnvironments(self.store, SimpleNamespace(selected_id=lambda:'robot'))
+        self.no_worker = patch.object(self.environments, 'call', side_effect=AssertionError('worker must not start'))
+        self.no_worker.start()
+
+    def tearDown(self):
+        self.no_worker.stop()
+        self.store.db.close()
+        self.directory.cleanup()
+
+    def save_environment(self, python):
+        config = {'id':'subsystem', 'workspace_id':'subsystem', 'robot_system_id':'robot', 'name':'Subsystem',
+                  'setup':str(self.setup), 'python':str(python)}
+        config['signature'] = self.environments.signature(config)
+        self.store.put('execution_environment', 'subsystem', config)
+        self.store.put('environment_report', 'subsystem', {
+            'id':'subsystem', 'ready':True, 'setup':config['setup'], 'python':config['python'],
+        })
+        return config
+
+    def test_valid_interpreter_remains_loaded_without_starting_a_worker(self):
+        python = self.root / 'python'
+        python.write_text('#!/bin/sh\nexit 0\n')
+        python.chmod(0o700)
+        config = self.save_environment(python)
+        self.assertTrue(self.environments.status('subsystem')['loaded'])
+        self.assertEqual(self.environments.snapshot(workspace_id='subsystem'), config)
+        self.assertEqual(self.environments._configuration('subsystem', '')['python'], str(python))
+
+    def test_invalid_interpreters_block_saved_environment_and_runtime_preparation(self):
+        from agro_runtime.deployment import Deployment
+        for invalid in ('missing', 'nonexecutable', 'directory'):
+            with self.subTest(invalid=invalid):
+                python = self.root / invalid
+                python.write_text('#!/bin/sh\nexit 0\n')
+                python.chmod(0o700)
+                self.save_environment(python)
+                if invalid == 'nonexecutable':
+                    python.chmod(0o600)
+                else:
+                    python.unlink()
+                    if invalid == 'directory': python.mkdir()
+                state = self.environments.status('subsystem')
+                self.assertFalse(state['loaded'])
+                self.assertNotIn(str(python), state['candidates'])
+                for action in (lambda:self.environments.snapshot(workspace_id='subsystem'),
+                               lambda:self.environments._configuration('subsystem', str(python)),
+                               lambda:self.environments._configuration('subsystem', '')):
+                    with self.assertRaises(ContractValidationError) as error: action()
+                    self.assertEqual(error.exception.issues[0].code, 'invalid_python')
+                deployment = object.__new__(Deployment)
+                deployment.store = self.store
+                deployment.ros = SimpleNamespace(environments=self.environments, _robot=lambda:'robot')
+                deployment.preflight = Mock()
+                deployment.tasks_for = Mock(return_value=[])
+                deployment.plan_tasks = Mock(return_value={'tasks':[], 'modules':[{'workspace_id':'subsystem'}], 'issues':[]})
+                readiness = deployment.readiness('task', 'offline_task')
+                self.assertFalse(readiness['prepare_ready'])
+                issue = readiness['execution_issues'][0]
+                self.assertEqual(issue['code'], 'invalid_python')
+                self.assertEqual(issue['target'], {'page':'overview', 'workspaceId':'subsystem',
+                                                  'section':'environment', 'field':'python'})
+
+    def test_discovered_candidates_are_executable_files(self):
+        invalid_file = self.root / '.venv/bin/python'
+        invalid_file.parent.mkdir(parents=True)
+        invalid_file.write_text('#!/bin/sh\n')
+        invalid_file.chmod(0o600)
+        directory = self.root / 'venv/bin/python'
+        directory.mkdir(parents=True)
+        valid = self.root / '.install/venv/bin/python'
+        valid.parent.mkdir(parents=True)
+        valid.write_text('#!/bin/sh\n')
+        valid.chmod(0o700)
+        candidates = self.environments.status('subsystem')['candidates']
+        self.assertIn(str(valid), candidates)
+        self.assertNotIn(str(invalid_file), candidates)
+        self.assertNotIn(str(directory), candidates)
+
+    def test_setup_changes_still_invalidate_a_valid_interpreter(self):
+        python = self.root / 'python'
+        python.write_text('#!/bin/sh\n')
+        python.chmod(0o700)
+        self.save_environment(python)
+        self.setup.write_text('# Changed environment\n')
+        self.assertFalse(self.environments.status('subsystem')['loaded'])
+        with self.assertRaises(ContractValidationError) as error:
+            self.environments.snapshot(workspace_id='subsystem')
+        self.assertEqual(error.exception.issues[0].code, 'environment_changed')
 
 
 if __name__ == '__main__':

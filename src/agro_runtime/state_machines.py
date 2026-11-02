@@ -453,9 +453,7 @@ class StateMachines:
                         if not state.get('stop_confirmed') or state['state'] == 'UNKNOWN':
                             fail('$.task', 'stop_unconfirmed', '行为结束但设备停止未确认，请核对设备状态')
                         if state['state'] == 'SUCCEEDED' and self._current_instance(instance):
-                            for operation in state.get('operations', []):
-                                if operation['state'] == 'SUCCEEDED' and operation.get('result'):
-                                    self._outputs(operation['result'].get('output', {}), state_id, stage)
+                            self._outputs(state.get('output', {}), state_id, stage)
                         result = state['state']
                         break
                     if instance['stop'].is_set() or self._stop_requested:

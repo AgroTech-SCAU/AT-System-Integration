@@ -1,6 +1,7 @@
 #include "agro_bt/bridge.hpp"
 #include <atomic>
 #include <behaviortree_cpp/xml_parsing.h>
+#include <tinyxml2/tinyxml2.h>
 #include <cmath>
 #include <regex>
 #include <set>
@@ -576,6 +577,32 @@ void Executor::load_xml(const std::string &xml, const Json &initial) {
   }
   tree_ =
       std::make_unique<BT::Tree>(factory_.createTreeFromText(xml, blackboard));
+  output_contracts_ = Json::object();
+  output_ = Json::object();
+  // Root outputs are named in the root blackboard scope; SubTree remapping
+  // has already linked nested producers to these entries.
+  tinyxml2::XMLDocument document;
+  require(document.Parse(xml.c_str()) == tinyxml2::XML_SUCCESS, "invalid_xml");
+  auto models = document.RootElement()->FirstChildElement("TreeNodesModel");
+  if (models)
+    for (auto model = models->FirstChildElement("SubTree"); model;
+         model = model->NextSiblingElement("SubTree")) {
+      const char *id = model->Attribute("ID");
+      if (!id || tree_->subtrees.front()->tree_ID != id)
+        continue;
+      for (auto output = model->FirstChildElement("output_port"); output;
+           output = output->NextSiblingElement("output_port")) {
+        const char *name = output->Attribute("name");
+        require(name && *name, "output_name_missing");
+        Json spec = {{"type", output->Attribute("type") ? output->Attribute("type") : "string"}};
+        if (const char *metadata = output->GetText()) {
+          auto parsed = Json::parse(metadata, nullptr, false);
+          if (parsed.is_object() && parsed.contains("agro_contract"))
+            spec = parsed.at("agro_contract");
+        }
+        output_contracts_[name] = std::move(spec);
+      }
+    }
   std::set<const void *> producers;
   for (const auto &subtree : tree_->subtrees)
     for (const auto &node : subtree->nodes)
@@ -685,6 +712,19 @@ BT::NodeStatus Executor::tick() {
     return status_;
   }
   status_ = tree_->tickExactlyOnce();
+  if (status_ == BT::NodeStatus::SUCCESS) {
+    BT::NodeConfig config;
+    config.blackboard = tree_->rootBlackboard();
+    for (auto item = output_contracts_.begin(); item != output_contracts_.end(); ++item)
+      config.input_ports[item.key()] = "{" + item.key() + "}";
+    BT::SimpleActionNode boundary("root_outputs", [](BT::TreeNode &) {
+      return BT::NodeStatus::SUCCESS;
+    }, config);
+    Json output = Json::object();
+    for (auto item = output_contracts_.begin(); item != output_contracts_.end(); ++item)
+      output[item.key()] = read_port(boundary, item.key(), item.value());
+    output_ = std::move(output);
+  }
   return status_;
 }
 void Executor::halt() {
@@ -711,6 +751,7 @@ Json Executor::report() const {
           {"stop_confirmed", broker_->settled()},
           {"nodes", nodes},
           {"event_sequence", event_sequence_}, {"node_events", events_},
+          {"output", status_ == BT::NodeStatus::SUCCESS ? output_ : Json::object()},
           {"operations", broker_->report()}};
 }
 std::string Executor::models() const {

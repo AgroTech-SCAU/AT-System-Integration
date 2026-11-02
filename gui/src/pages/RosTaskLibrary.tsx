@@ -85,6 +85,7 @@ export default function RosTaskLibrary({client,requestedTask,requestKey,contextL
  const [fields,setFields]=useState<Record<string,string>|null>(null),[formMode,setFormMode]=useState(true),[detail,setDetail]=useState<'message'|'ports'>('message')
  const payloadRef=useRef(payload),currentRef=useRef(current),providerWorkspace=useRef<string|undefined>(undefined);payloadRef.current=payload;currentRef.current=current
  const leavingForConfig=useRef(false),restoredDraft=useRef(false)
+ const [draftReady,setDraftReady]=useState(false)
  const [pendingSeed,setPendingSeed]=useState<ReturnType<typeof readTaskSeed>>(null)
  const seededRequest=useRef<number|undefined>(undefined)
  const draftKey='atil.task.config-return.'+(robotId||'current')
@@ -103,8 +104,9 @@ export default function RosTaskLibrary({client,requestedTask,requestKey,contextL
  function apply(item:RosTask){providerWorkspace.current=undefined;setSettingsOpen(!item.id);setProviderOpen(false);setPortSections({inputs:false,outputs:false});setMessageOpen(false);setConcurrencyOpen(false);generation.current++;workspaceChanged.current=false;endpointEdited.current=false;bindingSchema.current=item.schema_id;setPreviousInterface('');setSchemaEpoch(epoch=>epoch+1);setCurrent(structuredClone(item));setPayload(pretty(item.payload));setStopPayload(pretty(item.stop_payload));setConditionValue(item.condition?.value===undefined?'':typeof item.condition.value==='string'?item.condition.value:JSON.stringify(item.condition.value));setInputRows(portRows(item,'inputs'));setOutputRows(portRows(item,'outputs'));setDirty(false);setFields(null);setSchemaFields(null);setSchemaSource('');setNotice('');setError(null);setFormMode(true)}
  useEffect(()=>{
    const raw=sessionStorage.getItem(draftKey)
-   if(!raw)return
+   if(!raw){setDraftReady(true);return}
    try{const saved=JSON.parse(raw);apply(saved.current);setPayload(saved.payload);setStopPayload(saved.stopPayload);setConditionValue(saved.conditionValue);setInputRows(saved.inputRows);setOutputRows(saved.outputRows);setDirty(saved.dirty);endpointEdited.current=!!saved.dirty;setDetail(saved.detail||'message');setPreviousInterface(saved.previousInterface||'');restoredDraft.current=true;sessionStorage.removeItem(draftKey)}catch{sessionStorage.removeItem(draftKey)}
+   setDraftReady(true)
  },[client,draftKey])
  function collectTaskSeed(){
   if(root.current?.closest('[hidden]'))return
@@ -143,6 +145,7 @@ export default function RosTaskLibrary({client,requestedTask,requestKey,contextL
   return()=>controller.abort()
  },[current.kind,current.ros_type,current.id,effectiveSchemaId,robotId,schemaEpoch])
  const discard=async()=>!dirty||await unsavedDialog(current.name,async()=>Boolean(await saveRef.current()),()=>apply(items.find(item=>item.id===current.id)||fresh(t)))
+ const discardRef=useRef(discard);discardRef.current=discard
  useEffect(()=>{
   if(!pendingSeed)return
   let stopped=false
@@ -160,7 +163,7 @@ export default function RosTaskLibrary({client,requestedTask,requestKey,contextL
  },[pendingSeed,client,robotId])
  async function choose(item:RosTask){if(item.id===current.id)return;if(!busy&&await discard())apply(item)}
  async function reset(){if(!busy&&await discard()){apply(fresh(t));setDirty(true)}}
- useEffect(()=>{if(requestKey===undefined||seededRequest.current===requestKey||pendingSeed||readTaskSeed(robotId,root.current?.closest('.studio-workspace')?'editor':'system'))return;if(restoredDraft.current){restoredDraft.current=false;revealTaskSection(requestedSection,requestedField);return}let stopped=false;void (async()=>{if(!await discard()){onCancelOpen?.();return}const all=await load();if(stopped)return;const found=requestedTask?all.find(item=>item.id===requestedTask.replace(/^ros:/,'')):undefined;if(requestedTask&&!found){setError(new ApiError('response',[{path:'$.task',code:'not_found',reason:t("绑定的任务已不存在，请重新选择")}]));return}apply(found||{...fresh(t),name:contextLabel?.slice(0,80)||fresh(t).name});revealTaskSection(requestedSection,requestedField)})().catch(setError);return()=>{stopped=true}},[requestKey,client,pendingSeed?.raw])
+ useEffect(()=>{if(!draftReady||requestKey===undefined||seededRequest.current===requestKey||pendingSeed||readTaskSeed(robotId,root.current?.closest('.studio-workspace')?'editor':'system'))return;const sameTask=requestedTask?current.id===requestedTask.replace(/^ros:/,''):restoredDraft.current;restoredDraft.current=false;if(sameTask){revealTaskSection(requestedSection,requestedField);return}let stopped=false;void (async()=>{if(!await discard()){onCancelOpen?.();return}const all=await load();if(stopped)return;const found=requestedTask?all.find(item=>item.id===requestedTask.replace(/^ros:/,'')):undefined;if(requestedTask&&!found){setError(new ApiError('response',[{path:'$.task',code:'not_found',reason:t("绑定的任务已不存在，请重新选择")}]));return}apply(found||{...fresh(t),name:contextLabel?.slice(0,80)||fresh(t).name});revealTaskSection(requestedSection,requestedField)})().catch(setError);return()=>{stopped=true}},[draftReady,requestKey,client,pendingSeed?.raw])
  useEffect(()=>{
  const visible=()=>Boolean(root.current&&!root.current.closest('[hidden]'))
  const leave=(event:Event)=>{if(leavingForConfig.current&&event.type==='agro:navigate')return;if(dirty&&(event.type==='agro:navigate'||visible()))deferNavigation(event,discard)}
@@ -226,10 +229,11 @@ export default function RosTaskLibrary({client,requestedTask,requestKey,contextL
  }
  useEffect(()=>{if(requestedSection)revealTaskSection(requestedSection,requestedField)},[requestedSection,requestedField])
  useEffect(()=>{
-  if(root.current?.closest('.studio-workspace'))return
+  if(!draftReady||root.current?.closest('.studio-workspace'))return
   let active=true
   const consume=()=>{const location=takeStudioLocation(robotId,'system');if(!location)return;if(readTaskSeed(robotId,'system')){collectTaskSeed();return}void (async()=>{
    if(location.taskId&&currentRef.current.id!==location.taskId.replace(/^ros:/,'')){
+    if(!await discardRef.current()||!active)return
     const all=await load();if(!active)return
     const found=all.find(item=>item.id===location.taskId!.replace(/^ros:/,''))
     if(!found){setError(new ApiError('response',[{path:'$.task',code:'not_found',reason:t('绑定的任务已不存在，请重新选择')}]));return}
@@ -240,7 +244,7 @@ export default function RosTaskLibrary({client,requestedTask,requestKey,contextL
   const receive=(event:Event)=>{const location=(event as CustomEvent<StudioLocation>).detail;if(location?.page==='system'&&(!location.robotId||location.robotId===robotId))consume()}
   consume();window.addEventListener('agro:studio:located',receive)
   return()=>{active=false;window.removeEventListener('agro:studio:located',receive)}
- },[client,robotId])
+ },[draftReady,client,robotId])
  async function configureWorkspace(workspaceId?:string,section='interfaces'){
   if(!onNavigate)return
   try{

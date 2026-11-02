@@ -278,11 +278,15 @@ void Broker::work() {
             it.key() != "stop_state" && it.key() != "feedback" &&
             it.key() != "result" && it.key() != "error" &&
             it.key() != "cancel_requested" && it.key() != "cancel_accepted" &&
+            it.key() != "previous_session" && it.key() != "terminal_received" &&
             it.key() != "extensions")
           throw std::runtime_error("unknown_snapshot_field");
       for (const auto key : {"cancel_requested", "cancel_accepted"})
         if (result.contains(key) && !result[key].is_boolean())
           throw std::runtime_error("invalid_cancel_flag");
+      for (const auto key : {"previous_session", "terminal_received"})
+        if (result.contains(key) && !result[key].is_boolean())
+          throw std::runtime_error("invalid_snapshot_flag");
       if (result.value("cancel_accepted", false) &&
           !result.value("cancel_requested", false))
         throw std::runtime_error("invalid_cancel_state");

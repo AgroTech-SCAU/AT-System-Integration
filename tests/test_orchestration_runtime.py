@@ -314,6 +314,68 @@ class Orchestration(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ContractValidationError):
             await manager.start(definition,{},token,task_id='session_test',node_id='node_third',request_id='third')
 
+    async def test_nested_tree_boundary_output_reaches_state_variable_and_next_task(self):
+        self.ros.environments.snapshot=Mock(return_value={})
+        self.ros.environments.call=Mock(return_value={})
+        compute={'kind':'compute','operation':'copy_fields','ros_type':'','interface':''}
+        self.ros.save({**task('source',outputs={'result':{'type':'json'}},output_bindings={'result':'result'}),**compute})
+        self.ros.save({**task('sink',inputs={'pose':{'type':'json'}},input_bindings={'goal':'pose'}),**compute})
+        payload={'position':{'x':1.25},'frame_id':'map'}
+        async def run(identity,stop,feedback=None,*,definition=None,inputs=None):
+            self.calls.append((identity,definition,copy.deepcopy(inputs)))
+            return {'state':'SUCCEEDED','response':{},'output':{'result':payload} if identity=='source' else {}}
+        self.ros.run=run
+        xml='''<root BTCPP_format="4" main_tree_to_execute="Main">
+          <BehaviorTree ID="Main"><SubTree ID="Branch" branch_pose="{target_pose}"/></BehaviorTree>
+          <BehaviorTree ID="Branch"><SubTree ID="Leaf" leaf_pose="{branch_pose}"/></BehaviorTree>
+          <BehaviorTree ID="Leaf"><RosTask_source node_id="source" out_result="{leaf_pose}"/></BehaviorTree>
+          <TreeNodesModel>
+            <SubTree ID="Main"><output_port name="target_pose" type="json"/></SubTree>
+            <SubTree ID="Branch"><output_port name="branch_pose" type="json"/></SubTree>
+            <SubTree ID="Leaf"><output_port name="leaf_pose" type="json"/></SubTree>
+          </TreeNodesModel></root>'''
+        draft=self.documents.create(xml)
+        definition=self.documents.publish(draft['id'],draft['revision'],self.runtime.snapshot_id)
+        spec={'initial':'root','variables':{'pose':None},'states':[{'id':'root','initial':'a'},
+              {'id':'a','parent':'root','do':definition['id'],'bindings':{'do':{'outputs':{'target_pose':'pose'}}}},
+              {'id':'b','parent':'root','entry':'ros:sink','bindings':{'entry':{'inputs':{'pose':'pose'}}}}],
+              'transitions':[{'source':'a','target':'b','event':'completed'}]}
+        machine=self.hsm.save({'name':'boundary','document':spec})
+        await self.hsm.start(machine['id'])
+        await self.wait(lambda:self.hsm.status()['status']=='UNKNOWN' or
+                        len(self.calls)==2 and self.hsm.status()['active']=='b' and self.hsm.status()['status']=='RUNNING')
+        self.assertEqual(self.hsm.status()['status'],'RUNNING',self.hsm.status().get('error'))
+        self.assertEqual(self.hsm.status()['variables']['pose'],payload)
+        self.assertEqual(self.calls[1][2],{'pose':payload})
+        behavior=next(item for item in self.hsm.status()['behaviors'] if item['reference']==definition['id'])
+        result=self.runtime.tasks.status(behavior['task_run_id'])
+        self.assertEqual(result['output'],{'target_pose':payload})
+        self.assertEqual(result['operations'][0]['result']['output'],{'result':payload})
+
+    async def test_failed_tree_does_not_publish_completed_internal_output(self):
+        self.ros.environments.snapshot=Mock(return_value={})
+        self.ros.environments.call=Mock(return_value={})
+        self.ros.save({**task('source',outputs={'sum':{'type':'integer','unit':'1'}},output_bindings={'sum':'sum'}),
+                       'kind':'compute','operation':'copy_fields','ros_type':'','interface':''})
+        async def run(identity,stop,feedback=None,*,definition=None,inputs=None):
+            return {'state':'SUCCEEDED','response':{},'output':{'sum':3}}
+        self.ros.run=run
+        xml='''<root BTCPP_format="4" main_tree_to_execute="Main">
+          <BehaviorTree ID="Main"><Sequence><RosTask_source node_id="source" out_sum="{answer}"/>
+            <AlwaysFailure/></Sequence></BehaviorTree>
+          <TreeNodesModel><SubTree ID="Main"><output_port name="answer" type="integer">
+            {"agro_contract":{"type":"integer","unit":"1"}}
+          </output_port></SubTree></TreeNodesModel></root>'''
+        draft=self.documents.create(xml)
+        definition=self.documents.publish(draft['id'],draft['revision'],self.runtime.snapshot_id)
+        started=await self.runtime.tasks.start_task(self.documents.definition_request(definition['id'],'failed_boundary'),'test')
+        await self.wait(lambda:self.runtime.tasks.status(started['task_run_id'])['state'] not in {'ACCEPTED','RUNNING','CANCELING'})
+        result=self.runtime.tasks.status(started['task_run_id'])
+        self.assertEqual(result['state'],'FAILED',result.get('error'))
+        self.assertTrue(result['stop_confirmed'])
+        self.assertFalse(result.get('output'))
+        self.assertEqual(result['operations'][0]['result']['output'],{'sum':3})
+
     async def test_late_completion_does_not_trigger_a_new_activation(self):
         self.ros.save(task('slow'))
         started=asyncio.Event()

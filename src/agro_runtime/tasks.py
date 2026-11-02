@@ -508,6 +508,7 @@ class TaskManager:
                 status['state'] = 'CANCELED'
             elif process.returncode == 0 and report.get('tree_state') == 'SUCCESS':
                 status['state'] = 'SUCCEEDED'
+                status['output'] = report.get('output', {})
             else:
                 status['state'] = 'FAILED'
                 status['error'] = report.get('error') or next((o['error'] for o in reversed(operations) if o['error']), None) or {'code':'tree_failed','reason':'行为树业务条件未满足'}
