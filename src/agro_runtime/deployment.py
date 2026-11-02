@@ -1,6 +1,7 @@
 """Workflow dependency planning and isolated module lifecycle using the runtime process manager."""
 import asyncio
 import copy
+from contextlib import nullcontext
 import hashlib
 import json
 import os
@@ -184,6 +185,51 @@ class Deployment:
         tasks = self.tasks_for(kind, reference)
         return {'kind':kind,'reference':reference,**self.plan_tasks(tasks)}
 
+    def preflight(self, kind, reference, inputs=None):
+        """Validate the requested workflow and supplied inputs before starting modules."""
+        from .errors import ContractValidationError, ValidationIssue
+        references = set()
+        if kind == 'task':
+            from .ros_tasks import prepared_task
+            if inputs is not None and not isinstance(inputs, dict):
+                fail('$.inputs', 'invalid_inputs', '任务输入应为对象')
+            task = self.ros.freeze(reference)
+            prepared_task(task, inputs, self.ros.validate_structure(task))
+        elif kind == 'flow':
+            checked = self.hsm.check(reference)
+            if not checked['valid']:
+                raise ContractValidationError([ValidationIssue(
+                    path='$.states.' + item.get('state_id', '') + '.' + item.get('phase', '') + '.' + item.get('path', ''),
+                    code='workflow_not_ready', reason=item['message']) for item in checked['diagnostics']])
+            for state in self.hsm.get(reference)['document']['states']:
+                references.update(value for phase in ('entry', 'do', 'exit')
+                                  if (value := state.get(phase)) and not value.startswith('ros:'))
+        elif kind == 'tree':
+            references.add(reference)
+        else:
+            fail('$.kind', 'invalid_workflow', '请选择状态流程、行为树或任务')
+        for identity in sorted(references):
+            draft = identity.startswith('draft_')
+            record = self.store.get('tree_draft' if draft else 'tree_definition', identity)
+            self.documents._check_ownership(record)
+            if record.get('archived'):
+                fail('$.behavior', 'behavior_deleted', '行为树已删除')
+            if self.documents.requires_system(record['document']):
+                snapshot = record.get('base_snapshot_id' if draft else 'system_snapshot_id')
+                if snapshot != self.documents.context.snapshot_id:
+                    fail('$.behavior', 'snapshot_conflict', '系统配置已改变，请重新检查行为中的能力绑定')
+            frozen = record.get('ros_tasks')
+            with self.documents.frozen_ros(frozen) if frozen is not None else nullcontext():
+                checked = self.documents.validate_tree(record['document'],
+                    record.get('manifest', {}).get('kind', record.get('policy', 'general')),
+                    record.get('parameters'), engine=True)
+            if not checked['valid']:
+                raise ContractValidationError([ValidationIssue(
+                    path='$.behavior.' + identity + '.' + str(item.get('port') or ''),
+                    code=item.get('code', 'behavior_incomplete'), reason=item['reason'])
+                    for item in checked['diagnostics'] if item.get('severity', 'error') == 'error'])
+        return references
+
     def plan_tasks(self, tasks):
         self.ros.validate_task_workspaces(tasks)
         modules = {v['id']:v for v in self.modules()}
@@ -248,11 +294,12 @@ class Deployment:
         return RuntimeDescriptor(manager='local_process',target=module['id'],argv=argv,health_check='ros_graph',
                                  dependencies=module.get('dependencies',[]),start_timeout_s=module['startup_timeout_s'],stop_timeout_s=module['stop_timeout_s'])
 
-    async def prepare(self, kind, reference, confirmed):
+    async def prepare(self, kind, reference, confirmed, *, inputs=None):
         if not confirmed: fail('$.safety','confirmation_required','请确认设备环境后启动所需子系统')
         async with self.lock:
             if self.hsm.running() or any(v['state'] in ('ACCEPTED','RUNNING','CANCELING','UNKNOWN') or not v['stop_confirmed'] for v in self.robots.context.tasks.list()):
                 fail('$.workflow','workflow_busy','请先停止正在运行的流程并确认停止结果')
+            references = self.preflight(kind, reference, inputs)
             plan = self.plan(kind,reference)
             if plan['issues']: fail('$.modules','module_binding_required',plan['issues'][0]['reason'])
             self.state='PREPARING'; self.reason=''
@@ -275,6 +322,10 @@ class Deployment:
                     await asyncio.to_thread(self.ros.environments.call,configs[module['workspace_id']],{'op':'module_probe','module':module})
                 for task in task_values:
                     self.ros.verify_support(task)
+                for identity in sorted(references):
+                    if not identity.startswith('draft_'):
+                        self.documents.definition_request(identity, 'deployment_preflight')
+                for task in task_values:
                     if task.get('kind')=='compute' or task.get('stop_observation'):
                         config=self.ros.environments.snapshot(task)
                         await asyncio.to_thread(self.ros.environments.computer,config,self.ros.connection()['domain_id'])

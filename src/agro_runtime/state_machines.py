@@ -182,8 +182,7 @@ class StateMachines:
         machine = self.get(identity)
         if self.running() and self._session['machine_id'] == identity:
             fail('$.machine','running','当前状态机正在运行')
-        self.store.db.execute("DELETE FROM documents WHERE kind='state_machine' AND id=?",(identity,))
-        self.store.db.commit()
+        self.store.delete('state_machine', identity)
         return {'deleted':True}
 
     def get(self, identity):

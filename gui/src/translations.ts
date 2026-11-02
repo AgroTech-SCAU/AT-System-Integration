@@ -1,4 +1,7 @@
 export const english: Record<string, string> = {
+  "工程无法读取": "Unable to read project",
+  "查看工程诊断": "View project diagnostics",
+  "重新打开工程": "Reopen project",
   "JSON 无效，未应用修改": "Invalid JSON, changes were not applied",
   "初始化已完成": "Initialization complete",
   "尚未检查健康条件": "Health conditions not checked",

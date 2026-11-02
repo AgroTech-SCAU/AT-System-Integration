@@ -100,3 +100,9 @@
 .task-icon-check{position:absolute;right:6px;top:3px;color:var(--accent);font-size:11px}
 @keyframes robot-operation-spin{to{transform:rotate(360deg)}}
 @media(max-width:560px){.robot-manager-heading{padding:20px 18px 17px}.robot-manager-toolbar{padding:0 18px 15px;display:grid;grid-template-columns:1fr 1fr}.robot-manager-search{grid-column:1/-1}.robot-manager-toolbar>button{justify-content:center}.robot-manager-list{margin:0 6px 10px;padding:0 5px 2px;max-height:calc(100dvh - 245px)}.robot-manager .robot-row-open{gap:8px;padding:10px 8px;min-height:73px}.robot-row-avatar{width:33px;height:33px}.robot-row-avatar .association-icon{width:29px;height:29px}.robot-row-description strong{font-size:12px}.robot-row-description small{font-size:10px}.robot-manager .robot-row-more{margin-right:4px;width:25px}.robot-current-badge{font-size:10px}.robot-manager-form{padding:2px 18px 20px}.robot-source-options{grid-template-columns:1fr}.robot-manager .robot-source-options>button{min-height:72px}.robot-manager-status{padding:12px 18px}.robot-switch-note{padding:0 18px 15px}.robot-manager>.library-connection-note{margin:0 18px 15px}}
+
+.robot-manager-row:has(.robot-profile-error){flex-wrap:wrap}
+.robot-profile-error{flex-basis:100%;padding:0 12px 12px;color:var(--red);font-size:12px;line-height:1.6;overflow-wrap:anywhere}
+.robot-profile-error summary{cursor:pointer}
+.robot-profile-error p{margin:8px 0;white-space:pre-wrap}
+.robot-profile-error code{display:block;color:var(--muted)}

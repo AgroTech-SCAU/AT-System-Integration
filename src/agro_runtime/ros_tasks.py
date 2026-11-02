@@ -106,7 +106,7 @@ def validate_task(raw):
         if value and kind!='action':
             fail('$.'+name,'invalid_result_field','停止确认字段仅用于 Action')
     recovery=data.get('stop_recovery_service','')
-    if not isinstance(recovery,str) or recovery and (kind!='action' or not re.fullmatch(r'/[A-Za-z_][A-Za-z0-9_/]*',recovery)):
+    if not isinstance(recovery,str) or recovery and (kind not in ('action','service') or not re.fullmatch(r'/[A-Za-z_][A-Za-z0-9_/]*',recovery)):
         fail('$.stop_recovery_service','invalid_recovery_service','请选择有效的停止确认服务名称')
     condition=data.get('success_condition', {})
     if not isinstance(condition,dict) or condition.get('operator','any') not in ('any','equals','not_equals','greater','less'):

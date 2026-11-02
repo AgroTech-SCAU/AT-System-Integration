@@ -13,10 +13,11 @@ import {requestId, waitJob, type Json} from './shared'
 import './robot-manager.css'
 
 export type RobotSystem = {
-    id: string; name: string; storage_path?: string; example_id: string | null; content: Json; configured: boolean; revision: number
+    id: string; name: string; storage_path?: string; profile_error?: string | null; example_id: string | null; content: Json; configured: boolean; revision: number
     connection?: {domain_id: number; namespace: string} | null
 }
 export type RobotDirectory = {
+    profile_errors?: {id:string;path:string;reason:string}[]
     systems: RobotSystem[]; selected_id: string | null; active: boolean; running_state: string; switch_blocked_reason?: string | null
 }
 type Section = 'create' | 'manage' | 'import'
@@ -51,6 +52,7 @@ export default function RobotLibrary({client, directory, onRefresh, onReconnect,
     const systems = directory?.systems || []
     const locked = busy || !client
     const switchReason = directory?.switch_blocked_reason || (directory && directory.running_state !== 'STOPPED' ? t("机器人正在运行，停止后可以切换") : '')
+    const profileErrors=(directory?.profile_errors||[]).filter(issue=>!systems.some(robot=>robot.id===issue.id))
     const filtered = systems.filter(robot => `${robot.name} ${robot.connection?.namespace || ''}`.toLowerCase().includes(query.trim().toLowerCase()))
     const title = {manage: t("机器人管理"), create: t("新建机器人"), import: t("导入机器人"), rename: t("重命名机器人"), delete: t("删除机器人")}[section]
 
@@ -77,7 +79,7 @@ export default function RobotLibrary({client, directory, onRefresh, onReconnect,
         finally {operation.current = false; setBusy(false); setPhase('')}
     }
     async function enter(robot: RobotSystem) {
-        if (!client || locked) return
+        if (!client || locked || robot.profile_error) return
         if (robot.id === directory?.selected_id && (directory.active || !robot.configured)) {onNavigate('overview'); return}
         if (switchReason) return
         if (!await requestNavigation()) return
@@ -100,8 +102,10 @@ export default function RobotLibrary({client, directory, onRefresh, onReconnect,
             setMessage(t("已创建 {0}，点击切换即可打开", {0: robot.name}))
         }, t("正在创建机器人"))
     }
+    function reopen(path:string){setOpenPath(path);changeSection('import')}
     async function openDirectory(){
-        if(!client||!openPath.trim())return
+        if(!client||locked||switchReason||!openPath.trim())return
+        if(!await requestNavigation())return
         await perform(async()=>{const robot=await client.request<RobotSystem>('/robot-profiles/open','POST',{path:openPath.trim()});if(!robot.configured)await client.request(`/robot-systems/${robot.id}/select-blank`,'POST',{});else{const job=await client.request<{management_job_id:string}>(`/robot-systems/${robot.id}/activate`,'POST',{request_id:requestId()});await waitJob(client,job.management_job_id,()=>{})}await onRefresh();setSection('manage');setHighlight(robot.id);onNavigate('overview')},t('正在打开工程'))
     }
     async function acceptImport(bundle: unknown) {
@@ -179,16 +183,17 @@ export default function RobotLibrary({client, directory, onRefresh, onReconnect,
                 const current = robot.id === directory?.selected_id
                 const duplicate = systems.some(other => other.id !== robot.id && other.name === robot.name)
                 return <motion.li layout="position" initial={{opacity:0,y:4}} animate={{opacity:1,y:0}} transition={springs.spatial} key={robot.id} data-robot-id={robot.id} className={`robot-manager-row${current ? ' is-current' : ''}${highlight === robot.id ? ' is-highlighted' : ''}`}>
-                    <button className="robot-row-open" aria-label={current ? t("打开当前机器人 {0}", {0: robot.name}) : t("切换至 {0}", {0: robot.name})} title={!current && switchReason ? t(switchReason) : robot.name}
-                        disabled={locked || (!current && !!switchReason)} onClick={() => void enter(robot)}>
+                    <button className="robot-row-open" aria-label={current ? t("打开当前机器人 {0}", {0: robot.name}) : t("切换至 {0}", {0: robot.name})} title={robot.profile_error||(!current && switchReason ? t(switchReason) : robot.name)}
+                        disabled={locked || !!robot.profile_error || (!current && !!switchReason)} onClick={() => void enter(robot)}>
                         <span className="robot-row-avatar"><Icon name="association"/></span>
                         <span className="robot-row-description"><strong>{robot.name}</strong><small>{robot.connection ? `Domain ${robot.connection.domain_id} · ${robot.connection.namespace}` : t("尚未设置 ROS 连接")}{robot.storage_path && <span className="robot-row-identity"> · {robot.storage_path}</span>}{duplicate && <span className="robot-row-identity"> · {robot.id.slice(-6)}</span>}</small></span>
-                        {current ? <span className="robot-current-badge"><span/>{t("使用中")}</span> : <span className="robot-switch-label">{t("切换")}<Icon name="chevron-right"/></span>}
+                        {robot.profile_error?<span className="robot-switch-label" style={{color:'var(--red)'}}>{t('工程无法读取')}</span>:current ? <span className="robot-current-badge"><span/>{t("使用中")}</span> : <span className="robot-switch-label">{t("切换")}<Icon name="chevron-right"/></span>}
                     </button>
                     <button className="robot-row-more" aria-label={t("{0}的更多操作", {0: robot.name})} aria-haspopup="menu" aria-expanded={menu?.robot.id === robot.id} disabled={locked}
                         onClick={event => setMenu(menu?.robot.id === robot.id ? null : {robot, anchor: event.currentTarget})}><Icon name="more"/></button>
+                    {robot.profile_error&&<details className="robot-profile-error"><summary>{t('查看工程诊断')}</summary><p>{robot.profile_error}</p>{robot.storage_path&&<button disabled={locked} onClick={()=>reopen(robot.storage_path!)}>{t('重新打开工程')}</button>}</details>}
                 </motion.li>
-            })}{!filtered.length && <li className="robot-manager-empty"><Icon name={query ? 'search' : 'association'}/><strong>{query ? t("没有找到机器人") : t("还没有机器人")}</strong><p>{query ? t("试试其他名称或命名空间") : t("新建一个机器人，或导入已有工程")}</p>{!query && <button disabled={locked} onClick={() => changeSection('create')}>{t("新建机器人")}<Icon name="plus"/></button>}</li>}</ul>
+            })}{profileErrors.map(issue=><li key={issue.id} className="robot-profile-error" role="status"><strong>{t('工程无法读取')}</strong><code>{issue.path}</code><p>{issue.reason}</p><button disabled={locked} onClick={()=>reopen(issue.path)}>{t('重新打开工程')}</button></li>)}{!filtered.length&&!profileErrors.length && <li className="robot-manager-empty"><Icon name={query ? 'search' : 'association'}/><strong>{query ? t("没有找到机器人") : t("还没有机器人")}</strong><p>{query ? t("试试其他名称或命名空间") : t("新建一个机器人，或导入已有工程")}</p>{!query && <button disabled={locked} onClick={() => changeSection('create')}>{t("新建机器人")}<Icon name="plus"/></button>}</li>}</ul>
             {client&&directory?.selected_id&&systems.some(robot=>robot.id===directory.selected_id&&robot.storage_path)&&<ProfileResources client={client} robotId={directory.selected_id}/>}
             {switchReason && systems.some(robot => robot.id !== directory?.selected_id) && <p className="robot-switch-note"><Icon name="info"/>{t(switchReason)}</p>}
         </> : section === 'create' ? <form className="robot-manager-form" onSubmit={event => {event.preventDefault(); void create()}}>
@@ -197,7 +202,7 @@ export default function RobotLibrary({client, directory, onRefresh, onReconnect,
                 <footer><button type="button" onClick={() => changeSection('manage')}>{t("取消")}</button><button className="primary" type="submit" disabled={!name.trim() || !storagePath.trim() || busy}>{t("创建机器人")}</button></footer>
             </fieldset>
         </form> : section === 'import' ? <div className="robot-manager-form robot-import-form">
-            <div className="robot-import-art"><Icon name="association"/></div><h3>{t("打开机器人工程")}</h3><p>{t("选择包含 robot.json 的目录，打开工程不会启动设备")}</p><label className="field"><span>{t("工程目录")}</span><input value={openPath} onChange={e=>setOpenPath(e.target.value)}/></label>{window.agroDesktop&&<button onClick={async()=>{const path=await window.agroDesktop!.chooseInterfaceFolder();if(path)setOpenPath(path)}}>{t("选择文件夹")}</button>}<button className="primary" disabled={locked||!openPath.trim()} onClick={()=>void openDirectory()}>{t("打开工程")}</button>
+            <div className="robot-import-art"><Icon name="association"/></div><h3>{t("打开机器人工程")}</h3><p>{t("选择包含 robot.json 的目录，打开工程不会启动设备")}</p><label className="field"><span>{t("工程目录")}</span><input value={openPath} onChange={e=>setOpenPath(e.target.value)}/></label>{window.agroDesktop&&<button onClick={async()=>{const path=await window.agroDesktop!.chooseInterfaceFolder();if(path)setOpenPath(path)}}>{t("选择文件夹")}</button>}<button className="primary" disabled={locked||!!switchReason||!openPath.trim()} onClick={()=>void openDirectory()}>{t("打开工程")}</button>
             <details><summary>{t("导入旧工程文件")}</summary><button disabled={locked} onClick={() => void importProject()}><Icon name="import"/>{t("选择工程文件")}</button><small>.agrobot.json</small></details>
             <footer><button disabled={busy} onClick={() => changeSection('manage')}>{t("返回列表")}</button></footer>
         </div> : target && <form className="robot-manager-form" onSubmit={event => {event.preventDefault(); if (section === 'rename') void rename(); else void remove()}}>
@@ -211,8 +216,9 @@ export default function RobotLibrary({client, directory, onRefresh, onReconnect,
         <input ref={fileInput} type="file" accept=".json,.agrobot.json,application/json" hidden onChange={event => void browseFile(event.target.files?.[0])}/>
         {(message || phase) && <div className={`robot-manager-status${failed ? ' is-error' : ''}`} role={failed ? 'alert' : 'status'}>{busy && <span className="robot-operation-spinner"/>}<span>{t(phase || message)}</span>{failed && <button aria-label={t("关闭提示")} onClick={() => setMessage('')}><Icon name="x"/></button>}</div>}
         <AnimatePresence>{menu && <AnchoredPopover anchor={menu.anchor} label={t("{0}的操作", {0: menu.robot.name})} role="menu" className="robot-row-menu" onClose={() => setMenu(null)}>
-            <button role="menuitem" onClick={() => edit(menu.robot, 'rename')}><Icon name="edit"/>{t("重命名")}</button>
-            <button role="menuitem" tabIndex={-1} onClick={() => void exportProject(menu.robot)}><Icon name="export"/>{t("导出工程")}</button>
+            <button role="menuitem" disabled={!!menu.robot.profile_error} onClick={() => edit(menu.robot, 'rename')}><Icon name="edit"/>{t("重命名")}</button>
+            <button role="menuitem" tabIndex={-1} disabled={!!menu.robot.profile_error} onClick={() => void exportProject(menu.robot)}><Icon name="export"/>{t("导出工程")}</button>
+            {menu.robot.profile_error&&menu.robot.storage_path&&<button role="menuitem" onClick={()=>reopen(menu.robot.storage_path!)}>{t('重新打开工程')}</button>}
             <div className="robot-menu-separator"/>
             <button role="menuitem" tabIndex={-1} className="robot-menu-delete" disabled={!!switchReason} title={switchReason ? t(switchReason) : undefined} onClick={() => edit(menu.robot, 'delete')}><Icon name="trash"/>{t("删除机器人")}</button>
             {switchReason && <small>{t(switchReason)}</small>}

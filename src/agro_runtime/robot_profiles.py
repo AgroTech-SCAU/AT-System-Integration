@@ -4,10 +4,11 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 from uuid import uuid4
 
-from .errors import fail
+from .errors import ContractValidationError, fail
 
 
 PROJECT_KINDS = {
@@ -99,6 +100,8 @@ class RobotProfiles:
             if not any(v['id'] == entry['id'] for v in self.store.list('robot_system')):
                 continue
             root = Path(entry['path'])
+            if entry.get('error'):
+                fail('$.storage_path', 'profile_requires_reopen', '工程恢复失败，请修复后重新打开：' + entry['error'])
             if not root.is_dir():
                 fail('$.storage_path', 'profile_unavailable', '机器人工程目录不可用，请恢复目录后保存')
             # Every cache opening this project must use the same filesystem lock
@@ -117,7 +120,11 @@ class RobotProfiles:
                 if target.is_file():
                     existing = target.read_bytes()
                     digest = hashlib.sha256(existing).hexdigest()
-                    if json.loads(existing) == content:
+                    try:
+                        existing_content = json.loads(existing)
+                    except (ValueError, UnicodeError):
+                        fail('$.storage_path', 'profile_changed', '工程文件无法读取，请修复后重新打开')
+                    if existing_content == content:
                         self.store.put('robot_profile', entry['id'], {**entry, 'digest': digest})
                         continue
                     if entry.get('digest') and entry['digest'] != digest:
@@ -138,21 +145,29 @@ class RobotProfiles:
                 raise ValueError('too large')
             raw = path.read_bytes()
             profile = json.loads(raw)
-            if profile.get('format') != 'atil.robot-profile':
+            if not isinstance(profile, dict) or profile.get('format') != 'atil.robot-profile':
                 raise ValueError('format')
             robot = profile['robot_id']
             from .configuration import identifier, encoded
             identifier(robot)
             records = self.paths(profile['documents'], root, False)
-            if set(records) - (PROJECT_KINDS | {'package'}):
+            if not isinstance(records, dict) or set(records) - (PROJECT_KINDS | {'package'}):
                 raise ValueError('document kind')
             systems = records.get('robot_system', [])
             if len(systems) != 1 or systems[0]['id'] != robot:
                 raise ValueError('robot')
-            rows = []
+            rows, seen = [], set()
             for kind, values in records.items():
+                if not isinstance(values, list):
+                    raise ValueError('document list')
                 for value in values:
+                    if not isinstance(value, dict):
+                        raise ValueError('document')
                     identifier(value['id'])
+                    identity = (kind, value['id'])
+                    if identity in seen:
+                        raise ValueError('duplicate document')
+                    seen.add(identity)
                     if kind != 'package' and not self._owned(kind, value, robot):
                         raise ValueError('ownership')
                     rows.append((kind, value['id'], encoded(value)))
@@ -161,10 +176,27 @@ class RobotProfiles:
         old = self.path(robot)
         if old and old != root and (old / 'robot.json').exists():
             fail('$.storage_path', 'profile_already_open', '同一机器人已从其他目录打开，请先从最近工程移除原记录')
+        # IDs are global in the local cache; importing must never replace another robot's records
+        for kind, values in records.items():
+            existing = {value['id']: value for value in self.store.list(kind)}
+            for value in values:
+                previous = existing.get(value['id'])
+                if previous and (kind == 'package' and encoded(previous) != encoded(value)
+                                 or kind != 'package' and not self._owned(kind, previous, robot)):
+                    fail('$.storage_path', 'profile_id_conflict',
+                         '工程标识与已打开工程冲突，请使用不同标识：' + kind + ' / ' + value['id'])
         for definition in records.get('tree_definition', []):
-            xml=definition.get('xml','')
+            xml=definition.get('xml')
+            if not isinstance(xml, str) or not isinstance(definition.get('manifest'), dict):
+                fail('$.profile', 'invalid_definition', '工程中的行为树定义不完整')
             if hashlib.sha256(xml.encode()).hexdigest()!=definition.get('xml_sha256'):
                 fail('$.profile','definition_checksum_mismatch','工程中的行为树内容与摘要不一致')
+        for asset in records.get('asset', []):
+            digest = asset.get('sha256')
+            if not isinstance(digest, str) or not re.fullmatch(r'[0-9a-f]{64}', digest):
+                fail('$.profile', 'invalid_asset', '工程中的资产摘要缺失或无效')
+        for definition in records.get('tree_definition', []):
+            xml = definition['xml']
             directory=self.store.root/'plans'/definition['id'];directory.mkdir(parents=True,exist_ok=True)
             (directory/'task.xml').write_text(xml)
             atomic_json(directory/'task.task.json',definition['manifest'])
@@ -230,6 +262,16 @@ class RobotProfiles:
         return self.dependencies(robot)
 
     def restore(self):
+        errors = []
         for entry in self.entries():
-            if (Path(entry['path']) / 'robot.json').is_file():
+            try:
                 self.open(entry['path'])
+            except (ContractValidationError, OSError) as error:
+                reason = str(error)
+                self.store.put('robot_profile', entry['id'], {**entry, 'error': reason})
+                errors.append({'id': entry['id'], 'path': entry['path'], 'reason': reason})
+        failed = {error['id'] for error in errors}
+        for selection in self.store.list('robot_selection'):
+            if selection.get('system_id') in failed:
+                self.store.delete('robot_selection', selection['id'])
+        return errors

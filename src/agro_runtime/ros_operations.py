@@ -156,7 +156,9 @@ class RosOperations:
             fail('$.operation','invalid_state','仅可核对停止未确认的操作')
         evidence = evidence or {}
         previous_session = record.get('executor_session') != self.ros_tasks.environments.session_id
-        service = definition.get('stop_recovery_service')
+        service = evidence.get('service') or definition.get('stop_recovery_service')
+        if service and (not isinstance(service,str) or not __import__('re').fullmatch(r'/[A-Za-z_][A-Za-z0-9_/]*',service)):
+            fail('$.service','invalid_recovery_service','请选择有效的停止确认服务名称')
         if previous_session:
             if evidence.get('previous_executor_stopped') is not True or not isinstance(evidence.get('note'),str) or not 4 <= len(evidence['note'].strip()) <= 1000:
                 fail('$.evidence','review_required','请核对旧执行进程与设备，并填写核对依据')
@@ -173,7 +175,6 @@ class RosOperations:
                 process=saved.get('identity') or {}
                 if process.get('boot')==Path('/proc/sys/kernel/random/boot_id').read_text().strip() and LocalProcessManager._group_alive(process.get('group',saved.get('pid',0))):
                     fail('$.operation','previous_executor_alive','旧行为树进程组仍然存活，请先停止旧执行进程')
-            service = evidence.get('service') or service
             if not isinstance(service,str) or not __import__('re').fullmatch(r'/[A-Za-z_][A-Za-z0-9_/]*',service):
                 fail('$.service','recovery_service_required','跨会话恢复需要能确认没有活动目标且设备已停止的核对服务')
         observation = definition.get('stop_observation')

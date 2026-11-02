@@ -49,10 +49,13 @@ class RobotSystems:
 
     def listing(self):
         connections = {item['id']: item for item in self.store.list('ros_connection')}
-        profiles = {item['id']: item['path'] for item in self.store.list('robot_profile')}
+        profiles = {item['id']: item for item in self.store.list('robot_profile')}
         return {
-            "systems": [{**item, 'connection': connections.get(item['id']), 'storage_path': profiles.get(item['id'])}
+            "systems": [{**item, 'connection': connections.get(item['id']), 'storage_path': profiles.get(item['id'], {}).get('path'),
+                         'profile_error': profiles.get(item['id'], {}).get('error')}
                         for item in self.store.list("robot_system")],
+            "profile_errors": [{'id': item['id'], 'path': item['path'], 'reason': item['error']}
+                               for item in profiles.values() if item.get('error')],
             "selected_id": self.selected_id(),
             "active": self.active(),
             "running_state": self.context.state,
@@ -797,7 +800,13 @@ class RobotSystems:
                 "存在未确认停止的操作，不能切换系统",
             )
 
+    def require_profile_available(self, key):
+        entry = next((item for item in self.store.list('robot_profile') if item['id'] == key), None)
+        if entry and entry.get('error'):
+            fail('$.storage_path', 'profile_requires_reopen', '工程恢复失败，请修复后重新打开：' + entry['error'])
+
     def choose_blank(self, key):
+        self.require_profile_available(key)
         record = self.store.get("robot_system", key)
         if record["configured"]:
             fail("$.system_id", "activation_required", "已配置系统需要先执行安全切换")
@@ -850,6 +859,7 @@ class RobotSystems:
         return updated
 
     async def activate(self, key, phase):
+        self.require_profile_available(key)
         record = self.store.get("robot_system", key)
         if not record["configured"]:
             fail("$.system_id", "system_not_configured", "请先在系统搭建中完成配置")

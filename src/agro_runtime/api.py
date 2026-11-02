@@ -146,16 +146,6 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     app = FastAPI(title='Agro runtime management',
                   lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     @app.middleware('http')
-    async def persist_profile(request, call_next):
-        response = await call_next(request)
-        if request.method not in ('GET', 'HEAD', 'OPTIONS') and response.status_code < 400:
-            try:
-                profiles.flush()
-            except (ContractValidationError, OSError) as error:
-                issues = [v.model_dump() for v in error.issues] if isinstance(error, ContractValidationError) else [{'path':'$.storage_path','code':'profile_write_failed','reason':str(error)}]
-                return JSONResponse(status_code=409, content={'errors': issues})
-        return response
-    @app.middleware('http')
     async def tutorial_guard(request, call_next):
         # A tutorial must never install third-party code, import projects or control a real device
         if tutorial_only and request.method not in {'GET', 'HEAD', 'OPTIONS'}:
@@ -685,10 +675,11 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     async def deployment_prepare(body: dict):
         if body.get('confirm_safety') is not True:fail('$.safety','confirmation_required','请确认设备环境后准备运行')
         plan=deployment.plan(body.get('kind'),body.get('reference'))
+        inputs=body.get('inputs')
         async def work(phase):
             phase('preparing_subsystems')
-            return await deployment.prepare(plan['kind'],plan['reference'],True)
-        job=management.accept('prepare_subsystems',body.get('request_id') or 'request_'+uuid4().hex,plan,work,
+            return await deployment.prepare(plan['kind'],plan['reference'],True,inputs=inputs)
+        job=management.accept('prepare_subsystems',body.get('request_id') or 'request_'+uuid4().hex,{**plan,'inputs':inputs},work,
                               on_accept=lambda:setattr(deployment,'stopping',False))
         return {'management_job_id':job['id'],'accepted':True}
 
