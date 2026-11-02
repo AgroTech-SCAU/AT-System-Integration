@@ -32,6 +32,7 @@
 .ros-inspector .disclosure-card-toggle{flex-wrap:wrap}
 .ros-inspector .disclosure-card-status{max-width:100%;flex-basis:100%;padding-left:25px;text-align:left}
 .run-launch>.deployment-plan{flex-basis:100%;width:100%}
+.deployment-readiness-summary{display:flex;flex-direction:column;gap:3px;min-width:0}
 .ros-resource-fields{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;padding:10px 0}
 .ros-resource-fields>.ros-select-trigger{grid-column:1;max-width:100%;min-width:0}
 .ros-resource-fields>button:last-child{grid-column:2;grid-row:1/span 2;align-self:center}

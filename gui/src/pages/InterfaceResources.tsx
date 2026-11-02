@@ -2,7 +2,8 @@ import DisclosureCard from '../components/DisclosureCard'
 import './subsystem-workspaces.css'
 import SubsystemModules from './SubsystemModules'
 import ExecutionEnvironment, {type EnvironmentSummary} from './ExecutionEnvironment'
-import OfflineCommunications from './OfflineCommunications'
+import OfflineCommunications,{type OfflineEndpoint} from './OfflineCommunications'
+import {offlineTaskIssue,offlineTaskSeed,openTaskSeed,type CommunicationTaskKind} from './task-seed'
 import {TaskIcon, TaskIconPicker} from '../components/TaskIconPicker'
 import InterfaceIssues from './InterfaceIssues'
 import StudioSelect from '../components/StudioSelect'
@@ -104,12 +105,24 @@ export default function InterfaceResources({client,robotId,location}: {client:Ap
     await client.request('/ros/interface-workspaces/'+selected,'DELETE');await load();setNotice(t('子系统 ROS2 工作区已移除'))
     window.dispatchEvent(new Event('agro:interfaces:changed'));window.dispatchEvent(new Event('agro:ros:refresh'))
   }
+  async function createTask(endpoint:OfflineEndpoint,kind:CommunicationTaskKind,moduleId?:string){
+    await perform(async()=>{
+      let page:'system'|'editor'=location?.returnTo?.page==='editor'?'editor':'system'
+      if(!location?.returnTo){try{const raw=sessionStorage.getItem('atil.robot.return.'+robotId);if(raw==='editor'||raw&&JSON.parse(raw).page==='editor')page='editor'}catch{}}
+      const seed=offlineTaskSeed({robotId,page,workspaceId:selected,endpoint,kind,moduleId,types:resolution?.types||[]})
+      if(!seed)throw Error(t(offlineTaskIssue(endpoint)||'请明确任务如何使用此话题'))
+      await openTaskSeed(seed,{page,robotId,section:'message'})
+    })
+  }
   const diagnostics=resolution?.diagnostics||current?.diagnostics||[]
   const issueCount=diagnostics.length+(current?.conflicts_with.length||0)
   const usedTasks=tasks.filter(task=>task.workspace_ids?.includes(selected)||task.execution_workspace_id===selected)
   const ownModules=modules?.filter(module=>module.workspace_id===selected)||[]
   const currentEnvironment=environment?.workspaceId===selected?environment:null
-  const environmentStatus=!currentEnvironment||currentEnvironment.reading?t('正在读取环境配置'):currentEnvironment.problem?t('运行环境检查未完成'):currentEnvironment.loaded?t('已加载'):currentEnvironment.checked?t('检查通过，尚未加载'):t('尚未加载执行环境')
+  const environmentState=currentEnvironment?.status||'reading'
+  const environmentStates:Record<string,string>={reading:'正在读取环境配置',loaded:'已加载',checked:'检查通过，运行时加载',automatic:'可由运行台自动准备',modified:'环境选择尚未应用',missing_setup:'缺少运行环境',missing_python:'缺少 Python 环境',failed:'运行环境检查未完成'}
+  const environmentProblem=['missing_setup','missing_python','failed'].includes(environmentState)
+  const environmentStatus=t(environmentStates[environmentState])
   const moduleKinds:Record<string,string>={node:'独立节点',component:'组合式组件',launch:'已有 launch',process:'独立程序'}
   const visibleTypes=resolution?.types.filter(item=>item.ros_type.toLowerCase().includes(interfaceQuery.toLowerCase()))||[]
   return <section className="interface-workspace-manager" aria-label={t('子系统 ROS2 工作区')}>
@@ -126,7 +139,7 @@ export default function InterfaceResources({client,robotId,location}: {client:Ap
       <section className="iw-overview-card"><header className="iw-detail-heading"><div className="iw-overview-title"><TaskIcon value={current.icon}/><div><span className="iw-eyebrow">{t(current.mode==='files'?'导入定义':current.mode==='installed'?'安装目录':'源码工作区')}</span><h3>{current.name}</h3></div></div><div className="buttons"><button disabled={busy} aria-expanded={metadataOpen} onClick={()=>setMetadataOpen(value=>!value)}><Icon name="edit"/>{t('编辑基本信息')}</button>{current.mode!=='files'&&<button disabled={busy} onClick={()=>void perform(()=>update({refresh:true}))}><Icon name="refresh"/>{t('重新扫描')}</button>}<button disabled={busy||current.used_by>0} title={current.used_by?t('已有任务使用此工作区'):t('移除工作区')} aria-label={t('移除工作区')} onClick={()=>void perform(remove)}><Icon name="trash"/></button></div></header><p className="iw-overview-path"><code>{current.path||t('接口文件已保存在当前机器人工程')}</code></p>{issueCount>0&&<div className="iw-overview-status"><button className="iw-pending" onClick={()=>openSection('uses')}>{t('有 {0} 项需要处理',{0:issueCount})}<Icon name="chevron-right"/></button></div>}
         <div className="iw-access-summary" aria-label={t('子系统接入摘要')}>
           <article><span className="iw-summary-label">{t('接口定义')}</span><strong className={current.pending_count?'iw-pending':undefined}>{t('可用 {0} 个 · 待补充 {1} 个',{0:current.available_count,1:current.pending_count})}</strong><small>{resolution?.types.slice(0,2).map(item=>item.ros_type).join(' · ')||t('未发现接口定义，仍可配置启动模块')}</small><div className="buttons"><button onClick={()=>openSection('interfaces')}>{t('查看接口定义')}<Icon name="chevron-right"/></button><button onClick={()=>openSection('communications')}>{t('查看通信解析')}<Icon name="chevron-right"/></button></div></article>
-          <article><span className="iw-summary-label">{t('运行环境')}</span><strong className={currentEnvironment?.problem?'iw-pending':currentEnvironment?.loaded?'iw-ready':undefined}>{environmentStatus}</strong><small>{currentEnvironment?.problem||currentEnvironment?.setup||t('离线配置接口与任务时无需加载')}</small><div className="buttons"><button onClick={()=>openSection('environment')}>{t(currentEnvironment?.loaded?'查看运行环境':'配置运行环境')}<Icon name="chevron-right"/></button></div></article>
+          <article><span className="iw-summary-label">{t('运行环境')}</span><strong className={environmentProblem?'iw-pending':currentEnvironment?.loaded?'iw-ready':undefined}>{environmentStatus}</strong><small>{currentEnvironment?.problem||currentEnvironment?.setup||t('离线配置接口与任务时无需加载')}</small><div className="buttons"><button onClick={()=>openSection('environment')}>{t(currentEnvironment?.loaded||['automatic','checked'].includes(environmentState)?'查看运行环境':'配置运行环境')}<Icon name="chevron-right"/></button></div></article>
           <article><span className="iw-summary-label">{t('启动来源')}</span><strong>{modules===null?t('尚未读取启动配置'):ownModules.length?t('{0} 个启动模块',{0:ownModules.length}):t('尚未配置启动模块')}</strong><small>{ownModules.length?ownModules.slice(0,2).map(module=>t(moduleKinds[module.kind]||module.kind)+' · '+module.name).join(' / '):t('可由软件启动模块，也可使用外部已启动接口')}</small><div className="buttons"><button onClick={()=>openSection('modules')}>{t('配置启动来源')}<Icon name="chevron-right"/></button></div></article>
           <article><span className="iw-summary-label">{t('使用此工作区的任务')}</span><strong>{t('{0} 个任务使用',{0:usedTasks.length})}</strong><small>{usedTasks.slice(0,3).map(task=>task.name).join(' · ')||t('尚无任务使用此工作区')}</small><div className="buttons"><button onClick={()=>openSection('uses')}>{t('查看使用任务')}<Icon name="chevron-right"/></button><button onClick={()=>void locateStudio({page:'system',robotId})}>{t('打开任务库')}<Icon name="chevron-right"/></button></div></article>
         </div>
@@ -139,7 +152,7 @@ export default function InterfaceResources({client,robotId,location}: {client:Ap
         {!!resolution?.dependencies?.length&&<DisclosureCard title={t('已补齐的依赖接口')} count={resolution.dependencies.length}>{resolution.dependencies.map(item=><DisclosureCard key={item.ros_type} title={<code>{item.ros_type}</code>} summary={item.source}><p><code>{item.source}</code></p></DisclosureCard>)}</DisclosureCard>}
         {foundation&&<DisclosureCard title={t('基础 ROS 接口')} status={t(foundation.status==='ready'?'已就绪':'需要选择来源')} summary={t('供当前机器人共用，用于补齐标准接口依赖')}><p>{t('基础接口用于补齐消息依赖，单独保存，不计入子系统工作区')}</p><p><code>{foundation.path||t(foundation.status==='ready'?'导入的基础接口快照':'未选择基础接口目录')}</code></p><p className="ros-field-hint">{t('保存的定义可离线使用，重新读取后已有任务仍保留原定义')}</p>{foundation.candidates.length>1&&<StudioSelect label={t('基础接口来源')} value={foundationPath} options={[{value:'',label:t('选择一个基础接口来源')},...foundation.candidates.map(value=>({value,label:value}))]} onChange={setFoundationPath}/>}<div className="iw-path"><input aria-label={t('基础 ROS 安装目录')} value={foundationPath} placeholder={t('基础 ROS 安装目录')} onChange={event=>setFoundationPath(event.target.value)}/><button disabled={busy||!foundationPath.trim()} onClick={()=>void perform(async()=>{await client.request('/ros/interface-foundation','PUT',{path:foundationPath.trim()});await load();setNotice(t('基础接口已重新读取'));window.dispatchEvent(new Event('agro:interfaces:changed'));window.dispatchEvent(new Event('agro:ros:refresh'))})}>{t('重新读取')}</button></div></DisclosureCard>}
       </DisclosureCard></div>
-      <div className="iw-section-anchor" ref={node=>{sectionNodes.current.communications=node}} tabIndex={-1}><OfflineCommunications client={client} workspaceId={selected} epoch={workspaces} onUpdate={data=>perform(()=>update(data))} onError={setError} disabled={busy} open={!!openSections.communications} onOpenChange={open=>sectionExpanded('communications',open)}/></div>
+      <div className="iw-section-anchor" ref={node=>{sectionNodes.current.communications=node}} tabIndex={-1}><OfflineCommunications client={client} workspaceId={selected} epoch={workspaces} onUpdate={data=>perform(()=>update(data))} onError={setError} onCreateTask={createTask} disabled={busy} open={!!openSections.communications} onOpenChange={open=>sectionExpanded('communications',open)}/></div>
       <div className="iw-section-anchor" ref={node=>{sectionNodes.current.environment=node}} tabIndex={-1}><ExecutionEnvironment client={client} workspaceId={selected} epoch={workspaces} open={!!openSections.environment} onOpenChange={open=>sectionExpanded('environment',open)} onSummary={setEnvironment}/></div>
       <div className="iw-section-anchor" ref={node=>{sectionNodes.current.modules=node}} tabIndex={-1}><SubsystemModules client={client} workspaceId={selected} open={!!openSections.modules} onOpenChange={open=>sectionExpanded('modules',open)} onModulesChange={setModules}/></div>
       <div className="iw-section-anchor" ref={node=>{sectionNodes.current.uses=node}} tabIndex={-1}><DisclosureCard title={t('使用与诊断')} open={!!openSections.uses} onOpenChange={open=>sectionExpanded('uses',open)} count={usedTasks.length} status={<span className={issueCount?'iw-pending':'iw-ready'}>{issueCount?t('有 {0} 项需要处理',{0:issueCount}):t('没有接口定义问题')}</span>} summary={t('{0} 个任务使用',{0:current.used_by})}>

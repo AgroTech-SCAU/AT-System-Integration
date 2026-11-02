@@ -52,3 +52,23 @@
 .iw-section-anchor:focus{outline:2px solid var(--accent-line,var(--accent))}
 .iw-section-anchor>.disclosure-card{margin:0}
 @media(max-width:900px){.iw-access-summary{grid-template-columns:minmax(0,1fr)}.iw-access-summary small{min-height:0}}
+.iw-communications-card .disclosure-card-actions>button{display:inline-flex;align-items:center;gap:5px;white-space:nowrap;font-size:11px}
+.iw-communications-card .disclosure-card-actions>button svg{width:13px;height:13px}
+.iw-task-kind-options{width:340px;padding:12px}
+.iw-task-kind-options>strong{display:block;font-size:12px;font-weight:550}
+.iw-task-kind-options>code{display:block;margin-top:6px;color:var(--muted);font-size:11px;overflow-wrap:anywhere}
+.iw-task-kind-options>p{margin:9px 0 12px;color:var(--muted);font-size:11px;line-height:1.6}
+.iw-task-kind-options>button{display:flex;align-items:center;gap:10px;width:100%;margin-top:7px;padding:11px 12px;text-align:left;border:1px solid var(--line);border-radius:8px;background:var(--subtle)}
+.iw-task-kind-options>button:hover{background:var(--tint);border-color:var(--accent-line,var(--line))}
+.iw-task-kind-options>button>span{flex:1;min-width:0}
+.iw-task-kind-options>button strong{display:block;font-size:12px;font-weight:550}
+.iw-task-kind-options>button small{display:block;margin-top:4px;color:var(--muted);font-size:11px;line-height:1.6}
+.iw-task-kind-options>button svg{width:14px;height:14px;flex:none;color:var(--muted)}
+.iw-module-review{margin:0 0 16px;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--subtle)}
+.iw-module-review>strong,.iw-module-review h4{display:block;margin:0 0 10px;font-size:12px;font-weight:550}
+.iw-module-review>div{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.iw-module-review>div>button{min-width:0;padding:10px;text-align:left;white-space:normal;overflow-wrap:anywhere}
+.iw-module-review>div>button strong{display:block;font-size:12px;font-weight:550}
+.iw-module-review>div>button small{display:block;margin-top:4px;color:var(--muted);font-size:11px;line-height:1.6}
+.iw-module-review>p{margin:10px 0 0;color:var(--muted);font-size:11px;line-height:1.6}
+@media(max-width:800px){.iw-module-review>div{grid-template-columns:minmax(0,1fr)}}

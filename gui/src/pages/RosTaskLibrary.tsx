@@ -2,6 +2,7 @@ import DataContractEditor from './DataContractEditor'
 import DisclosureCard from '../components/DisclosureCard'
 import TaskProvider from './TaskProvider'
 import {locateStudio,takeStudioLocation,type StudioLocation} from '../studio-links'
+import {readTaskSeed,clearTaskSeed} from './task-seed'
 import {fieldContract,schemaPaths} from '../data-contracts'
 import type {FieldNote} from './FieldNoteEditor'
 import type {OfflineEndpoint} from './OfflineCommunications'
@@ -84,6 +85,8 @@ export default function RosTaskLibrary({client,requestedTask,requestKey,contextL
  const [fields,setFields]=useState<Record<string,string>|null>(null),[formMode,setFormMode]=useState(true),[detail,setDetail]=useState<'message'|'ports'>('message')
  const payloadRef=useRef(payload),currentRef=useRef(current),providerWorkspace=useRef<string|undefined>(undefined);payloadRef.current=payload;currentRef.current=current
  const leavingForConfig=useRef(false),restoredDraft=useRef(false)
+ const [pendingSeed,setPendingSeed]=useState<ReturnType<typeof readTaskSeed>>(null)
+ const seededRequest=useRef<number|undefined>(undefined)
  const draftKey='atil.task.config-return.'+(robotId||'current')
  const selectedWorkspaceIds=current.workspace_ids??defaultIds
  const workspaceKey=selectedWorkspaceIds.join('|')
@@ -103,11 +106,17 @@ export default function RosTaskLibrary({client,requestedTask,requestKey,contextL
    if(!raw)return
    try{const saved=JSON.parse(raw);apply(saved.current);setPayload(saved.payload);setStopPayload(saved.stopPayload);setConditionValue(saved.conditionValue);setInputRows(saved.inputRows);setOutputRows(saved.outputRows);setDirty(saved.dirty);endpointEdited.current=!!saved.dirty;setDetail(saved.detail||'message');setPreviousInterface(saved.previousInterface||'');restoredDraft.current=true;sessionStorage.removeItem(draftKey)}catch{sessionStorage.removeItem(draftKey)}
  },[client,draftKey])
+ function collectTaskSeed(){
+  if(root.current?.closest('[hidden]'))return
+  const seed=readTaskSeed(robotId,root.current?.closest('.studio-workspace')?'editor':'system')
+  if(seed)setPendingSeed(previous=>previous?.raw===seed.raw?previous:seed)
+ }
  useEffect(()=>{
-  if(!robotId)return
-  const raw=sessionStorage.getItem('atil.task.seed');if(!raw)return
-  try{const seed=JSON.parse(raw);if(seed.robotId!==robotId)return;sessionStorage.removeItem('atil.task.seed');apply({...fresh(t),name:seed.name,kind:seed.kind,interface:seed.interface,ros_type:seed.ros_type});setDirty(true)}catch{sessionStorage.removeItem('atil.task.seed')}
- },[robotId])
+  collectTaskSeed()
+  const located=(event:Event)=>{const location=(event as CustomEvent<StudioLocation>).detail;if(location.page===(root.current?.closest('.studio-workspace')?'editor':'system')&&(!location.robotId||location.robotId===robotId))collectTaskSeed()}
+  window.addEventListener('agro:studio:located',located)
+  return()=>window.removeEventListener('agro:studio:located',located)
+ },[robotId,requestKey])
  const selectedInterface=resolvedKey===workspaceKey?interfaceTypes.find(item=>item.ros_type===current.ros_type):undefined
  const executionCandidates=workspaces.filter(workspace=>selectedWorkspaceIds.includes(workspace.id)&&(!selectedInterface?.workspace_ids.length||selectedInterface.workspace_ids.includes(workspace.id)))
  const executionWorkspace=workspaces.find(workspace=>workspace.id===current.execution_workspace_id&&selectedWorkspaceIds.includes(workspace.id))||(executionCandidates.length===1?executionCandidates[0]:undefined)
@@ -134,9 +143,24 @@ export default function RosTaskLibrary({client,requestedTask,requestKey,contextL
   return()=>controller.abort()
  },[current.kind,current.ros_type,current.id,effectiveSchemaId,robotId,schemaEpoch])
  const discard=async()=>!dirty||await unsavedDialog(current.name,async()=>Boolean(await saveRef.current()),()=>apply(items.find(item=>item.id===current.id)||fresh(t)))
+ useEffect(()=>{
+  if(!pendingSeed)return
+  let stopped=false
+  void (async()=>{
+   if(!await discard()){clearTaskSeed(pendingSeed.raw);if(!stopped)setPendingSeed(null);return}
+   if(stopped)return
+   const seed=readTaskSeed(robotId,root.current?.closest('.studio-workspace')?'editor':'system')
+   if(!seed||seed.raw!==pendingSeed.raw){setPendingSeed(seed);return}
+   const task=seed.task
+   clearTaskSeed(seed.raw);restoredDraft.current=false;seededRequest.current=requestKey
+   apply({...fresh(t),name:task.name,kind:task.kind,interface:task.interface,ros_type:task.ros_type,...(task.workspace_ids?{workspace_ids:task.workspace_ids}:{}),...(task.execution_workspace_id?{execution_workspace_id:task.execution_workspace_id}:{}),...(task.module_ids?{module_ids:task.module_ids}:{}),...(task.schema_id?{schema_id:task.schema_id}:{})})
+   setDirty(true);setDetail('message');setMessageOpen(true);setPendingSeed(null)
+  })().catch(cause=>{if(!stopped){setError(cause);setPendingSeed(null)}})
+  return()=>{stopped=true}
+ },[pendingSeed,client,robotId])
  async function choose(item:RosTask){if(item.id===current.id)return;if(!busy&&await discard())apply(item)}
  async function reset(){if(!busy&&await discard()){apply(fresh(t));setDirty(true)}}
- useEffect(()=>{if(requestKey===undefined)return;if(restoredDraft.current){restoredDraft.current=false;revealTaskSection(requestedSection,requestedField);return}let stopped=false;void (async()=>{if(!await discard()){onCancelOpen?.();return}const all=await load();if(stopped)return;const found=requestedTask?all.find(item=>item.id===requestedTask.replace(/^ros:/,'')):undefined;if(requestedTask&&!found){setError(new ApiError('response',[{path:'$.task',code:'not_found',reason:t("绑定的任务已不存在，请重新选择")}]));return}apply(found||{...fresh(t),name:contextLabel?.slice(0,80)||fresh(t).name});revealTaskSection(requestedSection,requestedField)})().catch(setError);return()=>{stopped=true}},[requestKey,client])
+ useEffect(()=>{if(requestKey===undefined||seededRequest.current===requestKey||pendingSeed||readTaskSeed(robotId,root.current?.closest('.studio-workspace')?'editor':'system'))return;if(restoredDraft.current){restoredDraft.current=false;revealTaskSection(requestedSection,requestedField);return}let stopped=false;void (async()=>{if(!await discard()){onCancelOpen?.();return}const all=await load();if(stopped)return;const found=requestedTask?all.find(item=>item.id===requestedTask.replace(/^ros:/,'')):undefined;if(requestedTask&&!found){setError(new ApiError('response',[{path:'$.task',code:'not_found',reason:t("绑定的任务已不存在，请重新选择")}]));return}apply(found||{...fresh(t),name:contextLabel?.slice(0,80)||fresh(t).name});revealTaskSection(requestedSection,requestedField)})().catch(setError);return()=>{stopped=true}},[requestKey,client,pendingSeed?.raw])
  useEffect(()=>{
  const visible=()=>Boolean(root.current&&!root.current.closest('[hidden]'))
  const leave=(event:Event)=>{if(leavingForConfig.current&&event.type==='agro:navigate')return;if(dirty&&(event.type==='agro:navigate'||visible()))deferNavigation(event,discard)}
@@ -204,7 +228,7 @@ export default function RosTaskLibrary({client,requestedTask,requestKey,contextL
  useEffect(()=>{
   if(root.current?.closest('.studio-workspace'))return
   let active=true
-  const consume=()=>{const location=takeStudioLocation(robotId,'system');if(!location)return;void (async()=>{
+  const consume=()=>{const location=takeStudioLocation(robotId,'system');if(!location)return;if(readTaskSeed(robotId,'system')){collectTaskSeed();return}void (async()=>{
    if(location.taskId&&currentRef.current.id!==location.taskId.replace(/^ros:/,'')){
     const all=await load();if(!active)return
     const found=all.find(item=>item.id===location.taskId!.replace(/^ros:/,''))

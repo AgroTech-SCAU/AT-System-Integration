@@ -15,12 +15,17 @@ import {ApiError} from '../api'
 import type {Json,PageProps} from './shared'
 import type {Workspace} from '../types'
 import DataContractEditor from './DataContractEditor'
-import DataBindingField,{type BindingChoice} from './DataBindingField'
+import DataBindingField,{type BindingChoice,type BindingDataPath,type BindingPathStep} from './DataBindingField'
 import type {StudioLocation} from '../studio-links'
 import {activeStatus,blankMachine,canReparent,descendants,diagnoseMachine,eventBranches,fingerprint,isFallback,isIdentifier,normalizeInitials,reorderState,snapshotOf,statePath,transitionPlan,type Diagnostic,type MachineSnapshot,type MachineState,type SavedMachine,type Scalar,type Transition} from './hsm-model'
 import './hsm-workbench.css'
 
 type Phase='entry'|'do'|'exit'
+function mappedMessageFields(task:Json|undefined,direction:'inputs'|'outputs',port:string):string[]{
+ if(direction==='inputs')return Object.entries(task?.input_bindings||{}).filter(([path,name])=>name===port&&!!path).map(([path])=>path)
+ const path=task?.output_bindings?.[port]
+ return typeof path==='string'&&path?[path]:[]
+}
 type StateDrop={target:string;placement:'before'|'inside'|'after';parent:string}
 type CheckIssue=Diagnostic&{taskId?:string;path?:string;phase?:Phase}
 type CheckResult={key:string;status:'checking'|'passed'|'failed';message:string;issues:CheckIssue[]}
@@ -455,6 +460,41 @@ export default function StateMachineEditor({client,onNavigate,onOpenRos,onOpenTa
     mapping[port]=variable
    }else mapping[port]=value
   })
+  type StatePort={state:string;phase:Phase;port:string;variable?:string}
+  const declaredOutputs:StatePort[]=[...sources,...Object.keys(ports.outputs).map(port=>({state:selected,phase,port,variable:state.bindings?.[phase]?.outputs?.[port]||(port in document.variables?port:undefined)}))]
+  const declaredInputs:StatePort[]=Object.keys(ports.outputs).length?document.states.flatMap(owner=>phases.flatMap(ownerPhase=>Object.keys(behaviorPorts(owner[ownerPhase]).inputs).map(port=>({state:owner.id,phase:ownerPhase,port,variable:owner.bindings?.[ownerPhase]?.inputs?.[port]||(port in document.variables?port:undefined)})))):[]
+  const referenceAt=(owner:StatePort)=>document.states.find(item=>item.id===owner.state)?.[owner.phase]
+  const ownerLabel=(owner:StatePort)=>(document.states.find(item=>item.id===owner.state)?.label||owner.state)+' · '+t(phaseLabels[owner.phase])
+  const endpointStep=(reference:string|undefined,direction:'inputs'|'outputs',port:string):BindingPathStep=>{
+   if(reference&&!reference.startsWith('ros:')){
+    const behavior=definitions.find(item=>item.id===reference)
+    return {label:direction==='inputs'?'行为树输入边界':'行为树输出边界',values:behavior?[behavior.document.main_tree_id+' / '+port]:[],pending:!behavior}
+   }
+   const task=rosTasks.find(item=>'ros:'+item.id===reference),fields=mappedMessageFields(task,direction,port)
+   return {label:task?.kind==='compute'?(direction==='inputs'?'计算参数字段':'计算结果字段'):(direction==='inputs'?'目标消息字段':'来源消息字段'),values:fields,pending:!fields.length}
+  }
+  const behaviorStep=(reference:string|undefined,port:string,label:string):BindingPathStep=>({label,values:reference?[(taskLabels[reference]||reference)+' / '+port]:[],pending:!reference})
+  const dataPaths=(direction:'inputs'|'outputs',port:string,variable:string):BindingDataPath[]=>{
+   const variableStep:BindingPathStep={label:'流程变量',values:variable?[variable]:[],pending:!variable||!(variable in document.variables)}
+   if(direction==='inputs'){
+    const targetSteps=[variableStep,behaviorStep(state[phase],port,'当前任务输入'),endpointStep(state[phase],'inputs',port)]
+    const routes:BindingDataPath[]=variable?declaredOutputs.filter(owner=>owner.variable===variable).map(owner=>({label:ownerLabel(owner),steps:[endpointStep(referenceAt(owner),'outputs',owner.port),behaviorStep(referenceAt(owner),owner.port,'来源任务输出'),...targetSteps]})):[]
+    if(variable&&variable in document.variables&&document.variables[variable]!==null){
+     const initial=JSON.stringify(document.variables[variable])
+     routes.unshift({label:t('流程初始值'),steps:[{label:'流程初始值',values:[initial.length>160?initial.slice(0,160)+'…':initial]},...targetSteps]})
+    }
+    if(!variable&&state[phase]&&!state[phase]!.startsWith('ros:')){
+     const behavior=definitions.find(item=>item.id===state[phase]),parameters=behavior?.parameters||{},descriptor=ports.inputs[port]
+     const initial=Object.prototype.hasOwnProperty.call(parameters,port)?parameters[port]:descriptor?.default
+     if(initial!==undefined)return [{label:t('任务默认值'),steps:[{label:'任务默认值',values:[JSON.stringify(initial)]},behaviorStep(state[phase],port,'当前任务输入'),endpointStep(state[phase],'inputs',port)]}]
+    }
+    return routes.length?routes:[{label:t('来源待映射'),steps:[{label:'来源消息字段',pending:true},{label:'来源任务输出',pending:true},...targetSteps]}]
+   }
+   const sourceSteps=[endpointStep(state[phase],'outputs',port),behaviorStep(state[phase],port,'来源任务输出'),variableStep]
+   if(!variable)return [{label:t('不写入变量'),steps:[...sourceSteps.slice(0,2),{label:'流程变量',values:[t('不写入变量')]}]}]
+   const destinations=variable?declaredInputs.filter(owner=>owner.variable===variable):[]
+   return destinations.length?destinations.map(owner=>({label:ownerLabel(owner),steps:[...sourceSteps,behaviorStep(referenceAt(owner),owner.port,'后续任务输入'),endpointStep(referenceAt(owner),'inputs',owner.port)]})):[{label:t('后续输入待映射'),steps:[...sourceSteps,{label:'后续任务输入',pending:true},{label:'目标消息字段',pending:true}]}]
+  }
   if(!Object.keys(ports.inputs).length&&!Object.keys(ports.outputs).length)return null
   return <DisclosureCard className="wb-phase-data" title={t("输入与输出")} count={Object.keys(ports.inputs).length+Object.keys(ports.outputs).length}>{!!Object.keys(ports.inputs).length&&<p className="wb-data-binding-note">{t('类型匹配后仍需校验执行路径，确认输入使用前已经产生')}</p>}{(['inputs','outputs'] as const).map(direction=>!!Object.keys(ports[direction]).length&&<div key={direction}><span className="wb-binding-direction">{t(direction==='inputs'?'输入':'输出')}</span>{Object.entries(ports[direction]).map(([port,raw])=>{
    const contract=raw as DataContract,binding=state.bindings?.[phase]?.[direction]?.[port]||(port in document.variables?port:'')
@@ -471,7 +511,7 @@ export default function StateMachineEditor({client,onNavigate,onOpenRos,onOpenTa
     choices.push({value:'@source:'+index,label:t(source.previous?'前序任务输出':'其他任务输出')+' · '+source.label,contract:source.contract,reason,hint:t('选择后关联来源输出与流程变量'),priority:source.previous?0:2})
    })
    else choices.unshift({value:'@new',label:t('新建输出变量'),contract,priority:0})
-   return <DataBindingField key={port} name={port} label={t(phaseLabels[phase])+' · '+t(direction==='inputs'?'输入':'输出')+' · '+port} contract={contract} value={binding} choices={choices} output={direction==='outputs'} fallback={port in document.variables?t('同名变量')+' · '+port:direction==='inputs'?(state[phase]?.startsWith('ros:')?t('选择数据来源'):t('任务默认值')):t('不写入变量')} onChange={value=>connect(direction,port,value)} onManage={()=>setBottom('variables')}/>
+   return <DataBindingField key={port} name={port} label={t(phaseLabels[phase])+' · '+t(direction==='inputs'?'输入':'输出')+' · '+port} contract={contract} value={binding} choices={choices} paths={dataPaths(direction,port,binding)} output={direction==='outputs'} fallback={port in document.variables?t('同名变量')+' · '+port:direction==='inputs'?(state[phase]?.startsWith('ros:')?t('选择数据来源'):t('任务默认值')):t('不写入变量')} onChange={value=>connect(direction,port,value)} onManage={()=>setBottom('variables')}/>
   })}</div>)}<button className="wb-text-button" onClick={()=>setBottom('variables')}>{t("管理状态变量 ")}{tinyIcon('chevron')}</button></DisclosureCard>
  }
  const phaseDefinitions=(phase:Phase)=>definitions.filter(item=>item.id===state?.[phase]||!item.draft_id||!definitions.some(other=>other.id===item.draft_id))

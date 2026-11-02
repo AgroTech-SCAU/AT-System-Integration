@@ -94,12 +94,24 @@ export default function RobotLibrary({client, directory, onRefresh, onReconnect,
         }, t("正在切换至 {0}", {0: robot.name}))
     }
     async function create() {
-        if (!client || !name.trim() || !storagePath.trim()) return
+        if (!client || locked || operation.current || !name.trim() || !storagePath.trim()) return
+        const openAfterCreate = directory?.running_state === 'STOPPED' && !switchReason
+        if (openAfterCreate && !await requestNavigation()) return
         await perform(async () => {
             const robot = await client.request<RobotSystem>('/robot-systems', 'POST', {name: name.trim(), storage_path:storagePath.trim()})
+            let opened = false, openError: unknown = null
+            if (openAfterCreate) {
+                setPhase(t('正在打开工程'))
+                try {await client.request(`/robot-systems/${robot.id}/select-blank`, 'POST', {}); opened = true}
+                catch (error) {openError = error}
+            }
             await onRefresh()
             setName(''); setQuery(''); setSection('manage'); setHighlight(robot.id)
-            setMessage(t("已创建 {0}，点击切换即可打开", {0: robot.name}))
+            if (opened) onNavigate('overview')
+            else {
+                setMessage(t("已创建 {0}，点击切换即可打开", {0: robot.name}))
+                if (openError) {reportError(openError); setFailed(true)}
+            }
         }, t("正在创建机器人"))
     }
     function reopen(path:string){setOpenPath(path);changeSection('import')}

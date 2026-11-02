@@ -8,12 +8,14 @@ import {confirmDialog,deferNavigation,requestNavigation,unsavedDialog} from '../
 import {Icon} from '../components/Icon'
 
 const pretty=(value:unknown)=>JSON.stringify(value??{},null,2)
+const parameterNames=(text:string):string[]|null=>{try{const value=JSON.parse(text);return value&&typeof value==='object'&&!Array.isArray(value)?Object.keys(value):null}catch{return null}}
 export default function SubsystemModules({client,workspaceId,open:controlledOpen,onOpenChange,onModulesChange}:{client:ApiClient;workspaceId:string;open?:boolean;onOpenChange?:(open:boolean)=>void;onModulesChange?:(modules:Json[])=>void}){
  const {t}=useLocale(),[modules,setModules]=useState<Json[]>([]),[candidates,setCandidates]=useState<Json[]>([]),[draft,setDraft]=useState<Json|null>(null)
  const [warnings,setWarnings]=useState<string[]>([]),[manifest,setManifest]=useState(''),[health,setHealth]=useState('[]')
  const [parameters,setParameters]=useState('{}'),[advanced,setAdvanced]=useState('{}'),[launchArguments,setLaunchArguments]=useState('{}'),[argv,setArgv]=useState('')
  const [busy,setBusy]=useState(false),[error,setError]=useState<unknown>(null),[localOpen,setLocalOpen]=useState(false),[loaded,setLoaded]=useState(false),[newEndpoint,setNewEndpoint]=useState(-1)
  const savedEditor=useRef('')
+ const moduleSections=useRef<Record<string,HTMLDivElement|null>>({})
  const dirty=!!draft&&JSON.stringify([draft,parameters,launchArguments,argv,advanced,health])!==savedEditor.current
  const open=controlledOpen??localOpen
  function setOpen(value:boolean){setLocalOpen(value);onOpenChange?.(value)}
@@ -53,6 +55,15 @@ export default function SubsystemModules({client,workspaceId,open:controlledOpen
  const availableDependencies=modules.filter(value=>value.id!==draft?.id)
  const draftIncomplete=!draft?.name?.trim()||(draft?.kind==='process'?!argv.trim():!draft?.package?.trim()||!(draft?.kind==='component'?draft.plugin:draft?.executable)?.trim())
  const endpointLabel=(entry:Json)=>entry.kind==='action'?'动作 Action':entry.kind==='service'?'服务 Service':'话题 Topic'
+ const configuredParameters=parameterNames(draft?.kind==='launch'?launchArguments:parameters)
+ const parameterSummary=draft?.kind==='process'?argv.split('\n').filter(Boolean).join(' · ')||t('尚未填写程序与参数'):configuredParameters===null?t('参数对象待修正'):configuredParameters.length?configuredParameters.join(' · '):t('未填写参数覆盖')
+ function revealModuleSection(section:string){
+  const node=moduleSections.current[section]
+  if(!node)return
+  const toggle=node.querySelector<HTMLButtonElement>('.disclosure-card-toggle')
+  if(toggle?.getAttribute('aria-expanded')==='false')toggle.click()
+  requestAnimationFrame(()=>{node.scrollIntoView({block:'center',behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});node.querySelector<HTMLElement>('input,textarea,select')?.focus({preventScroll:true})})
+ }
  return <><DisclosureCard title={t('启动配置')} count={ownModules.length} summary={ownModules.length?ownModules.map(value=>value.name).join(' · '):t('尚未配置启动模块，可使用外部已启动接口')} status={error?t('读取失败'):!loaded?t('正在读取启动配置'):t('{0} 个启动模块',{0:ownModules.length})} open={open} onOpenChange={setOpen} className="iw-modules-card">
   <p className="ros-field-hint">{t('可使用独立节点、组件、程序或已有 launch，配置时不会启动设备')}</p>
   <div className="buttons iw-card-actions"><button disabled={busy} onClick={()=>void scan()}><Icon name="search"/>{t('扫描可执行入口')}</button><button disabled={busy} onClick={()=>edit({name:'',kind:'node',package:'',executable:'',workspace_id:workspaceId,dependencies:[],provides:[]})}><Icon name="plus"/>{t('添加启动模块')}</button></div>
@@ -77,12 +88,17 @@ export default function SubsystemModules({client,workspaceId,open:controlledOpen
     {['node','launch'].includes(draft.kind)&&<label className="field"><span>{t(draft.kind==='launch'?'launch 文件名':'可执行入口')}</span><input value={draft.executable||''} onChange={event=>setDraft({...draft,executable:event.target.value})}/></label>}
     {draft.kind==='component'&&<label className="field"><span>{t('组件类名')}</span><input value={draft.plugin||''} onChange={event=>setDraft({...draft,plugin:event.target.value})}/></label>}
    </div>
-   {draft.kind==='process'&&<label className="field"><span>{t('程序与参数，每行一项')}</span><textarea className="ros-code" rows={4} value={argv} placeholder="/path/to/program" onChange={event=>setArgv(event.target.value)}/></label>}
-   <DisclosureCard title={t('先启动的模块')} count={draft.dependencies?.length||0} summary={(draft.dependencies||[]).map((id:string)=>modules.find(value=>value.id===id)?.name||id).join(' · ')||t('没有前置启动依赖')}>
+   {draft.kind==='process'&&<div ref={node=>{moduleSections.current.parameters=node}}><label className="field"><span>{t('程序与参数，每行一项')}</span><textarea className="ros-code" rows={4} value={argv} placeholder="/path/to/program" onChange={event=>setArgv(event.target.value)}/></label></div>}
+   <div className="iw-module-review"><strong>{t('核对当前启动配置')}</strong><div className="iw-module-review-grid">
+    <button type="button" onClick={()=>revealModuleSection('parameters')}><strong>{t(draft.kind==='process'?'程序与参数':'启动参数')}</strong><small>{parameterSummary}</small></button>
+    <button type="button" onClick={()=>revealModuleSection('dependencies')}><strong>{t('先启动的模块')}</strong><small>{(draft.dependencies||[]).map((id:string)=>modules.find(value=>value.id===id)?.name||id).join(' · ')||t('没有前置启动依赖')}</small></button>
+    <button type="button" onClick={()=>revealModuleSection('provides')}><strong>{t('提供的通信接口')}</strong><small>{(draft.provides||[]).map((entry:Json)=>entry.name||t('未命名通信接口')).join(' · ')||t('尚未声明提供接口')}</small></button>
+   </div><p className="ros-field-hint">{t('提供接口用于任务自动匹配与接口就绪检查，额外健康条件按需配置')}</p></div>
+   <div ref={node=>{moduleSections.current.dependencies=node}}><DisclosureCard title={t('先启动的模块')} count={draft.dependencies?.length||0} summary={(draft.dependencies||[]).map((id:string)=>modules.find(value=>value.id===id)?.name||id).join(' · ')||t('没有前置启动依赖')}>
     {availableDependencies.map(value=><label className="toggle iw-module-dependency" key={value.id}><input type="checkbox" checked={draft.dependencies?.includes(value.id)||false} onChange={event=>setDraft({...draft,dependencies:event.target.checked?[...(draft.dependencies||[]),value.id]:(draft.dependencies||[]).filter((id:string)=>id!==value.id)})}/><span>{value.name}{value.workspace_id!==workspaceId&&<small>{t('其他子系统')}</small>}</span></label>)}
     {!availableDependencies.length&&<p className="ros-field-hint">{t('没有其他可选模块')}</p>}
-   </DisclosureCard>
-   <DisclosureCard title={t('提供的通信接口')} count={draft.provides?.length||0} summary={t('用于匹配任务提供者与检查模块就绪')}>
+   </DisclosureCard></div>
+   <div ref={node=>{moduleSections.current.provides=node}}><DisclosureCard title={t('提供的通信接口')} count={draft.provides?.length||0} summary={t('用于匹配任务提供者与检查模块就绪')}>
     <div className="iw-object-cards">{(draft.provides||[]).map((entry:Json,index:number)=>{
      const update=(patch:Json)=>setDraft({...draft,provides:draft.provides.map((value:Json,position:number)=>position===index?{...value,...patch}:value)})
      return <DisclosureCard key={index} title={entry.name||t('未命名通信接口')} summary={t(endpointLabel(entry))+' · '+(entry.type||t('接口类型待确认'))} defaultOpen={index===newEndpoint}>
@@ -91,8 +107,8 @@ export default function SubsystemModules({client,workspaceId,open:controlledOpen
       <button onClick={()=>setDraft({...draft,provides:draft.provides.filter((_:Json,position:number)=>position!==index)})}>{t('移除')}</button>
      </DisclosureCard>
     })}</div><button onClick={()=>{setNewEndpoint(draft.provides?.length||0);setDraft({...draft,provides:[...(draft.provides||[]),{kind:'service',name:'',type:''}]})}}><Icon name="plus"/>{t('添加接口')}</button>
-   </DisclosureCard>
-   {draft.kind==='launch'?<DisclosureCard title={t('launch 启动参数')} summary={t('供实际启动与离线名称解析共同使用')}><label className="field"><span>{t('启动参数对象')}</span><textarea className="ros-code" rows={6} value={launchArguments} onChange={event=>setLaunchArguments(event.target.value)}/></label></DisclosureCard>:draft.kind!=='process'&&<DisclosureCard title={t('节点参数')} summary={t('填写参数对象，复杂文件与转换可在高级设置中配置')}><label className="field"><span>{t('节点参数对象')}</span><textarea className="ros-code" rows={6} value={parameters} onChange={event=>setParameters(event.target.value)}/></label><div className="ros-form-grid"><label className="field"><span>{t('节点名称')}</span><input value={draft.node_name||''} onChange={event=>setDraft({...draft,node_name:event.target.value})}/></label><label className="field"><span>{t('命名空间')}</span><input value={draft.namespace||''} onChange={event=>setDraft({...draft,namespace:event.target.value})}/></label></div></DisclosureCard>}
+   </DisclosureCard></div>
+   {draft.kind!=='process'&&<div ref={node=>{moduleSections.current.parameters=node}}>{draft.kind==='launch'?<DisclosureCard title={t('launch 启动参数')} summary={t('供实际启动与离线名称解析共同使用')}><label className="field"><span>{t('启动参数对象')}</span><textarea className="ros-code" rows={6} value={launchArguments} onChange={event=>setLaunchArguments(event.target.value)}/></label></DisclosureCard>:draft.kind!=='process'&&<DisclosureCard title={t('节点参数')} summary={t('填写参数对象，复杂文件与转换可在高级设置中配置')}><label className="field"><span>{t('节点参数对象')}</span><textarea className="ros-code" rows={6} value={parameters} onChange={event=>setParameters(event.target.value)}/></label><div className="ros-form-grid"><label className="field"><span>{t('节点名称')}</span><input value={draft.node_name||''} onChange={event=>setDraft({...draft,node_name:event.target.value})}/></label><label className="field"><span>{t('命名空间')}</span><input value={draft.namespace||''} onChange={event=>setDraft({...draft,namespace:event.target.value})}/></label></div></DisclosureCard>}</div>}
    <DisclosureCard title={t('启动与停止等待')} summary={t('启动 {0} 秒 · 停止 {1} 秒',{0:draft.startup_timeout_s??60,1:draft.stop_timeout_s??15})}><div className="ros-form-grid"><label className="field"><span>{t('启动等待秒数')}</span><input type="number" min="1" max="300" value={draft.startup_timeout_s??60} onChange={event=>setDraft({...draft,startup_timeout_s:Number(event.target.value)})}/></label><label className="field"><span>{t('停止等待秒数')}</span><input type="number" min="1" max="300" value={draft.stop_timeout_s??15} onChange={event=>setDraft({...draft,stop_timeout_s:Number(event.target.value)})}/></label></div></DisclosureCard>
    <DisclosureCard title={t('就绪与持续健康')} summary={health.trim()==='[]'?t('未配置额外健康条件，仍可按进程与声明接口检查'):t('已填写健康条件，保存后生效')}>
     <p className="ros-field-hint">{t('kind 可为 node、topic、service、action 或 lifecycle，name 使用完整名称，topic 需要 type，可添加 condition 与 max_age_s')}</p>
