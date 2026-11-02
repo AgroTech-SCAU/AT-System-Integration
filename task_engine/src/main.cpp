@@ -79,9 +79,14 @@ int main(int argc, char **argv) {
                                                       : "http://127.0.0.1:8765",
                                                   secret);
       registry = transport->request("GET", "/system/snapshot");
-      if (options.count("--registry") &&
-          registry != read_json(options["--registry"]))
-        throw std::runtime_error("snapshot_mismatch");
+      if (options.count("--registry")) {
+        auto frozen = read_json(options["--registry"]);
+        auto system = frozen;
+        system.erase("ros_tasks");
+        if (registry != system)
+          throw std::runtime_error("snapshot_mismatch");
+        registry = std::move(frozen);
+      }
       control = read_json(options.at("--control-file"));
     }
     // 离线校验不派发网络，工作线程保持空队列

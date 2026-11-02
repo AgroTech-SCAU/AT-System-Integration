@@ -5,11 +5,15 @@ cd -- "$project_directory"
 # 在本终端前台运行 Agent 和 GUI 管理器；端口和会话参数仍为全局选项
 source "$project_directory/scripts/local-paths.sh"
 if [[ "${1:-}" == '--help' || "${1:-}" == '-h' ]]; then
-    printf '%s\n' '用法: ./launch.sh [--config PATH] [--state-dir PATH] [--task-engine PATH] [--ui-dir PATH] [--desktop-dir PATH] [--endpoint URL] [--session-file PATH] [--no-window]' '首次执行 ./install.sh；窗口和 Agent 跟随当前终端，Ctrl+C 或关闭窗口请求安全停止；--no-window 仅启动前台 Agent'
+    printf '%s\n' '用法: ./launch.sh [--profile PATH] [--config PATH] [--state-dir PATH] [--task-engine PATH] [--ui-dir PATH] [--desktop-dir PATH] [--endpoint URL] [--session-file PATH] [--no-window]' '首次执行 ./install.sh；--profile 打开机器人工程目录；窗口和 Agent 跟随当前终端，Ctrl+C 或关闭窗口请求安全停止；--no-window 仅启动前台 Agent'
     exit 0
 fi
 if [[ ! -x "$python_executable" ]]; then
     printf '%s\n' '尚未安装本机环境，请先执行 ./install.sh' >&2
+    exit 1
+fi
+if ! "$python_executable" -c 'import sys; from pathlib import Path; import agro_runtime; sys.exit(Path(agro_runtime.__file__).resolve().parent != Path(sys.argv[1]).resolve() / "src/agro_runtime")' "$project_directory" >/dev/null 2>&1; then
+    printf '%s\n' '本机安装与当前工程目录不匹配，请在当前目录重新执行 ./install.sh' >&2
     exit 1
 fi
 global_options=()

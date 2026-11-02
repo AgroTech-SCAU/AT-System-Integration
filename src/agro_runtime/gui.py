@@ -330,6 +330,8 @@ def open_gui(args):
                     "--ui-dir",
                     str(directory),
                 ]
+                if getattr(args,'profile',None):
+                    command += ['--profile', str(Path(args.profile).expanduser().resolve())]
                 # stdout/stderr 继承终端，且不脱离终端对应的 launcher 生命周期
                 # 独立进程组防止 Ctrl+C 同时打断 Agent 的异步安全停止逻辑
                 process = subprocess.Popen(

@@ -43,7 +43,7 @@ class TaskManifest(ContractModel):
     parameters: dict[Identifier, ParameterDescriptor] = Field(default_factory=dict)
     max_targets: StrictInt = Field(ge=1, le=8)
     max_recovery_attempts: StrictInt = Field(ge=0, le=0)
-    timeout_ms: StrictInt = Field(ge=1000, le=60000)
+    timeout_ms: StrictInt = Field(ge=1000, le=3660000)
 
 
 def _digest(payload):
@@ -123,8 +123,18 @@ class TaskManager:
             self._stage_maps[identity]={n.get('operation_node_id'):n.get('stage') for n in definition['node_mapping']} if definition else self.store.snapshot(identity).get('stage_mapping',{})
         return self._stage_maps[identity].get(node_id,node_id)
 
+    @property
+    def ros_operations(self):
+        return getattr(self.documents, 'ros_operations', None) if self.documents else None
+
     def _operations(self, identity):
-        return self.runtime.records.task_operations(identity)
+        operations = self.runtime.records.task_operations(identity)
+        return operations + (self.ros_operations.operations(identity) if self.ros_operations else [])
+
+    def _cancel_operation(self, identity):
+        if identity.startswith('rosop_') and self.ros_operations:
+            return self.ros_operations.cancel(identity)
+        return self.runtime.engine.cancel(identity)
 
     def status(self, identity):
         status = self.store.status(identity)
@@ -247,8 +257,6 @@ class TaskManager:
             if candidate['system'] != current['system'] or candidate['packages'] != current['packages']:
                 fail('$.config_ref', 'snapshot_mismatch', '配置草稿与 Agent 当前冻结系统不一致')
         parameters = _values(request.parameters, manifest.parameters, '$.parameters', parameters=True)
-        if definition and parameters!=_values(definition['parameters'], manifest.parameters, '$.definition.parameters', parameters=True):
-            fail('$.parameters','published_parameters_mismatch','启动参数必须与不可变发布定义一致')
         assets = {}
         for name, reference in manifest.assets.items():
             asset_path = (path.parent / reference.path).resolve()
@@ -287,13 +295,13 @@ class TaskManager:
                 'value': assets['camera_to_arm']['content']['translation_m'][0]}
         return {'task_ref': str(path), 'xml': xml, 'manifest': manifest.model_dump(mode='json'),
                 'assets': assets, 'parameters': parameters, 'blackboard': blackboard,
-                'system': self.runtime.snapshot(), 'software': _source_identity(self.executable),
+                'system': {**self.runtime.snapshot(), **({'ros_tasks':definition.get('ros_tasks', [])} if definition else {})}, 'software': _source_identity(self.executable),
                 **({'definition':definition} if definition else {'stage_mapping':stage_mapping})}
 
     def preflight(self, request):
         return self._freeze(parse(TaskStart, request))
 
-    async def start_task(self, request, owner):
+    async def start_task(self, request, owner, *, standalone=False, control_token=None):
         request = parse(TaskStart, request)
         fingerprint = _digest(request.model_dump(mode='json'))
         async with self._lock:
@@ -304,11 +312,21 @@ class TaskManager:
                 return self.status(previous['task_run_id'])
             if not self.executable or not Path(self.executable).is_file() or not os.access(self.executable, os.X_OK) or not self.endpoint or not self.session_secret:
                 fail('$.task_engine', 'task_engine_unavailable', 'Agent 未配置可用的 C++ 执行器与本机会话入口')
-            if not self.runtime.accepting or self.runtime.engine.control.mode != RobotMode.STANDBY:
-                fail('$.system', 'task_not_ready', '任务启动需要系统就绪且处于待命模式')
-            if any(s['state'] in ACTIVE or s['state']=='UNKNOWN' or not s['stop_confirmed'] for s in self.store.list()):
+            ready=self.runtime.state=='STOPPED' if standalone else self.runtime.accepting
+            expected_mode = RobotMode.AUTO if control_token else RobotMode.STANDBY
+            if control_token:
+                self.runtime.engine.control.validate_control(control_token, [])
+            if not ready or self.runtime.engine.control.mode != expected_mode:
+                fail('$.system', 'task_not_ready', '任务启动需要可用的执行环境且处于待命模式')
+            if any(status['state']=='UNKNOWN' or not status['stop_confirmed'] and status['state'] not in ACTIVE or
+                   status['state'] in ACTIVE and (not control_token or status.get('control_group') != control_token.owner)
+                   for status in self.store.list()):
                 fail('$.task', 'task_busy', '已有任务执行中、停止未确认或未知结果待核对')
             snapshot = self.preflight(request)
+            if standalone and any(node.tag.startswith('Capability_') for node in ET.fromstring(snapshot['xml']).iter()):
+                fail('$.tree','system_required','此行为树包含需要已就绪系统的能力')
+            snapshot['standalone_ros']=standalone
+            snapshot['shared_control'] = control_token is not None
             identity = 'task_' + uuid4().hex
             directory = self.directory / identity
             directory.mkdir()
@@ -332,18 +350,23 @@ class TaskManager:
                 fail('$.task_ref', 'tree_validation_timeout', '行为树静态校验超时')
             if validation.returncode:
                 fail('$.task_ref', 'tree_validation_failed', stdout.decode(errors='replace')[:4000])
-            if not self.runtime.accepting or self.runtime.engine.control.mode != RobotMode.STANDBY:
+            ready=self.runtime.state=='STOPPED' if standalone else self.runtime.accepting
+            if control_token:
+                self.runtime.engine.control.validate_control(control_token, [])
+            if not ready or self.runtime.engine.control.mode != expected_mode:
                 fail('$.system', 'task_not_ready', '校验期间系统或控制状态已改变')
             snapshot_id, _ = SnapshotStore(self.directory / 'snapshots').save(snapshot)
             status = {'task_run_id': identity, 'request_id': request.request_id, 'snapshot_id': snapshot_id,
                       'system_snapshot_id': self.runtime.snapshot_id, 'state': 'ACCEPTED', 'tree_state': 'IDLE',
                       'stop_confirmed': True, 'cancel_requested': False, 'error': None, 'business_result': None,
                       'nodes': [], 'process_identity': None}
+            if control_token:
+                status['control_group'] = control_token.owner
             self.store.reserve(request.request_id, identity, fingerprint, snapshot, status)
             token = None
             process = None
             try:
-                token = self.runtime.take_control('AUTO', owner, lease_s=65.0)
+                token = control_token or (self.runtime.engine.control.begin_task(owner,lease_s=max(65.0,snapshot['manifest']['timeout_ms']/1000+15)) if standalone else self.runtime.take_control('AUTO', owner, lease_s=max(65.0,snapshot['manifest']['timeout_ms']/1000+15)))
                 token_path = directory / 'control.json'
                 token_path.write_text(token.model_dump_json())
                 token_path.chmod(0o600)
@@ -380,7 +403,7 @@ class TaskManager:
                 status.update(state=state, stop_confirmed=stopped, error=error)
                 self.store.save(identity, status)
                 self.store.event(identity, {'type':'task_start_failed','state':state,'error':error})
-                if stopped and token and self.runtime.engine.control._epoch == token.control_epoch:
+                if stopped and token and not control_token and self.runtime.engine.control._epoch == token.control_epoch:
                     self.runtime.engine.control.set_mode(RobotMode.STANDBY)
                 for name in ('control.json','session.token'):
                     (directory/name).unlink(missing_ok=True)
@@ -402,7 +425,7 @@ class TaskManager:
                 pass
         for operation in self._operations(identity):
             if operation['state'] not in ('SUCCEEDED', 'FAILED', 'CANCELED', 'UNKNOWN'):
-                self.runtime.engine.cancel(operation['operation_id'])
+                self._cancel_operation(operation['operation_id'])
         return self.status(identity)
 
     def takeover(self):
@@ -469,7 +492,7 @@ class TaskManager:
                 self.store.event(identity, {'type':'executor_lost','returncode':process.returncode})
                 for op in self._operations(identity):
                     if op['state'] in ('ACCEPTED','RUNNING','CANCELING'):
-                        self.runtime.engine.cancel(op['operation_id'])
+                        self._cancel_operation(op['operation_id'])
                 deadline=asyncio.get_running_loop().time()+self.runtime.engine.cancel_timeout_s+.1
                 while any(op['state'] in ('ACCEPTED','RUNNING','CANCELING') for op in self._operations(identity)) and asyncio.get_running_loop().time()<deadline:
                     await asyncio.sleep(.01)
@@ -485,6 +508,7 @@ class TaskManager:
                 status['state'] = 'CANCELED'
             elif process.returncode == 0 and report.get('tree_state') == 'SUCCESS':
                 status['state'] = 'SUCCEEDED'
+                status['output'] = report.get('output', {})
             else:
                 status['state'] = 'FAILED'
                 status['error'] = report.get('error') or next((o['error'] for o in reversed(operations) if o['error']), None) or {'code':'tree_failed','reason':'行为树业务条件未满足'}
@@ -508,7 +532,7 @@ class TaskManager:
                         'attempts':sum(self._stage(identity,o['node_id'])=='grip' for o in related), 'operation_ids':[o['operation_id'] for o in related]})
             self.store.save(identity, status)
             self.store.event(identity, {'type':'task_finished','state':status['state'],'business_result':status['business_result']})
-            if stopped and self.runtime.engine.control.mode == RobotMode.AUTO and self.runtime.engine.control._epoch == epoch:
+            if stopped and not self.store.snapshot(identity).get('shared_control') and self.runtime.engine.control.mode == RobotMode.AUTO and self.runtime.engine.control._epoch == epoch:
                 self.runtime.engine.control.set_mode(RobotMode.STANDBY)
             for name in ('control.json', 'session.token'):
                 (self.directory / identity / name).unlink(missing_ok=True)
@@ -521,7 +545,7 @@ class TaskManager:
                 process.send_signal(signal.SIGTERM)
             for op in self._operations(identity):
                 if op['state'] in ('ACCEPTED','RUNNING','CANCELING'):
-                    self.runtime.engine.cancel(op['operation_id'])
+                    self._cancel_operation(op['operation_id'])
 
     async def close(self):
         if not self._closed:

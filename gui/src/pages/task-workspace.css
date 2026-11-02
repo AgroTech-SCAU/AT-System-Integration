@@ -1,0 +1,6 @@
+.studio-binding-context{display:flex;align-items:center;justify-content:space-between;gap:16px;flex:none;min-height:38px;padding:4px 16px;border-bottom:1px solid var(--line);background:var(--card)}
+.studio-binding-context .studio-route{min-width:0}
+.studio-binding-context .studio-route>span{overflow:hidden;text-overflow:ellipsis}
+.studio-binding-context .studio-route>button,.studio-binding-context .studio-route>strong{flex:none}
+.studio-binding-hint{color:var(--muted);font-size:11px;white-space:nowrap}
+@media(max-width:760px){.studio-binding-context{padding:4px 10px}.studio-binding-hint{display:none}}

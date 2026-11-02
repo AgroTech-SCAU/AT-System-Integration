@@ -22,7 +22,7 @@ try {
   app.exit(1)
 }
 if (url && dataDirectory) {
-  app.setName('AgroTech Launcher')
+  app.setName('ATIL Robot Studio')
   fs.mkdirSync(dataDirectory, { recursive: true })
   app.setPath('userData', dataDirectory)
   app.setPath('sessionData', dataDirectory)
@@ -45,6 +45,7 @@ if (url && dataDirectory) {
     app.whenReady().then(async () => {
       Menu.setApplicationMenu(null)
       win = new BrowserWindow({
+        icon: path.join(__dirname, '../public/brand/association.png'),
         width: 1300, height: 900, minWidth: 640, minHeight: 480,
         frame: false, show: false, backgroundColor: '#0a0a10',
         webPreferences: { preload: path.join(__dirname, 'preload.cjs'),
@@ -112,6 +113,11 @@ if (url && dataDirectory) {
         if (!result.canceled && result.filePath) fs.writeFileSync(result.filePath, document.xml, { mode: 0o600 })
       })
       // 工程文件仅由文件对话框选择，渲染进程无任意文件系统访问能力
+      ipcMain.handle('agro:interface-folder', async event => {
+        trusted(event)
+        const picked = await dialog.showOpenDialog(win, { properties: ['openDirectory'] })
+        return picked.canceled ? null : picked.filePaths[0] || null
+      })
       ipcMain.handle('agro:project-open', async event => {
         trusted(event)
         const picked = await dialog.showOpenDialog(win, { properties: ['openFile'],

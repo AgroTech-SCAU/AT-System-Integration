@@ -1,0 +1,308 @@
+import DataContractEditor from './DataContractEditor'
+import DisclosureCard from '../components/DisclosureCard'
+import TaskProvider from './TaskProvider'
+import {locateStudio,takeStudioLocation,type StudioLocation} from '../studio-links'
+import {readTaskSeed,clearTaskSeed} from './task-seed'
+import {fieldContract,schemaPaths} from '../data-contracts'
+import type {FieldNote} from './FieldNoteEditor'
+import type {OfflineEndpoint} from './OfflineCommunications'
+import RosCommunicationField from './RosCommunicationField'
+import RosSelect from '../components/StudioSelect'
+import InterfaceIssues from './InterfaceIssues'
+import {confirmDialog, nameDialog, unsavedDialog, deferNavigation} from '../components/StudioDialogs'
+import {AnimatePresence,motion} from 'motion/react'
+import {springs, fade} from '../motion'
+import {useLocale} from '../locale'
+import {useEffect,useMemo,useRef,useState} from 'react'
+import {Field} from '../components/Foundation'
+import {AnchoredPopover} from '../components/AnchoredPopover'
+import {Icon} from '../components/Icon'
+import {TaskIcon, TaskIconPicker} from '../components/TaskIconPicker'
+import {ApiError} from '../api'
+import {ErrorFields,type PageProps} from './shared'
+import './ros-workbench.css'
+import InterfaceWorkspacePicker, {type InterfaceWorkspace, type WorkspaceResolution, type WorkspaceInterface, type InterfaceIssue} from './InterfaceWorkspacePicker'
+import SchemaMessageForm, {MessageFieldIssues, fallbackFields, reconcileFields, invalidMessageFields, schemaFieldAt, type MessageSchema} from './SchemaMessageForm'
+import type {Workspace} from '../types'
+
+type Contract={type:string;unit?:string;[key:string]:unknown}
+type PortRow={key:string;name:string;path:string;contract:Contract}
+export type RosTask={
+ id?:string;name:string;icon?:string;icon_mode?:'workspace'|'manual';kind:'service'|'action'|'publish_once'|'publish_periodic'|'subscribe_wait'|'compute'
+ execution_policy?:Record<string,boolean>;compute_entrypoint?:string;path_fields?:string[];
+ operation?:string;execution_workspace_id?:string;module_ids?:string[];startup_policy?:'managed'|'external';stop_observation?:Record<string,unknown>
+ resource_labels?:Record<string,string>;interface:string;ros_type:string;schema_id?:string;workspace_ids?:string[];payload:Record<string,unknown>;stop_payload?:Record<string,unknown>
+ condition?:{field?:string;operator?:string;value?:unknown};success_condition?:{field?:string;operator?:string;value?:unknown};rate_hz:number;timeout_s:number
+ stop_confirmation_field?:string;error_message_field?:string;stop_recovery_service?:string
+ qos_reliability?:'reliable'|'best_effort';inputs?:Record<string,Contract>;outputs?:Record<string,Contract>
+ input_bindings?:Record<string,string>;output_bindings?:Record<string,string>;resources?:{name:string;access:'exclusive'|'shared'}[]
+}
+type Props=PageProps&{robotId?:string;onNavigate?:(page:Workspace)=>void;requestedTask?:string;requestKey?:number;contextLabel?:string;onBound?:(reference:string)=>void;onBack?:()=>void;onCancelOpen?:()=>void;requestedSection?:string;requestedField?:string}
+const kinds:RosTask['kind'][]=['action','service','publish_once','publish_periodic','subscribe_wait','compute']
+const names:Record<RosTask['kind'],string>={compute:'数据处理',action:'执行 Action 目标',service:'调用 Service 服务',publish_once:'发布一次话题消息',publish_periodic:'持续发布话题消息',subscribe_wait:'等待话题消息'}
+const fresh=(translate=(value:string)=>value):RosTask=>({icon:'generic',icon_mode:'workspace',name:translate('未命名任务'),kind:'action',interface:'',ros_type:'',payload:{},condition:{operator:'any'},rate_hz:5,timeout_s:15,inputs:{},outputs:{},input_bindings:{},output_bindings:{},resources:[]})
+const pretty=(value:unknown)=>JSON.stringify(value??{},null,2)
+const isRecord=(value:unknown):value is Record<string,unknown>=>value!==null&&typeof value==='object'&&!Array.isArray(value)
+function leafFields(value:Record<string,unknown>,prefix:string[]=[]):{path:string[];value:unknown}[]{return Object.entries(value).flatMap(([name,content])=>isRecord(content)&&Object.keys(content).length?leafFields(content,[...prefix,name]):[{path:[...prefix,name],value:content}])}
+const portRows=(task:RosTask,direction:'inputs'|'outputs'):PortRow[]=>direction==='inputs'?Object.entries(task.inputs||{}).flatMap(([name,contract])=>{const paths=Object.entries(task.input_bindings||{}).filter(([,input])=>input===name).map(([path])=>path);return (paths.length?paths:['']).map(path=>({key:crypto.randomUUID(),name,path,contract}))}):Object.entries(task.outputs||{}).map(([name,contract])=>({key:crypto.randomUUID(),name,path:task.output_bindings?.[name]||'',contract}))
+
+
+
+function Ports({title,rows,onChange,input,validFields,open,onOpenChange}:{title:string;rows:PortRow[];onChange:(rows:PortRow[])=>void;input:boolean;validFields?:MessageSchema['field_schemas'];open?:boolean;onOpenChange?:(open:boolean)=>void}){
+ const {t}=useLocale()
+
+ const update=(key:string,patch:Partial<PortRow>)=>onChange(rows.map(row=>row.key===key?{...row,...patch}:row))
+ return <DisclosureCard open={open} onOpenChange={onOpenChange} title={title} count={rows.length} summary={rows.length?rows.map(row=>row.name||t("参数名")).join(' · '):input?t("使用消息中的固定值"):t("暂未声明输出")} status={rows.some(row=>!row.name.trim()||!row.path)?<span style={{color:'var(--red)'}}>{t("配置待核对")}</span>:undefined}><div className="ros-section-title"><p>{input?t("将任务输入写入消息字段"):t("将响应或结果字段提供给后续任务")}</p><button title={t("添加")+title} aria-label={t("添加")+title} onClick={()=>onChange([...rows,{key:crypto.randomUUID(),name:'',path:'',contract:{type:'string'}}])}><Icon name="plus"/></button></div>
+ {!rows.length?<div className="ros-port-empty">{input?t("使用消息中的固定值"):t("暂未声明输出")}</div>:<div className="ros-ports">{rows.map((row,index)=><div className="ros-port-row" key={row.key} data-studio-field={(input?'inputs.':'outputs.')+row.name}>
+ <input aria-label={t("{0} {1} 名称", {0: title, 1: index+1})} placeholder={t("参数名")} value={row.name} onChange={e=>update(row.key,{name:e.target.value})}/>
+ {row.contract.extensions?<span className="ros-port-type" title={t('类型由接口字段自动确定')}>{String((row.contract.extensions as any).ros_type)}</span>:<RosSelect value={row.contract.type} label={t("数据类型")} options={["json","string","boolean","number","integer"].map(value=>({value,label:value}))} onChange={type=>update(row.key,{contract:{type,...(["number","integer"].includes(type)?{unit:"unspecified"}:{})}})}/>}
+ {!validFields?<input aria-label={t("字段路径")} value={row.path} onChange={e=>update(row.key,{path:e.target.value})}/>:<RosSelect searchable label={t("{0} {1} 字段路径",{0:title,1:index+1})} value={row.path} options={[{value:'',label:t('选择接口字段')},...(validFields?schemaPaths(validFields).map(({path,schema})=>({value:path,label:path,hint:schema.type})):[])]} onChange={path=>{const schema=validFields&&schemaFieldAt(validFields,path);update(row.key,{path,...(schema?{contract:fieldContract(schema)}:{})})}}/>}
+
+ {!row.contract.choices&&['number','integer','stamped_pose','target_list'].includes(row.contract.type)&&<input className="ros-unit" aria-label={t("{0} {1} 单位", {0: title, 1: index+1})} placeholder={t("单位")} value={row.contract.unit==='unspecified'?'':row.contract.unit||''} onChange={e=>update(row.key,{contract:{...row.contract,unit:e.target.value||'unspecified'}})}/>}
+ {['stamped_pose','target_list'].includes(row.contract.type)&&<div className="ros-pose-contract"><input aria-label={t("{0} {1} 坐标系", {0: title, 1: index+1})} placeholder={t("坐标系")} value={String(row.contract.frame_id||'')} onChange={e=>update(row.key,{contract:{...row.contract,frame_id:e.target.value}})}/><input aria-label={t("{0} {1} 时间域", {0: title, 1: index+1})} placeholder={t("时间域")} value={String(row.contract.clock_domain||'')} onChange={e=>update(row.key,{contract:{...row.contract,clock_domain:e.target.value}})}/><input type="number" min="0.001" step="0.1" aria-label={t("{0} {1} 有效期秒", {0: title, 1: index+1})} value={Number(row.contract.max_age_s||1)} onChange={e=>update(row.key,{contract:{...row.contract,max_age_s:Number(e.target.value)}})}/></div>}
+ <DataContractEditor value={row.contract} onChange={contract=>update(row.key,{contract})}/>
+ <button aria-label={t("移除{0} {1}", {0: title, 1: index+1})} title={t("移除字段")} onClick={()=>onChange(rows.filter(item=>item.key!==row.key))}><Icon name="x"/></button></div>)}</div>}</DisclosureCard>
+}
+
+export default function RosTaskLibrary({client,requestedTask,requestKey,contextLabel,onBound,onBack,onCancelOpen,robotId,onNavigate,requestedSection,requestedField}:Props){
+ const {t}=useLocale()
+
+ const [uses,setUses]=useState<Record<string,{kind:string;name:string;detail:string}[]>>({}),[resources,setResources]=useState<{name:string;label:string}[]>([]),[menu,setMenu]=useState<{item:RosTask;anchor:HTMLButtonElement}|null>(null)
+ const root=useRef<HTMLDivElement>(null),generation=useRef(0),locked=useRef(false),saveRef=useRef<()=>Promise<RosTask|undefined>>(async()=>undefined),alive=useRef(true)
+ const [items,setItems]=useState<RosTask[]>([]),[current,setCurrent]=useState<RosTask>(()=>fresh(t))
+ const [payload,setPayload]=useState('{}'),[stopPayload,setStopPayload]=useState('{}'),[conditionValue,setConditionValue]=useState('')
+ const [inputRows,setInputRows]=useState<PortRow[]>([]),[outputRows,setOutputRows]=useState<PortRow[]>([])
+ const [portSections,setPortSections]=useState({inputs:false,outputs:false}),[messageOpen,setMessageOpen]=useState(false),[concurrencyOpen,setConcurrencyOpen]=useState(false),[settingsOpen,setSettingsOpen]=useState(true),[providerOpen,setProviderOpen]=useState(false)
+ const [dirty,setDirty]=useState(false),[notice,setNotice]=useState(''),[error,setError]=useState<unknown>(null),[busy,setBusy]=useState(false),[query,setQuery]=useState('')
+ const [schemaEpoch,setSchemaEpoch]=useState(0),[resolvedKey,setResolvedKey]=useState('')
+ const [previousInterface,setPreviousInterface]=useState('')
+ const bindingSchema=useRef<string|undefined>(undefined),workspaceChanged=useRef(false),endpointEdited=useRef(false)
+ const [offlineEndpoints,setOfflineEndpoints]=useState<OfflineEndpoint[]>([])
+ const [interfaceTypes,setInterfaceTypes]=useState<WorkspaceInterface[]>([]),[schemaSource,setSchemaSource]=useState('')
+ const [workspaces,setWorkspaces]=useState<InterfaceWorkspace[]>([]),[defaultIds,setDefaultIds]=useState<string[]>([])
+ const [interfaceIssues,setInterfaceIssues]=useState<InterfaceIssue[]>([]),[resolving,setResolving]=useState(false),[schemaLoading,setSchemaLoading]=useState(false)
+ const [schemaFields,setSchemaFields]=useState<MessageSchema|null>(null)
+ const [fields,setFields]=useState<Record<string,string>|null>(null),[formMode,setFormMode]=useState(true),[detail,setDetail]=useState<'message'|'ports'>('message')
+ const payloadRef=useRef(payload),currentRef=useRef(current),providerWorkspace=useRef<string|undefined>(undefined);payloadRef.current=payload;currentRef.current=current
+ const leavingForConfig=useRef(false),restoredDraft=useRef(false)
+ const [draftReady,setDraftReady]=useState(false)
+ const [pendingSeed,setPendingSeed]=useState<ReturnType<typeof readTaskSeed>>(null)
+ const seededRequest=useRef<number|undefined>(undefined)
+ const draftKey='atil.task.config-return.'+(robotId||'current')
+ const selectedWorkspaceIds=current.workspace_ids??defaultIds
+ const workspaceKey=selectedWorkspaceIds.join('|')
+ const load=async()=>{const [result,usage,available]=await Promise.all([client.request<{tasks:RosTask[]}>('/ros/tasks'),client.request<{uses:typeof uses}>('/ros/task-uses'),client.request<{resources:typeof resources}>('/ros/resources')]);if(alive.current){setItems(result.tasks);setUses(usage.uses);setResources(available.resources);setCurrent(previous=>{const saved=result.tasks.find(item=>item.id===previous.id);return saved&&!endpointEdited.current?{...previous,interface:saved.interface}:previous})}return result.tasks}
+ const loadTypes=async()=>{const result=await client.request<{workspaces:InterfaceWorkspace[];default_workspace_ids:string[]}>('/ros/interface-workspaces');if(alive.current){setWorkspaces(result.workspaces);setDefaultIds(result.default_workspace_ids)}}
+ useEffect(()=>{alive.current=true;void load().catch(setError);void loadTypes().catch(setError);const refresh=()=>{void loadTypes().catch(setError)};const refreshTasks=()=>{void load().catch(setError)};window.addEventListener('agro:ros:refresh',refreshTasks);window.addEventListener('agro:interfaces:changed',refresh);return()=>{alive.current=false;generation.current++;window.removeEventListener('agro:ros:refresh',refreshTasks);window.removeEventListener('agro:interfaces:changed',refresh)}},[client])
+ useEffect(()=>{
+   setInterfaceTypes([]);setOfflineEndpoints([]);setInterfaceIssues([]);setResolvedKey('')
+   if(!selectedWorkspaceIds.length){setResolving(false);return}
+   const controller=new AbortController();setResolving(true)
+   void client.request<WorkspaceResolution>('/ros/interface-workspaces/resolve','POST',{workspace_ids:selectedWorkspaceIds},controller.signal).then(result=>{if(controller.signal.aborted)return;setInterfaceTypes(result.types);setOfflineEndpoints(result.communications||[]);setResolvedKey(workspaceKey);if(workspaceChanged.current&&current.ros_type&&!result.types.some(item=>item.ros_type===current.ros_type&&item.available!==false))invalidateCommunication();workspaceChanged.current=false;setInterfaceIssues([...result.diagnostics,...result.conflicts.map(issue=>({code:'workspace_conflict',reason:t('工作区定义冲突，请调整选择'),ros_type:issue.ros_type}))])}).catch(cause=>{if(!controller.signal.aborted)setError(cause)}).finally(()=>{if(!controller.signal.aborted)setResolving(false)})
+   return()=>controller.abort()
+ },[client,workspaceKey,workspaces])
+ function apply(item:RosTask){providerWorkspace.current=undefined;setSettingsOpen(!item.id);setProviderOpen(false);setPortSections({inputs:false,outputs:false});setMessageOpen(false);setConcurrencyOpen(false);generation.current++;workspaceChanged.current=false;endpointEdited.current=false;bindingSchema.current=item.schema_id;setPreviousInterface('');setSchemaEpoch(epoch=>epoch+1);setCurrent(structuredClone(item));setPayload(pretty(item.payload));setStopPayload(pretty(item.stop_payload));setConditionValue(item.condition?.value===undefined?'':typeof item.condition.value==='string'?item.condition.value:JSON.stringify(item.condition.value));setInputRows(portRows(item,'inputs'));setOutputRows(portRows(item,'outputs'));setDirty(false);setFields(null);setSchemaFields(null);setSchemaSource('');setNotice('');setError(null);setFormMode(true)}
+ useEffect(()=>{
+   const raw=sessionStorage.getItem(draftKey)
+   if(!raw){setDraftReady(true);return}
+   try{const saved=JSON.parse(raw);apply(saved.current);setPayload(saved.payload);setStopPayload(saved.stopPayload);setConditionValue(saved.conditionValue);setInputRows(saved.inputRows);setOutputRows(saved.outputRows);setDirty(saved.dirty);endpointEdited.current=!!saved.dirty;setDetail(saved.detail||'message');setPreviousInterface(saved.previousInterface||'');restoredDraft.current=true;sessionStorage.removeItem(draftKey)}catch{sessionStorage.removeItem(draftKey)}
+   setDraftReady(true)
+ },[client,draftKey])
+ function collectTaskSeed(){
+  if(root.current?.closest('[hidden]'))return
+  const seed=readTaskSeed(robotId,root.current?.closest('.studio-workspace')?'editor':'system')
+  if(seed)setPendingSeed(previous=>previous?.raw===seed.raw?previous:seed)
+ }
+ useEffect(()=>{
+  collectTaskSeed()
+  const located=(event:Event)=>{const location=(event as CustomEvent<StudioLocation>).detail;if(location.page===(root.current?.closest('.studio-workspace')?'editor':'system')&&(!location.robotId||location.robotId===robotId))collectTaskSeed()}
+  window.addEventListener('agro:studio:located',located)
+  return()=>window.removeEventListener('agro:studio:located',located)
+ },[robotId,requestKey])
+ const selectedInterface=resolvedKey===workspaceKey?interfaceTypes.find(item=>item.ros_type===current.ros_type):undefined
+ const executionCandidates=workspaces.filter(workspace=>selectedWorkspaceIds.includes(workspace.id)&&(!selectedInterface?.workspace_ids.length||selectedInterface.workspace_ids.includes(workspace.id)))
+ const executionWorkspace=workspaces.find(workspace=>workspace.id===current.execution_workspace_id&&selectedWorkspaceIds.includes(workspace.id))||(executionCandidates.length===1?executionCandidates[0]:undefined)
+ const effectiveSchemaId=current.schema_id||selectedInterface?.schema_id
+ useEffect(()=>{
+  setSchemaFields(null);setFields(null);setSchemaSource('')
+  if(current.kind==='compute'||!current.ros_type||!effectiveSchemaId){setSchemaLoading(false);return}
+  const revision=generation.current,controller=new AbortController();setSchemaLoading(true)
+  void client.request<MessageSchema>(`/ros/schema?kind=${current.kind}&ros_type=${encodeURIComponent(current.ros_type)}&schema_id=${encodeURIComponent(effectiveSchemaId)}`,'GET',undefined,controller.signal).then(result=>{
+    if(controller.signal.aborted||revision!==generation.current||!alive.current)return
+    if(bindingSchema.current&&bindingSchema.current!==result.schema_id)invalidateCommunication();bindingSchema.current=result.schema_id
+    setFields(result.field_types);setSchemaFields(result);setSchemaSource(result.source||'workspace')
+    setCurrent(previous=>({...previous,schema_id:result.schema_id}))
+    {
+      let old:unknown;try{old=JSON.parse(payloadRef.current)}catch{return}
+      if(!isRecord(old))return
+      const reconciled=reconcileFields(result.field_schemas||fallbackFields(result.fields,result.field_types),old)
+      const next=pretty(reconciled.value)
+      if(next!==pretty(old)){setPayload(next);setDirty(true)}
+      if(reconciled.changed.length)setNotice(t('原参数已保留，请处理不兼容字段 {0}',{0:reconciled.changed.join(' · ')}))
+      if(current.kind==='publish_periodic')setStopPayload(previous=>{try{const value=JSON.parse(previous);return isRecord(value)?pretty(reconcileFields(result.field_schemas||fallbackFields(result.fields,result.field_types),value).value):previous}catch{return previous}})
+    }
+  }).catch(cause=>{if(!controller.signal.aborted)setError(cause)}).finally(()=>{if(!controller.signal.aborted)setSchemaLoading(false)})
+  return()=>controller.abort()
+ },[current.kind,current.ros_type,current.id,effectiveSchemaId,robotId,schemaEpoch])
+ const discard=async()=>!dirty||await unsavedDialog(current.name,async()=>Boolean(await saveRef.current()),()=>apply(items.find(item=>item.id===current.id)||fresh(t)))
+ const discardRef=useRef(discard);discardRef.current=discard
+ useEffect(()=>{
+  if(!pendingSeed)return
+  let stopped=false
+  void (async()=>{
+   if(!await discard()){clearTaskSeed(pendingSeed.raw);if(!stopped)setPendingSeed(null);return}
+   if(stopped)return
+   const seed=readTaskSeed(robotId,root.current?.closest('.studio-workspace')?'editor':'system')
+   if(!seed||seed.raw!==pendingSeed.raw){setPendingSeed(seed);return}
+   const task=seed.task
+   clearTaskSeed(seed.raw);restoredDraft.current=false;seededRequest.current=requestKey
+   apply({...fresh(t),name:task.name,kind:task.kind,interface:task.interface,ros_type:task.ros_type,...(task.workspace_ids?{workspace_ids:task.workspace_ids}:{}),...(task.execution_workspace_id?{execution_workspace_id:task.execution_workspace_id}:{}),...(task.module_ids?{module_ids:task.module_ids}:{}),...(task.schema_id?{schema_id:task.schema_id}:{})})
+   setDirty(true);setDetail('message');setMessageOpen(true);setPendingSeed(null)
+  })().catch(cause=>{if(!stopped){setError(cause);setPendingSeed(null)}})
+  return()=>{stopped=true}
+ },[pendingSeed,client,robotId])
+ async function choose(item:RosTask){if(item.id===current.id)return;if(!busy&&await discard())apply(item)}
+ async function reset(){if(!busy&&await discard()){apply(fresh(t));setDirty(true)}}
+ useEffect(()=>{if(!draftReady||requestKey===undefined||seededRequest.current===requestKey||pendingSeed||readTaskSeed(robotId,root.current?.closest('.studio-workspace')?'editor':'system'))return;const sameTask=requestedTask?current.id===requestedTask.replace(/^ros:/,''):restoredDraft.current;restoredDraft.current=false;if(sameTask){revealTaskSection(requestedSection,requestedField);return}let stopped=false;void (async()=>{if(!await discard()){onCancelOpen?.();return}const all=await load();if(stopped)return;const found=requestedTask?all.find(item=>item.id===requestedTask.replace(/^ros:/,'')):undefined;if(requestedTask&&!found){setError(new ApiError('response',[{path:'$.task',code:'not_found',reason:t("绑定的任务已不存在，请重新选择")}]));return}apply(found||{...fresh(t),name:contextLabel?.slice(0,80)||fresh(t).name});revealTaskSection(requestedSection,requestedField)})().catch(setError);return()=>{stopped=true}},[draftReady,requestKey,client,pendingSeed?.raw])
+ useEffect(()=>{
+ const visible=()=>Boolean(root.current&&!root.current.closest('[hidden]'))
+ const leave=(event:Event)=>{if(leavingForConfig.current&&event.type==='agro:navigate')return;if(dirty&&(event.type==='agro:navigate'||visible()))deferNavigation(event,discard)}
+ const unload=(event:BeforeUnloadEvent)=>{if(dirty){event.preventDefault();event.returnValue=''}}
+ const key=(event:KeyboardEvent)=>{if(!visible()||!event.ctrlKey&&!event.metaKey||event.key.toLowerCase()!=='s')return;event.preventDefault();saveRef.current()}
+ window.addEventListener('agro:navigate',leave);window.addEventListener('agro:studio:leave-task',leave);window.addEventListener('beforeunload',unload);window.addEventListener('keydown',key)
+ return()=>{window.removeEventListener('agro:navigate',leave);window.removeEventListener('agro:studio:leave-task',leave);window.removeEventListener('beforeunload',unload);window.removeEventListener('keydown',key)}
+ },[dirty,current.name,items])
+ const update=(changes:Partial<RosTask>)=>{if('interface' in changes)endpointEdited.current=true;setCurrent(p=>({...p,...changes}));setDirty(true);setNotice('')}
+ function invalidateCommunication(){endpointEdited.current=true;setCurrent(previous=>{if(previous.interface)setPreviousInterface(previous.interface);return {...previous,interface:''}});setDirty(true)}
+ const taskIcon=(current.icon_mode==='workspace'?workspaces.find(item=>item.id===selectedWorkspaceIds[0])?.icon:current.icon)||'generic'
+ const typeGroup=current.kind==='action'?'action':current.kind==='service'?'srv':'msg'
+ const matchingTypes=interfaceTypes.filter(item=>!item.dependency&&item.ros_type.split('/')[1]===typeGroup)
+ const filtered=items.filter(task=>(task.name+' '+task.interface+' '+task.ros_type).toLowerCase().includes(query.toLowerCase()))
+ const parsedStop=useMemo(()=>{try{const value=JSON.parse(stopPayload);return isRecord(value)?value:null}catch{return null}},[stopPayload])
+ const parsedPayload=useMemo(()=>{try{const value=JSON.parse(payload);return isRecord(value)?value:null}catch{return null}},[payload])
+ const messageFields=useMemo(()=>schemaFields?(schemaFields.field_schemas||fallbackFields(schemaFields.fields,schemaFields.field_types)):null,[schemaFields])
+ function expose(path:string[],value:unknown,input:boolean){const name=path.join('_'),field=path.join('.'),type=typeof value==='number'?'number':typeof value==='boolean'?'boolean':typeof value==='string'?'string':'json',row:PortRow={key:crypto.randomUUID(),name,path:field,contract:(()=>{const source=input?messageFields:schemaFields?.output_field_schemas;const schema=source&&schemaFieldAt(source,field);return schema?fieldContract(schema):{type,...(type==='number'?{unit:'unspecified'}:{})}})()};if(input)setInputRows(old=>old.some(item=>item.path===field)?old:[...old,row]);else setOutputRows(old=>old.some(item=>item.path===field)?old:[...old,row]);setPortSections(old=>({...old,[input?'inputs':'outputs']:true}));setDirty(true);setNotice(t("已添加任务{0} {1}", {0: input?t("输入"):t("输出"), 1: name}))}
+ async function annotate(path:string[],note:FieldNote):Promise<boolean>{
+  const owner=selectedInterface?.workspace_ids.find(id=>selectedWorkspaceIds.includes(id));if(!owner)return false
+  const fields={...schemaFields?.field_notes,['input.'+path.map(part=>/^\d+$/.test(part)?'*':part).join('.')]:note}
+  const result=await run(async()=>{const resolution=await client.request<WorkspaceResolution>('/ros/interface-workspaces/'+owner+'/field-notes','PUT',{ros_type:current.ros_type,fields});const updated=resolution.types.find(item=>item.ros_type===current.ros_type);if(updated?.schema_id){bindingSchema.current=updated.schema_id;setCurrent(old=>({...old,schema_id:updated.schema_id!}));setSchemaEpoch(value=>value+1);setDirty(true)}window.dispatchEvent(new Event('agro:interfaces:changed'));return true});return result===true
+ }
+ function revealIssue(cause:unknown){
+  if(cause instanceof ApiError){const paths=cause.details.map(issue=>issue.path||'');if(paths.some(path=>/payload|condition|success_condition/.test(path))){setDetail('message');setMessageOpen(true)}if(paths.some(path=>/ports|inputs|outputs|input_bindings|output_bindings/.test(path)||[...inputRows,...outputRows].some(row=>row.path===path))){setDetail('ports');setPortSections({inputs:true,outputs:true})}if(paths.some(path=>path.includes('resources')))setConcurrencyOpen(true)}
+  window.requestAnimationFrame(()=>{const field=root.current?.querySelector<HTMLElement>('[aria-invalid="true"]');if(!field)return;const cards:HTMLElement[]=[];for(let card=field.closest<HTMLElement>('.disclosure-card');card;card=card.parentElement?.closest<HTMLElement>('.disclosure-card')||null)cards.push(card);cards.reverse().forEach(card=>{const toggle=card.querySelector<HTMLButtonElement>(':scope > .disclosure-card-heading .disclosure-card-toggle');if(toggle?.getAttribute('aria-expanded')==='false')toggle.click()});window.requestAnimationFrame(()=>{field.scrollIntoView({block:'center',behavior:'smooth'});field.focus({preventScroll:true})})})
+ }
+ async function run<T,>(work:()=>Promise<T>):Promise<T|undefined>{if(locked.current)return;locked.current=true;setBusy(true);setError(null);setNotice('');try{return await work()}catch(cause){if(alive.current){setError(cause);revealIssue(cause)}}finally{locked.current=false;if(alive.current)setBusy(false)}}
+ const canSave=Boolean(current.name.trim())&&!resolving&&!schemaLoading&&(!selectedWorkspaceIds.length||resolvedKey===workspaceKey)
+ async function save(bind=false){if(!canSave){setNotice(t('请先完成必填配置'));return}return await run(async()=>{
+ const revision=generation.current;if(root.current?.querySelector('[aria-invalid="true"]'))throw new ApiError('response',[{path:'$.payload',code:'invalid_json',reason:t("请先修正标记的字段")}]);let parsed:unknown,stop:unknown
+ try{parsed=JSON.parse(payload);stop=JSON.parse(stopPayload);if(current.kind==='publish_periodic'&&messageFields&&isRecord(stop))stop=reconcileFields(messageFields,stop).value}catch{throw new ApiError('response',[{path:'$.payload',code:'invalid_json',reason:t("消息内容必须是有效的 JSON 对象")}])}
+ if(!isRecord(parsed)||!isRecord(stop))throw new ApiError('response',[{path:'$.payload',code:'invalid_json',reason:t("消息内容必须是 JSON 对象")}])
+ if(messageFields){
+   const invalid=[...invalidMessageFields(messageFields,parsed,'payload'),...(current.kind==='publish_periodic'?invalidMessageFields(messageFields,stop,'stop_payload'):[])]
+   if(invalid.length)throw new ApiError('response',invalid.map(path=>({path,code:'invalid_field',reason:t('字段值不符合接口类型或范围')})))
+   const outputFields=schemaFields?.output_field_schemas||fallbackFields(schemaFields?.output_fields||schemaFields?.fields||{})
+   const missing=[...inputRows.filter(row=>!schemaFieldAt(messageFields,row.path)),...outputRows.filter(row=>!schemaFieldAt(outputFields,row.path))]
+   if(missing.length)throw new ApiError('response',missing.map(row=>({path:row.path,code:'missing_field',reason:t('绑定字段不在当前接口中，请重新选择')})))
+ }
+
+ const inputs:Record<string,Contract>={},outputs:Record<string,Contract>={},input_bindings:Record<string,string>={},output_bindings:Record<string,string>={}
+ for(const row of inputRows){inputs[row.name]=row.contract;input_bindings[row.path]=row.name}for(const row of outputRows){outputs[row.name]=row.contract;output_bindings[row.name]=row.path}
+ if(new Set(outputRows.map(row=>row.name)).size!==outputRows.length||new Set(inputRows.map(row=>row.path)).size!==inputRows.length)throw new ApiError('response',[{path:'$.ports',code:'duplicate_binding',reason:t("输出名称或输入字段路径重复")}])
+ let value:unknown=conditionValue;try{value=JSON.parse(conditionValue)}catch{}
+ if(current.resources?.some(item=>!item.name))throw new ApiError('response',[{path:'$.resources',code:'missing_resource',reason:t('选择设备或互斥对象')}])
+ const editable={...current} as RosTask&{robot_system_id?:string;revision?:number};delete editable.robot_system_id;delete editable.revision
+ const result=await client.request<RosTask>('/ros/tasks','POST',{...editable,execution_workspace_id:selectedWorkspaceIds.includes(current.execution_workspace_id||'')?current.execution_workspace_id:providerWorkspace.current||executionWorkspace?.id,workspace_ids:selectedWorkspaceIds,icon:taskIcon,interface:editable.interface.trim(),payload:parsed,stop_payload:current.kind==='publish_periodic'?stop:undefined,condition:current.kind==='subscribe_wait'?{...current.condition,value:conditionValue===''?undefined:value}:undefined,inputs,outputs,input_bindings,output_bindings,qos_reliability:current.qos_reliability||(current.kind==='subscribe_wait'?'best_effort':'reliable')})
+ if(generation.current!==revision||!alive.current)return;endpointEdited.current=false;setCurrent(result);setDirty(false);setNotice(t("已保存"));await load();window.dispatchEvent(new Event('agro:ros:refresh'));window.dispatchEvent(new Event('agro:trees:refresh'));if(bind&&result.id)onBound?.('ros:'+result.id);return result
+ })}
+ saveRef.current=()=>save()
+ function selectInterface(ros_type:string){if(ros_type===current.ros_type)return;invalidateCommunication();bindingSchema.current=undefined;generation.current++;setSchemaEpoch(epoch=>epoch+1);setError(null);setFields(null);setSchemaFields(null);setSchemaSource('');setFormMode(true);update({ros_type,schema_id:interfaceTypes.find(item=>item.ros_type===ros_type)?.schema_id||undefined})}
+ function revealTaskSection(section?:string,field?:string){
+  if(section==='provider')setProviderOpen(true)
+  else if(section==='communication'||section==='interfaces')setSettingsOpen(true)
+  else if(section==='ports'){setDetail('ports');setPortSections({inputs:true,outputs:true})}
+  else if(section==='message'){setDetail('message');setMessageOpen(true)}
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{
+   const target=(field?Array.from(root.current?.querySelectorAll<HTMLElement>('[data-studio-field]')||[]).find(item=>item.dataset.studioField===field):null)||root.current?.querySelector<HTMLElement>(`[data-task-section="${['provider','communication','ports','message'].includes(section||'')?section:'interfaces'}"]`)
+   target?.scrollIntoView({block:'center',behavior:'smooth'})
+   if(field)(target?.matches('input,select,textarea,button')?target:target?.querySelector<HTMLElement>('input,select,textarea,button'))?.focus({preventScroll:true})
+  }))
+ }
+ useEffect(()=>{if(requestedSection)revealTaskSection(requestedSection,requestedField)},[requestedSection,requestedField])
+ useEffect(()=>{
+  if(!draftReady||root.current?.closest('.studio-workspace'))return
+  let active=true
+  const consume=()=>{const location=takeStudioLocation(robotId,'system');if(!location)return;if(readTaskSeed(robotId,'system')){collectTaskSeed();return}void (async()=>{
+   if(location.taskId&&currentRef.current.id!==location.taskId.replace(/^ros:/,'')){
+    if(!await discardRef.current()||!active)return
+    const all=await load();if(!active)return
+    const found=all.find(item=>item.id===location.taskId!.replace(/^ros:/,''))
+    if(!found){setError(new ApiError('response',[{path:'$.task',code:'not_found',reason:t('绑定的任务已不存在，请重新选择')}]));return}
+    apply(found)
+   }
+   if(active)revealTaskSection(location.section,location.field)
+  })().catch(setError)}
+  const receive=(event:Event)=>{const location=(event as CustomEvent<StudioLocation>).detail;if(location?.page==='system'&&(!location.robotId||location.robotId===robotId))consume()}
+  consume();window.addEventListener('agro:studio:located',receive)
+  return()=>{active=false;window.removeEventListener('agro:studio:located',receive)}
+ },[draftReady,client,robotId])
+ async function configureWorkspace(workspaceId?:string,section='interfaces'){
+  if(!onNavigate)return
+  try{
+   sessionStorage.setItem(draftKey,JSON.stringify({current:{...current,workspace_ids:selectedWorkspaceIds},payload,stopPayload,conditionValue,inputRows,outputRows,dirty,detail,previousInterface}))
+   const page=root.current?.closest('.studio-workspace')?'editor':'system'
+   leavingForConfig.current=true
+   const accepted=await locateStudio({page:'overview',robotId,workspaceId,section,returnTo:{page,taskId:current.id,section:'provider'}})
+   if(!accepted)sessionStorage.removeItem(draftKey)
+  }catch(cause){setError(cause)}finally{leavingForConfig.current=false}
+ }
+ function manageWorkspaces(){const sources=selectedInterface?.workspace_ids.length?selectedInterface.workspace_ids:selectedWorkspaceIds;void configureWorkspace(sources.length===1?sources[0]:undefined,'interfaces')}
+ function selectWorkspaces(ids:string[]){setResolving(ids.length>0);if(!ids.length)invalidateCommunication();workspaceChanged.current=true;generation.current++;setSchemaEpoch(epoch=>epoch+1);setError(null);setSchemaFields(null);setFields(null);update({workspace_ids:ids,schema_id:undefined,...(current.execution_workspace_id&&!ids.includes(current.execution_workspace_id)?{execution_workspace_id:undefined}:{})})}
+ async function remove(item=current){setMenu(null);if(!item.id||!await confirmDialog(t('删除任务「{0}」',{0:item.name}),'删除任务',true))return;await client.request('/ros/tasks/'+item.id,'DELETE');if(item.id===current.id)apply(fresh(t));await load();setNotice(t('已删除'));window.dispatchEvent(new Event('agro:ros:refresh'));window.dispatchEvent(new Event('agro:trees:refresh'))}
+
+ async function duplicate(item:RosTask){
+   setMenu(null);if(busy||!item.id)return
+   if(dirty){if(!await confirmDialog(t('保存当前修改后创建任务副本'),'保存并创建副本'))return;if(!await save())return}
+   let suggested=item.name+t(' 副本'),suffix=2;while(items.some(task=>task.name===suggested))suggested=item.name+t(' 副本')+' '+suffix++;const name=await nameDialog('创建副本',suggested);if(!name)return
+   await run(async()=>{const copy=await client.request<RosTask>('/ros/tasks/'+item.id+'/copy','POST',{name});apply(copy);await load();setNotice(t('副本已创建'));window.dispatchEvent(new Event('agro:ros:refresh'))})
+ }
+ async function addResource(){const name=await nameDialog('添加设备或互斥对象','','添加');if(!name)return;await run(async()=>{const resource=await client.request<{name:string;label:string}>('/ros/resources','POST',{name});setResources(old=>[...old.filter(item=>item.name!==resource.name),resource]);if(!current.resources?.some(item=>item.name===resource.name))update({resources:[...(current.resources||[]),{name:resource.name,access:'exclusive'}],resource_labels:{...current.resource_labels,[resource.name]:resource.label}})})}
+
+ return <div className="ros-workbench" ref={root}>
+ <header className="ros-toolbar"><div className="ros-document-title"><Icon name="boxes"/><strong>{current.name}</strong><span className="ros-save-state">{busy?t("处理中"):dirty?t("未保存"):current.id?t("已保存"):t("新任务")}</span></div><div className="ros-toolbar-actions">{onBound&&current.id&&!dirty&&<button className="primary" disabled={busy} onClick={()=>onBound('ros:'+current.id)}>{t("使用此任务")}</button>}<button disabled={busy||!canSave} title={t("保存任务 ⌘S / Ctrl+S")} onClick={()=>void save()}><Icon name="save"/>{t("保存")}</button>{onBound&&(!current.id||dirty)&&<button className="primary" disabled={busy||!canSave} onClick={()=>void save(true)}>{t("用于 {0} 阶段",{0:contextLabel?.split(' / ').at(-1)})}</button>}</div></header>
+ <div className="ros-workbench-body"><aside className="ros-browser"><div className="ros-browser-title"><strong>{t("任务库")}</strong><span>{items.length}</span><button title={t("新建任务")} aria-label={t("新建任务")} disabled={busy} onClick={reset}><Icon name="plus"/></button></div><div className="ros-search"><Icon name="search"/><input aria-label={t("搜索任务")} placeholder={t("搜索名称或接口")} value={query} onChange={e=>setQuery(e.target.value)}/></div><div className="ros-browser-items">{filtered.map(item=><div className={'ros-task-row list-card'+(current.id===item.id?' selected':'')} key={item.id}><button className="ros-task-select" disabled={busy} onClick={()=>void choose(item)}><TaskIcon value={item.icon}/><span><strong>{item.name}</strong><small>{item.interface||t('尚未配置通信名称')}</small></span></button><button className="ros-task-menu" disabled={busy} aria-label={t('任务操作 {0}',{0:item.name})} aria-haspopup="menu" onClick={event=>setMenu({item,anchor:event.currentTarget})}><Icon name="more"/></button></div>)}{!filtered.length&&<div className="ros-browser-empty">{query?t("没有匹配的能力"):t("还没有任务")}<small>{query?t("尝试其他名称或接口"):t("点击上方加号开始创建")}</small></div>}</div></aside>
+ <main className="ros-editor"><div className="ros-editor-inner"><div className="ros-task-context" role="group" aria-label={t('当前任务配置摘要')}><div><span>{t('接口定义来源')}</span><strong>{workspaces.filter(workspace=>selectedWorkspaceIds.includes(workspace.id)).map(workspace=>workspace.name).join(' · ')||t('尚未选择接口来源')}</strong>{current.ros_type&&<code>{current.ros_type}</code>}</div><div><span>{t(current.kind==='compute'?'处理操作':'实际通信')}</span><code>{current.kind==='compute'?current.operation||'copy_fields':current.interface||t('尚未配置通信名称')}</code></div></div><fieldset disabled={busy} className="ros-form-fields"><div data-task-section="interfaces"><DisclosureCard key={current.id||'new-task'} title={t("任务设置")} summary={[t(names[current.kind]),current.ros_type,current.interface].filter(Boolean).join(' · ')} open={settingsOpen} onOpenChange={setSettingsOpen} status={current.kind!=='compute'&&(!current.ros_type||!current.interface)?<span style={{color:'var(--red)'}}>{t("配置待核对")}</span>:undefined}><p className="ros-field-hint">{t("定义业务能力的输入输出、完成条件与停止方式")}</p><div className="ros-task-name"><TaskIconPicker value={taskIcon} onChange={icon=>update({icon,icon_mode:'manual'})}/><Field label={t("任务名称")}><input data-studio-field="name" required maxLength={80} aria-invalid={!current.name.trim()} aria-label={t("任务名称")} value={current.name} onChange={e=>update({name:e.target.value})}/>{!current.name.trim()&&<small className="ros-invalid">{t("填写任务名称")}</small>}</Field></div>
+ <div className="ros-icon-mode"><span>{t(current.icon_mode==='workspace'?'图标跟随首个工作区':'使用自选图标')}</span>{current.icon_mode!=='workspace'&&<button type="button" onClick={()=>update({icon_mode:'workspace'})}>{t('跟随工作区图标')}</button>}</div>
+ <InterfaceWorkspacePicker label={t('接口定义来源，可多选')} manageLabel={t('管理接口来源')} workspaces={workspaces} value={selectedWorkspaceIds} onChange={selectWorkspaces} onManage={onNavigate?manageWorkspaces:undefined} disabled={busy}/>
+ <div className="ros-form-grid"><Field label={t("通信方式")}><RosSelect label={t("通信方式")} value={current.kind} options={kinds.map(kind=>({value:kind,label:t(names[kind])}))} onChange={value=>{generation.current++;const kind=value as RosTask['kind'],group=kind==='action'?'action':kind==='service'?'srv':'msg';invalidateCommunication();bindingSchema.current=undefined;update({kind,execution_policy:{},...(kind==='compute'?{operation:'copy_fields'}:{}),...(kind!=='action'?{stop_confirmation_field:'',error_message_field:'',stop_observation:{}}:{}),...(!['action','service'].includes(kind)?{stop_recovery_service:''}:{}),ros_type:kind!=='compute'&&current.ros_type.split('/')[1]===group?current.ros_type:'',schema_id:undefined,qos_reliability:kind==='subscribe_wait'?'best_effort':'reliable'});setFields(null);setSchemaFields(null);setSchemaSource('');setNotice(t('原参数与字段绑定已保留，请确认新的通信配置'))}}/></Field>{current.kind!=='compute'&&<Field label={t("接口类型")}><RosSelect searchable label={t("接口类型")} value={current.ros_type} options={[{value:'',label:t(resolving?'正在读取接口':'选择接口类型')},...matchingTypes.map(item=>({value:item.ros_type,label:item.ros_type,hint:(item.available===false?t('定义待补充')+' · ':'')+item.workspace_ids.map(id=>workspaces.find(workspace=>workspace.id===id)?.name).filter(Boolean).join(' · ')}))]} onChange={selectInterface}/></Field>}</div>
+ {!!interfaceIssues.length&&<InterfaceIssues issues={interfaceIssues}/> }
+ {current.schema_id&&selectedInterface?.available&&selectedInterface.schema_id!==current.schema_id&&<div className="ros-definition-update"><span>{t('工作区定义已变化，当前任务保留原定义')}</span><button type="button" onClick={()=>{generation.current++;invalidateCommunication();update({schema_id:selectedInterface.schema_id||undefined});setFormMode(true)}}>{t('更新接口定义')}</button></div>}
+ {current.kind!=='compute'&&<RosCommunicationField offline={offlineEndpoints} autoSelect={!previousInterface&&!schemaLoading&&!resolving} client={client} robotId={robotId} kind={current.kind} rosType={current.ros_type} value={current.interface} onChange={interfaceName=>{update({interface:interfaceName});setPreviousInterface('')}} disabled={busy||resolving||schemaLoading}/>}
+ {previousInterface&&!current.interface&&<div className="ros-binding-review"><span>{t('原通信名称需要重新确认')}</span><code>{previousInterface}</code><button type="button" disabled={!current.ros_type||!selectedInterface?.available} onClick={()=>{update({interface:previousInterface});setPreviousInterface('')}}>{t('确认继续使用此名称')}</button></div>}
+ <p className="ros-field-hint">{t(schemaFields?'接口定义已加载，可离线配置参数':current.ros_type?'接口定义尚未就绪':'尚未选择接口类型')}</p></DisclosureCard></div>
+ <TaskProvider client={client} task={{...current,workspace_ids:selectedWorkspaceIds}} workspaces={workspaces} interfaceWorkspaceIds={selectedInterface?.workspace_ids} onChange={update} disabled={busy} onResolved={workspaceId=>{providerWorkspace.current=workspaceId}} onConfigure={onNavigate?(workspaceId,section)=>void configureWorkspace(workspaceId,section):undefined} open={providerOpen} onOpenChange={setProviderOpen}/>
+ <div className="ros-detail-tabs" role="tablist" aria-label={t("任务配置")}><button role="tab" aria-selected={detail==='message'} onClick={()=>setDetail('message')}>{detail==='message'&&<motion.span layoutId="task-detail-tab" className="workspace-selection" transition={springs.quick}/>}<b className="ros-tab-label">{t("消息配置")}</b></button><button role="tab" aria-selected={detail==='ports'} onClick={()=>setDetail('ports')}>{detail==='ports'&&<motion.span layoutId="task-detail-tab" className="workspace-selection" transition={springs.quick}/>}<b className="ros-tab-label">{t("输入与输出")}</b><span>{inputRows.length+outputRows.length||''}</span></button></div>
+ <div data-task-section={detail==='message'?'message':'ports'}>{detail==='message'?<DisclosureCard open={messageOpen} onOpenChange={setMessageOpen} title={current.kind==='subscribe_wait'?t("等待条件"):current.kind==='action'?t("目标参数"):current.kind==='service'?t("请求参数"):t("消息内容")} summary={current.kind==='compute'?t("处理操作")+' · '+(current.operation||'copy_fields'):current.ros_type||t("尚未选择接口类型")} count={messageFields?Object.keys(messageFields).length:0} status={!parsedPayload?<span style={{color:'var(--red)'}}>{t("配置待核对")}</span>:undefined}><div className="ros-section-title"><div className="ros-inline-actions">{schemaSource&&<small className="ros-schema-source">{t('接口定义已加载')}</small>}{schemaFields&&current.kind!=='subscribe_wait'&&<button type="button" onClick={()=>setFormMode(!formMode)}>{formMode?t('编辑 JSON'):t('返回表单')}</button>}</div></div>
+ {current.kind==='compute'?<><Field label={t('处理操作')}><RosSelect value={current.operation||'copy_fields'} label={t('处理操作')} onChange={operation=>update({operation,execution_policy:{}})} options={[{value:'wait_stationary',label:t('等待关节稳定')},{value:'transform_targets',label:t('变换并关联空间目标')},{value:'bounded_pose_step',label:t('计算有界位姿步进')},{value:'copy_fields',label:t('整理数据字段')},{value:'extension',label:t('工作区计算扩展')}]}/></Field><p>{t('固定参数在这里配置，需要上游数据的字段在输入与输出中绑定')}</p>{parsedPayload&&Object.keys(parsedPayload).length>0&&<SchemaMessageForm fields={fallbackFields(parsedPayload)} value={parsedPayload} onChange={value=>{setPayload(pretty(value));setDirty(true)}}/>}{current.operation==='extension'&&<><Field label={t('计算入口')}><input value={current.compute_entrypoint||''} placeholder="package.module:function" onChange={e=>update({compute_entrypoint:e.target.value})}/></Field><p className="ros-field-hint">{t('函数接收 payload 与 stop_event 并返回 JSON 对象，仅在所选子系统环境执行')}</p></>}<DisclosureCard title={t('参数结构')}><textarea className="ros-code" rows={8} value={payload} onChange={e=>{setPayload(e.target.value);setDirty(true)}}/></DisclosureCard></>:!current.ros_type?<div className="ros-parameter-empty"><Icon name="boxes"/><p>{t('选择工作区和接口后，参数字段会自动显示')}</p></div>:schemaLoading?<div className="ros-parameter-empty" role="status">{t('正在读取参数字段')}</div>:!schemaFields?<div className="ros-parameter-empty"><p>{t('此接口已识别，补齐依赖后会自动加载参数')}</p>{selectedInterface?.issues&&<InterfaceIssues issues={selectedInterface.issues} expanded/>}{onNavigate&&<button onClick={manageWorkspaces}>{t('补充接口定义')}</button>}</div>:current.kind==='subscribe_wait'?<><Field label={t("触发条件")}><RosSelect label={t("触发条件")} value={current.condition?.operator||'any'} onChange={value=>update({condition:{...current.condition,operator:value}})} options={[{value:'any',label:t("收到任意消息")},{value:'equals',label:t("字段等于")},{value:'not_equals',label:t("字段不等于")},{value:'greater',label:t("字段大于")},{value:'less',label:t("字段小于")}]}/></Field>{(current.condition?.operator||'any')!=='any'&&<div className="ros-form-grid"><Field label={t("消息字段路径")}><input aria-invalid={!!messageFields&&!!current.condition?.field&&!schemaFieldAt(messageFields,current.condition.field)} list="ros-wait-field-options" value={current.condition?.field||''} placeholder={t("data 或 pose.position.x")} onChange={e=>update({condition:{...current.condition,field:e.target.value}})}/></Field><Field label={t("期望值")}><input value={conditionValue} onChange={e=>{setConditionValue(e.target.value);setDirty(true)}} placeholder="true / 1 / ready"/></Field><datalist id="ros-wait-field-options">{schemaFields&&leafFields(schemaFields.fields).map(({path})=><option key={path.join('.')} value={path.join('.')}/>)}</datalist></div>}</>:formMode&&messageFields&&parsedPayload?<><MessageFieldIssues fields={messageFields} value={parsedPayload} onChange={value=>{setPayload(pretty(value));setDirty(true)}}/><SchemaMessageForm onAnnotate={selectedInterface?annotate:undefined} fields={messageFields} value={parsedPayload} onChange={value=>{setPayload(pretty(value));setDirty(true)}} onExpose={(path,value)=>expose(path,value,true)}/></>:<><textarea rows={8} aria-label={t('请求消息 JSON')} aria-invalid={!parsedPayload} spellCheck={false} className="ros-code" value={payload} onChange={event=>{setPayload(event.target.value);setDirty(true)}}/>{!parsedPayload&&<small className="ros-invalid">{t('消息必须是有效的 JSON 对象')}</small>}</>}
+
+ <DisclosureCard title={t("完成判定")} summary={current.success_condition?.operator&&current.success_condition.operator!=='any'?(current.success_condition.field||t("结果字段路径"))+' · '+current.success_condition.operator:t(current.kind==='action'?"Action 成功即完成":current.kind==='service'?"收到服务响应即完成":current.kind==='publish_periodic'?"持续运行，退出状态或取消任务时停止发布":current.kind==='subscribe_wait'?"收到满足等待条件的消息时完成":current.kind==='compute'?"数据处理完成后输出结果，失败时停止后续步骤":"消息发送后立即完成，不代表设备动作已完成")}><p>{t(current.kind==='compute'?"数据处理完成后输出结果，失败时停止后续步骤":current.kind==='action'?"Action 返回成功状态时完成；可进一步检查结果字段":current.kind==='service'?"收到服务响应时完成；建议检查响应中的业务成功字段":current.kind==='publish_once'?"消息发送后立即完成，不代表设备动作已完成":current.kind==='publish_periodic'?"持续运行，退出状态或取消任务时停止发布": "收到满足等待条件的消息时完成")}</p>{['action','service'].includes(current.kind)&&<><Field label={t("成功条件")}><RosSelect label={t("成功条件")} value={current.success_condition?.operator||'any'} onChange={value=>update({success_condition:{...current.success_condition,operator:value}})} options={[{value:'any',label:t(current.kind==='action'?"Action 成功即完成":"收到服务响应即完成")},{value:'equals',label:t("结果字段等于")},{value:'not_equals',label:t("结果字段不等于")},{value:'greater',label:t("结果字段大于")},{value:'less',label:t("结果字段小于")}]}/></Field>{current.success_condition?.operator&&current.success_condition.operator!=='any'&&<div className="ros-form-grid"><Field label={t("结果字段路径")}><input aria-invalid={!!schemaFields?.output_field_schemas&&!!current.success_condition?.field&&!schemaFieldAt(schemaFields.output_field_schemas,current.success_condition.field)} list="ros-result-field-options" value={current.success_condition.field||''} placeholder="success" onChange={e=>update({success_condition:{...current.success_condition,field:e.target.value}})}/><datalist id="ros-result-field-options">{schemaFields&&leafFields(schemaFields.output_fields||{}).map(({path})=><option key={path.join('.')} value={path.join('.')}/>)}</datalist></Field><Field label={t("成功值")}><input value={typeof current.success_condition.value==='string'?current.success_condition.value:JSON.stringify(current.success_condition.value)??''} placeholder="true" onChange={e=>{let value:unknown=e.target.value;try{value=JSON.parse(e.target.value)}catch{}update({success_condition:{...current.success_condition,value}})}}/></Field></div>}</>}</DisclosureCard>
+ {schemaFields&&['action','service','subscribe_wait'].includes(current.kind)&&<DisclosureCard title={t("选择需要输出到任务的字段")} count={leafFields(schemaFields.output_fields||schemaFields.fields).length} summary={t("输出 {0}",{0:outputRows.length})}>{leafFields(schemaFields.output_fields||schemaFields.fields).map(({path,value})=><div key={path.join('.')}><code>{path.join('.')}</code><button disabled={outputRows.some(row=>row.path===path.join('.'))} onClick={()=>expose(path,value,false)}>{outputRows.some(row=>row.path===path.join('.'))?t("已添加"):t("设为任务输出")}</button></div>)}</DisclosureCard>}
+ {current.kind==='subscribe_wait'&&messageFields&&parsedPayload&&<MessageFieldIssues fields={messageFields} value={parsedPayload} onChange={value=>{setPayload(pretty(value));setDirty(true)}}/>}
+ {current.kind==='publish_periodic'&&<DisclosureCard title={t("停止消息")} summary={t("任务停止时发送，用于撤销持续输出")} status={!parsedStop?<span style={{color:'var(--red)'}}>{t("配置待核对")}</span>:undefined}><p>{t("任务停止时发送，用于撤销持续输出")}</p>{messageFields&&formMode&&parsedStop?<><MessageFieldIssues fields={messageFields} value={parsedStop} onChange={value=>{setStopPayload(pretty(value));setDirty(true)}}/><SchemaMessageForm onAnnotate={selectedInterface?annotate:undefined} fields={messageFields} value={parsedStop} onChange={value=>{setStopPayload(pretty(value));setDirty(true)}}/></>:<textarea rows={5} aria-label={t("停止消息 JSON")} className="ros-code" value={stopPayload} onChange={e=>{setStopPayload(e.target.value);setDirty(true)}} spellCheck={false}/>}</DisclosureCard>}</DisclosureCard>:<><Ports open={portSections.inputs} onOpenChange={open=>setPortSections(old=>({...old,inputs:open}))} title={t("输入")} rows={inputRows} input validFields={messageFields||undefined} onChange={rows=>{setInputRows(rows);setDirty(true)}}/><Ports open={portSections.outputs} onOpenChange={open=>setPortSections(old=>({...old,outputs:open}))} title={t("输出")} rows={outputRows} input={false} validFields={schemaFields?.output_field_schemas||messageFields||undefined} onChange={rows=>{setOutputRows(rows);setDirty(true)}}/></>}</div>
+ </fieldset><ErrorFields value={error}/></div></main>
+ <aside className="ros-inspector"><fieldset disabled={busy} className="ros-form-fields"><DisclosureCard title={t("执行设置")} summary={t(current.kind==='action'?"任务总时限 · 秒":"等待超时 · 秒")+' · '+current.timeout_s}><Field label={t(current.kind==='action'?"任务总时限 · 秒":"等待超时 · 秒")}><input type="number" min="0.2" max="3600" step="0.5" value={current.timeout_s} onChange={e=>update({timeout_s:Number(e.target.value)})}/></Field>{current.kind==='publish_periodic'&&<Field label={t("发布频率 · Hz")}><input type="number" min="0.2" max="100" step="0.5" value={current.rate_hz} onChange={e=>update({rate_hz:Number(e.target.value)})}/></Field>}{!['action','service'].includes(current.kind)&&<Field label={t("消息传输")}><select value={current.qos_reliability||(current.kind==='subscribe_wait'?'best_effort':'reliable')} onChange={e=>update({qos_reliability:e.target.value as 'reliable'|'best_effort'})}><option value="reliable">Reliable</option><option value="best_effort">Best Effort</option></select></Field>}
+ </DisclosureCard><DisclosureCard open={concurrencyOpen} onOpenChange={setConcurrencyOpen} title={t('并发与互斥')} count={current.resources?.length||0} summary={current.resources?.length?current.resources.map(resource=>(current.resource_labels?.[resource.name]||resource.name||t('选择对象'))+' · '+t(resource.access==='shared'?'允许共享':'独占使用')).join(' / '):t('未设置额外的并发限制')} status={current.resources?.some(resource=>!resource.name)?<span style={{color:'var(--red)'}}>{t("配置待核对")}</span>:undefined}><p className="ros-field-hint">{t('独占使用会阻止其他任务同时使用同一对象，共享使用允许并行')}</p>
+ {(current.resources||[]).map((resource,index)=><div className="ros-resource-fields" key={index}><RosSelect label={t('设备或互斥对象')} value={resource.name} options={[{value:'',label:t('选择设备或互斥对象')},...resources.filter(item=>item.name===resource.name||!current.resources?.some(selected=>selected.name===item.name)).map(item=>({value:item.name,label:item.label})),...(!resources.some(item=>item.name===resource.name)&&resource.name?[{value:resource.name,label:current.resource_labels?.[resource.name]||resource.name}]:[])]} onChange={name=>update({resources:current.resources?.map((item,i)=>i===index?{...item,name}:item),resource_labels:{...current.resource_labels,[name]:resources.find(item=>item.name===name)?.label||name}})}/><RosSelect label={t('使用方式')} value={resource.access} options={[{value:'exclusive',label:t('独占使用')},{value:'shared',label:t('允许共享')}]} onChange={value=>update({resources:current.resources?.map((item,i)=>i===index?{...item,access:value as 'exclusive'|'shared'}:item)})}/><button aria-label={t('移除对象')} onClick={()=>update({resources:current.resources?.filter((_,i)=>i!==index)})}><Icon name="x"/></button></div>)}
+ {!current.resources?.length&&<p className="ros-field-hint">{t('未设置额外的并发限制')}</p>}<div className="buttons"><button onClick={()=>update({resources:[...(current.resources||[]),{name:'',access:'exclusive'}]})}>{t('选择对象')}</button><button onClick={()=>void addResource()}>{t('新增对象')}</button></div><p className="ros-field-hint">{t('仅协调 Studio 调度的任务，外部 ROS2 程序不受此规则约束')}</p></DisclosureCard>
+ {current.id&&<DisclosureCard title={t('使用位置')} count={(uses[current.id]||[]).length} summary={(uses[current.id]||[]).map(use=>use.name).join(' · ')||t('尚未被状态或行为树使用')}>{(uses[current.id]||[]).length?(uses[current.id]||[]).map((use,index)=><div key={index}><strong>{use.name}</strong><small>{use.detail.split(' / ').map(part=>t(part)).join(' / ')}</small></div>):<p className="ros-field-hint">{t('尚未被状态或行为树使用')}</p>}</DisclosureCard>}
+ {['action','service'].includes(current.kind)&&<DisclosureCard title={t('设备停止确认')} summary={current.stop_confirmation_field||current.stop_recovery_service||t('尚未确认')}><p>{t('只有设备确认停止，才释放独占设备；取消请求被接收不等于设备已停止')}</p>{current.kind==='action'&&<><Field label={t('停止确认结果字段')}><input value={current.stop_confirmation_field||''} placeholder="stop_confirmed" onChange={e=>update({stop_confirmation_field:e.target.value})}/></Field><Field label={t('错误说明结果字段')}><input value={current.error_message_field||''} placeholder="message" onChange={e=>update({error_message_field:e.target.value})}/></Field></>}<Field label={t('设备停止确认服务')}><input value={current.stop_recovery_service||''} placeholder="/robot/reset_stop" onChange={e=>update({stop_recovery_service:e.target.value})}/></Field><p>{t('使用 std_srvs/srv/Trigger，服务返回 success 为 true 后才解除资源占用')}</p>{current.stop_observation&&Object.keys(current.stop_observation).length>0&&<><h4>{t('关节停止观测')}</h4><SchemaMessageForm fields={fallbackFields(current.stop_observation)} value={current.stop_observation} onChange={stop_observation=>update({stop_observation})}/></>}</DisclosureCard>}
+ {current.kind==='action'&&<p className="ros-field-hint">{t("总时限涵盖整个任务，超时会请求停止；子系统中的单步运动时限单独生效")}</p>}
+ <DisclosureCard title={t('执行语义')} summary={t('声明重复、取消与并发能力，资源冲突仍会阻止执行')}>
+  {(['readonly','repeatable','cancelable','concurrent'] as const).map((key,index)=>{const readonly=current.kind==='subscribe_wait'||current.kind==='compute'&&current.operation!=='extension';return <label className="toggle" key={key}><input type="checkbox" disabled={key==='readonly'&&['action','publish_once','publish_periodic'].includes(current.kind)} checked={current.execution_policy?.[key]??readonly} onChange={e=>update({execution_policy:{...current.execution_policy,[key]:e.target.checked}})}/>{t(['只读任务','允许重复执行','可确认取消','允许并发'][index])}</label>})}
+ </DisclosureCard>
+ <DisclosureCard title={t('工程文件引用')} summary={t('只重定位明确声明的文件字段')}><label className="field"><span>{t('文件字段路径，每行一项')}</span><textarea rows={3} value={(current.path_fields||[]).join('\n')} placeholder="payload.calibration_file" onChange={e=>update({path_fields:e.target.value.split('\n').filter(Boolean)})}/></label></DisclosureCard>
+ <div className="ros-execution-note"><Icon name="info"/><p>{current.kind==='action'?t("完成目标后返回结果，退出状态时取消目标并等待停止确认"):current.kind==='service'?t("服务响应代表请求完成，设备运动应使用 Action 跟踪"):current.kind==='publish_once'?t("发送完成后结束任务，不代表设备已完成执行"):current.kind==='publish_periodic'?t("停止周期发布后发送停止消息，设备端应配置心跳保护"):t("收到匹配消息后完成，消息字段可映射为任务输出")}</p></div>
+ {current.id&&<button className="ros-delete" disabled={busy||!!uses[current.id]?.length} title={uses[current.id]?.length?t('任务正在使用，请先解除关联'):undefined} onClick={()=>void run(()=>remove())}><Icon name="trash"/>{t("删除任务")}</button>}</fieldset>{onBack&&<button className="ros-back" disabled={busy} onClick={onBack}><Icon name="arrow-left"/>{t("返回状态")}</button>}</aside>
+ </div><footer className="ros-status" role="status"><span>{t(notice)||(current.id?current.interface:t("选择通信方式，配置接口与消息"))}</span><span>{t("输入 {0}",{0:inputRows.length})}<span className="ros-status-divider"/>{t("输出 {0}",{0:outputRows.length})}</span></footer>
+ <AnimatePresence>{menu&&<AnchoredPopover anchor={menu.anchor} role="menu" label={t('任务操作')} onClose={()=>setMenu(null)} className="ros-task-actions"><button role="menuitem" onClick={()=>void duplicate(menu.item)}><Icon name="copy"/>{t('创建副本')}</button><button role="menuitem" disabled={!!uses[menu.item.id!]?.length} onClick={()=>{const item=menu.item;setMenu(null);void run(()=>remove(item))}}><Icon name="trash"/>{t('删除任务')}</button>{!!uses[menu.item.id!]?.length&&<small>{t('任务正在使用，请先解除关联')}</small>}</AnchoredPopover>}</AnimatePresence>
+ </div>
+}

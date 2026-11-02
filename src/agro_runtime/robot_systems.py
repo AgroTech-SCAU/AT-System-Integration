@@ -48,8 +48,14 @@ class RobotSystems:
         )
 
     def listing(self):
+        connections = {item['id']: item for item in self.store.list('ros_connection')}
+        profiles = {item['id']: item for item in self.store.list('robot_profile')}
         return {
-            "systems": self.store.list("robot_system"),
+            "systems": [{**item, 'connection': connections.get(item['id']), 'storage_path': profiles.get(item['id'], {}).get('path'),
+                         'profile_error': profiles.get(item['id'], {}).get('error')}
+                        for item in self.store.list("robot_system")],
+            "profile_errors": [{'id': item['id'], 'path': item['path'], 'reason': item['error']}
+                               for item in profiles.values() if item.get('error')],
             "selected_id": self.selected_id(),
             "active": self.active(),
             "running_state": self.context.state,
@@ -63,10 +69,34 @@ class RobotSystems:
             ],
         }
 
-    def create(self, name, example_id=None):
+    def _name(self, name):
         name = str(name or "").strip()
         if not name or len(name) > 60:
-            fail("$.name", "invalid_name", "系统名称需为 1–60 个字符")
+            fail("$.name", "invalid_name", "机器人名称需为 1–60 个字符")
+        return name
+
+    def _available_name(self, name):
+        name = self._name(name)
+        existing = {item['name'].casefold() for item in self.store.list('robot_system')}
+        candidate, index = name, 2
+        while candidate.casefold() in existing:
+            suffix = f' {index}'
+            candidate = name[:60 - len(suffix)].rstrip() + suffix
+            index += 1
+        return candidate
+
+    def rename(self, key, name, revision):
+        record = self.store.get('robot_system', key)
+        if record['revision'] != revision:
+            fail('$.revision', 'revision_conflict', '机器人信息已改变，请刷新后重试')
+        name = self._name(name)
+        if any(item['id'] != key and item['name'].casefold() == name.casefold()
+               for item in self.store.list('robot_system')):
+            fail('$.name', 'duplicate_name', '已有同名机器人，请使用其他名称')
+        return self.store.put('robot_system', key, {**record, 'name': name, 'revision': revision + 1})
+
+    def create(self, name, example_id=None):
+        name = self._available_name(name)
         if example_id not in (None, "tomato_picker"):
             fail("$.example_id", "unknown_example", "不存在此示例")
         key = "robot_" + uuid4().hex
@@ -122,13 +152,15 @@ class RobotSystems:
         # All affected workspace records are removed in one transaction, so a
         # cancelled or failed deletion cannot leave a half-deleted project
         with self.store.db:
-            for kind in ("tree_draft", "plan"):
+            self.store.db.execute("DELETE FROM documents WHERE kind='robot_profile' AND id=?", (key,))
+            for kind in ("tree_draft", "plan", "state_machine", "ros_task", "ros_resource", "ros_binding"):
                 for row in self.store.list(kind):
                     if row.get("robot_system_id") == key:
                         self.store.db.execute(
                             "DELETE FROM documents WHERE kind=? AND id=?",
                             (kind, row["id"]),
                         )
+            self.store.db.execute("DELETE FROM documents WHERE kind='interface_foundation' AND id=?", (key,))
             self.store.db.execute(
                 "DELETE FROM documents WHERE kind='robot_system' AND id=?", (key,)
             )
@@ -157,6 +189,7 @@ class RobotSystems:
             )
         drafts = [
             {
+                "id": item["id"],
                 "policy": item["policy"],
                 "document": item["document"],
                 "layout": item["layout"],
@@ -167,15 +200,20 @@ class RobotSystems:
         ]
         # 已发布定义也作为可移植的“待重新校验草稿”，绝不移植其执行授权和本机路径
         drafts.extend(copy.deepcopy(record.get("pending_task_drafts", [])))
+        referenced_trees = {state.get(phase) for machine in self.store.list('state_machine')
+                            if machine.get('robot_system_id') == key for state in machine['document']['states']
+                            for phase in ('entry', 'do', 'exit')}
         published = [
             {
+                "id": item["id"],
                 "policy": item["manifest"]["kind"],
                 "document": item["document"],
                 "layout": item["layout"],
                 "parameters": item["parameters"],
             }
             for item in self.store.list("tree_definition")
-            if item.get("robot_system_id") == key
+            if item.get("robot_system_id") == key and not item.get('test_only') and
+                (item['id'] in referenced_trees or not any(draft['id'] == item.get('draft_id') for draft in drafts))
         ]
         for item in published:
             if not any(encoded(item) == encoded(existing) for existing in drafts):
@@ -223,6 +261,47 @@ class RobotSystems:
                     "content": asset_text,
                 }
             )
+        state_machines = [
+            {'name': row['name'], 'document': copy.deepcopy(row['document']), 'layout':copy.deepcopy(row.get('layout', {'positions':{}}))}
+            for row in self.store.list('state_machine')
+            if row.get('robot_system_id') == key
+        ]
+        state_machines.extend(copy.deepcopy(record.get('pending_state_machines', [])))
+        from .interface_sources import InterfaceWorkspaces
+        interface_workspaces = InterfaceWorkspaces(self.store, key).records()
+        ros_tasks = [
+            {field:copy.deepcopy(value) for field,value in row.items() if field not in ('robot_system_id','revision')}
+            for row in self.store.list('ros_task')
+            if row.get('robot_system_id') == key
+        ]
+        bindings = {item['task_id']: item['interface'] for item in self.store.list('ros_binding') if item['robot_system_id'] == key}
+        for task in ros_tasks:
+            task['interface'] = bindings.get(task['id'], task.get('interface', ''))
+        definitions_by_id = {item['id']: item for item in self.store.list('tree_definition')}
+        for draft in drafts:
+            original = definitions_by_id.get(draft.get('id'))
+            if not original:
+                continue
+            remap = {}
+            for frozen in original.get('ros_tasks', []):
+                portable = {field: copy.deepcopy(value) for field, value in frozen.items()
+                            if field not in ('robot_system_id', 'revision', '_ros_domain', 'interface_schema')}
+                existing = next((item for item in ros_tasks if item['id'] == portable['id']), None)
+                if existing and encoded(existing) == encoded(portable):
+                    continue
+                portable['id'] = 'ros_' + hashlib.sha256(encoded(portable).encode()).hexdigest()[:32]
+                remap['RosTask_' + frozen['id']] = 'RosTask_' + portable['id']
+                if not any(item['id'] == portable['id'] for item in ros_tasks):
+                    ros_tasks.append(portable)
+            for tree in draft['document']['trees'].values():
+                for node in tree['nodes'].values():
+                    node['registration_id'] = remap.get(node['registration_id'], node['registration_id'])
+        catalog_record = next((item for item in self.store.list('interface_catalog') if item['id'] == key), {})
+        schema_ids = {task.get('schema_id') for task in ros_tasks}
+        schemas = [item for item in self.store.list('ros_schema') if item.get('project_id') == key and
+                   (item.get('id') in schema_ids or item.get('id') in catalog_record.get('schema_ids', []) and
+                    item['ros_type'] in catalog_record.get('primary_types', [item['ros_type']]))]
+        foundation = next((item for item in self.store.list('interface_foundation') if item['id'] == key), {})
         bundle = {
             "format": "agrotech.robot-system",
             "format_version": 1,
@@ -236,7 +315,18 @@ class RobotSystems:
             "assets": assets,
             "task_drafts": drafts,
             "task_plans": plans,
-            "notes": "任务定义导入后仅作为草稿，需要重新校验及发布；设备运行状态与凭据不导出",
+            "state_machines": state_machines,
+            "ros_tasks": ros_tasks,
+            "interface_workspaces": [{**{field: copy.deepcopy(item[field]) for field in ('id', 'name', 'definitions')},
+                                      'mode': 'files', 'path': '', 'icon': item.get('icon', 'generic'),
+                                      'communications': copy.deepcopy(item.get('communications', {'endpoints': []})),
+                                      'field_notes': copy.deepcopy(item.get('field_notes', {}))}
+                                     for item in interface_workspaces],
+            "interface_foundation": copy.deepcopy(foundation.get("definitions", {})),
+            "interface_definitions": [{field: value for field, value in item.items() if field not in ('project_id', 'source')}
+                                      for item in schemas],
+            "interface_selection": [item['id'] for item in schemas if item['id'] in catalog_record.get('schema_ids', [])],
+            "notes": "工程携带离线设计定义，执行前检查机器人绑定与运行环境",
         }
         if len(encoded(bundle).encode("utf-8")) > 6 * 1024 * 1024:
             fail("$.bundle", "bundle_too_large", "工程文件超过 6 MiB，请精简任务草稿")
@@ -260,6 +350,12 @@ class RobotSystems:
             "packages",
             "task_drafts",
             "task_plans",
+            "state_machines",
+            "ros_tasks",
+            "interface_definitions",
+            "interface_selection",
+            "interface_workspaces",
+            "interface_foundation",
             "assets",
             "notes",
         }:
@@ -279,10 +375,14 @@ class RobotSystems:
         transfer_assets = bundle.get("assets", [])
         drafts = bundle.get("task_drafts", [])
         plans = bundle.get("task_plans", [])
+        imported_machines = bundle.get("state_machines", [])
+        imported_ros_tasks = bundle.get("ros_tasks", [])
         if (
             not isinstance(descriptors, list)
             or not isinstance(drafts, list)
             or not isinstance(plans, list)
+            or not isinstance(imported_machines,list) or len(imported_machines)>80
+            or not isinstance(imported_ros_tasks,list) or len(imported_ros_tasks)>100
             or not isinstance(transfer_assets, list)
             or len(transfer_assets) > 50
             or len(drafts) > 100
@@ -361,6 +461,7 @@ class RobotSystems:
         from .tree_models import TreeDocument, LayoutDocument
 
         clean_drafts = []
+        tree_refmap = {}
         for i, item in enumerate(drafts):
             if (
                 not isinstance(item, dict)
@@ -374,8 +475,15 @@ class RobotSystems:
                     "template_not_imported",
                     "番茄任务必须依附番茄示例系统",
                 )
+            draft_id = 'draft_' + uuid4().hex
+            original_id = item.get('id')
+            if original_id:
+                if not isinstance(original_id, str) or original_id in tree_refmap:
+                    fail('$.task_drafts', 'invalid_id', '行为标识无效或重复')
+                tree_refmap[original_id] = draft_id
             clean_drafts.append(
                 {
+                    "id": draft_id,
                     "policy": item["policy"],
                     "document": parse(TreeDocument, item.get("document")).model_dump(
                         mode="json"
@@ -386,6 +494,143 @@ class RobotSystems:
                     "parameters": copy.deepcopy(item["parameters"]),
                 }
             )
+        # 新项目使用新任务标识，原状态机引用同步重映射
+        from .ros_tasks import validate_task, IDENT as ROS_IDENT
+        clean_ros_tasks = []
+        ros_refmap = {}
+        for i, item in enumerate(imported_ros_tasks):
+            task = validate_task(item)
+            original = task.get('id')
+            if not isinstance(original,str) or not ROS_IDENT.fullmatch(original) or not original.startswith('ros_') or 'ros:'+original in ros_refmap:
+                fail(f'$.ros_tasks[{i}].id','invalid_id','导入的通信任务标识无效或重复')
+            identity = 'ros_' + uuid4().hex
+            ros_refmap['ros:'+original] = 'ros:'+identity
+            clean_ros_tasks.append({**task,'id':identity,'robot_system_id':key,'revision':1})
+        for draft in clean_drafts:
+            for tree in draft['document']['trees'].values():
+                for node in tree['nodes'].values():
+                    registration = node['registration_id']
+                    if registration.startswith('RosTask_'):
+                        mapped = ros_refmap.get('ros:' + registration[8:])
+                        if not mapped:
+                            fail('$.task_drafts', 'missing_task', '行为树引用的任务未包含在工程中')
+                        node['registration_id'] = 'RosTask_' + mapped[4:]
+        from .ros_interfaces import InterfaceLibrary, TYPE, _identity
+        transfer_schemas = bundle.get('interface_definitions', [])
+        if not isinstance(transfer_schemas, list) or len(transfer_schemas) > 1000:
+            fail('$.interface_definitions', 'invalid_definitions', '工程接口定义清单无效')
+        schema_refmap, clean_schemas = {}, []
+        library = InterfaceLibrary(self.store, key)
+        foundation = bundle.get('interface_foundation', {})
+        if not isinstance(foundation, dict) or len(foundation) > 3000 or any(
+            not isinstance(name, str) or not TYPE.fullmatch(name) or not isinstance(content, str) or len(content.encode()) > 262144
+            for name, content in foundation.items()
+        ):
+            fail('$.interface_foundation', 'invalid_definitions', '基础接口快照需要包含原生接口定义')
+        transfer_workspaces = bundle.get('interface_workspaces', [])
+        if not isinstance(transfer_workspaces, list) or len(transfer_workspaces) > 64:
+            fail('$.interface_workspaces', 'invalid_workspaces', '工程子系统 ROS2 工作区清单无效')
+        workspace_refmap, clean_workspaces, workspace_names = {}, [], set()
+        for item in transfer_workspaces:
+            if not isinstance(item, dict) or not isinstance(item.get('id'), str) or item['id'] in workspace_refmap:
+                fail('$.interface_workspaces', 'invalid_workspaces', '子系统 ROS2 工作区标识无效或重复')
+            name, mode, path = item.get('name'), item.get('mode'), item.get('path', '')
+            icon = item.get('icon', 'generic')
+            if icon not in ('generic', 'navigation', 'arm', 'vision', 'operations', 'mechanical', 'electrical'):
+                fail('$.interface_workspaces', 'invalid_icon', '请选择子系统图标')
+            if not isinstance(name, str) or not 1 <= len(name.strip()) <= 80 or name.strip() in workspace_names or mode not in ('source', 'installed', 'files') or not isinstance(path, str):
+                fail('$.interface_workspaces', 'invalid_workspaces', '子系统 ROS2 工作区名称或来源无效')
+            definitions = item.get('definitions')
+            if not isinstance(definitions, dict) or len(definitions) > 3000 or any(
+                not isinstance(ros_type, str) or not TYPE.fullmatch(ros_type) or not isinstance(content, str) or len(content.encode()) > 262144
+                for ros_type, content in definitions.items()
+            ):
+                fail('$.interface_workspaces', 'invalid_definitions', '子系统 ROS2 工作区需要包含原生接口定义')
+            _, diagnostics = library.compile(definitions, allow_partial=True, saved_definitions=False)
+            identity = 'workspace_' + uuid4().hex
+            workspace_refmap[item['id']] = identity
+            workspace_names.add(name.strip())
+            clean_workspaces.append({'id': identity, 'project_id': key, 'name': name.strip(), 'icon': icon, 'mode': mode,
+                                     'path': path, 'definitions': definitions, 'diagnostics': diagnostics})
+            from .offline_communications import portable_communications
+            if 'communications' in item:
+                clean_workspaces[-1]['communications'] = portable_communications(item['communications'])
+            notes = item.get('field_notes', {})
+            if not isinstance(notes, dict) or len(notes) > 3000 or len(json.dumps(notes)) > 524288 or any(
+                not isinstance(value, dict) or not isinstance(value.get('definition_key'), str) or not isinstance(value.get('fields'), dict)
+                for value in notes.values()):
+                fail('$.field_notes', 'invalid_notes', '字段说明格式无效')
+            clean_workspaces[-1]['field_notes'] = copy.deepcopy(notes)
+
+        for item in transfer_schemas:
+            if not isinstance(item, dict) or not isinstance(item.get('id'), str) or item['id'] in schema_refmap:
+                fail('$.interface_definitions', 'invalid_definitions', '接口定义标识无效或重复')
+            definitions = item.get('definitions', {})
+            if not isinstance(definitions, dict) or not definitions or len(definitions) > 1000 or any(
+                not TYPE.fullmatch(name) or not isinstance(content, str) or len(content.encode()) > 262144
+                for name, content in definitions.items()
+            ):
+                fail('$.interface_definitions', 'invalid_definitions', '工程需要包含原生接口定义及依赖')
+            schemas = library.compile(definitions, saved_definitions=False)
+            ros_type = item.get('ros_type')
+            supplied = item.get('schema')
+            expected = {name: value for name, value in schemas.get(ros_type, {}).items()
+                        if not name.endswith('_schemas') or isinstance(supplied, dict) and name in supplied}
+            if ros_type not in schemas or expected != supplied:
+                fail('$.interface_definitions', 'schema_mismatch', '接口字段与原生定义不一致')
+            identity = _identity(key + ':' + item['id'])
+            schema_refmap[item['id']] = identity
+            clean_schemas.append({'id': identity, 'project_id': key, 'ros_type': ros_type, 'schema': schemas[ros_type],
+                                  'definitions': definitions, 'definition': definitions[ros_type], 'source': 'imported'})
+        for task in clean_ros_tasks:
+            workspace_ids = task.get('workspace_ids', [])
+            if any(identity not in workspace_refmap for identity in workspace_ids):
+                fail('$.interface_workspaces', 'missing_workspace', '任务引用的子系统 ROS2 工作区未包含在工程中：' + task['name'])
+            if 'interface_workspaces' in bundle:
+                task['workspace_ids'] = [workspace_refmap[identity] for identity in workspace_ids]
+            if task.get('schema_id'):
+                if task['schema_id'] not in schema_refmap:
+                    fail('$.interface_definitions', 'missing_definition', '任务缺少所引用的接口定义：' + task['name'])
+                task['schema_id'] = schema_refmap[task['schema_id']]
+                schema = next(item for item in clean_schemas if item['id'] == task['schema_id'])
+                if schema['ros_type'] != task['ros_type']:
+                    fail('$.ros_tasks', 'schema_mismatch', '任务与所引用的接口定义类型不一致')
+        selection = bundle.get('interface_selection', list(schema_refmap))
+        if not isinstance(selection, list) or any(not isinstance(identity, str) or identity not in schema_refmap for identity in selection):
+            fail('$.interface_selection', 'invalid_selection', '选用的接口定义未包含在工程中')
+        selected_schemas = {}
+        for identity in selection:
+            schema = next(item for item in clean_schemas if item['id'] == schema_refmap[identity])
+            selected_schemas[schema['ros_type']] = schema['id']
+        from .state_machines import validate as validate_state_machine
+        clean_machines = []
+        for i, item in enumerate(imported_machines):
+            if not isinstance(item,dict) or not isinstance(item.get('document'),dict):
+                fail(f'$.state_machines[{i}]','invalid_machine','状态机工程结构无效')
+            document = copy.deepcopy(item['document'])
+            needs_rebinding = False
+            for state in document.get('states',[]):
+                if isinstance(state,dict):
+                    for field in ('entry','do','exit'):
+                        ref=state.get(field)
+                        if isinstance(ref,str) and ref in ros_refmap:
+                            state[field]=ros_refmap[ref]
+                        elif isinstance(ref,str) and ref in tree_refmap:
+                            state[field]=tree_refmap[ref]
+                        elif ref:
+                            state.pop(field,None)
+                            needs_rebinding=True
+            document = validate_state_machine(document,clean_drafts,clean_ros_tasks)
+            layout=item.get('layout') or {'positions':{}}
+            positions=layout.get('positions',{}) if isinstance(layout,dict) else {}
+            keys={state['id'] for state in document['states']}
+            if not isinstance(positions,dict) or len(positions)>48 or any(
+                key not in keys or not isinstance(point,list) or len(point)!=2 or
+                any(type(v) not in (int,float) or not 0<=v<=12000 for v in point)
+                for key,point in positions.items()
+            ):
+                fail(f'$.state_machines[{i}].layout','invalid_layout','画布布局无效')
+            clean_machines.append({'name':str(item.get('name') or '导入状态机')[:80], 'document': document, 'layout':{'positions':copy.deepcopy(positions)}, 'needs_tree_rebinding':needs_rebinding})
         # 当前资产系统只认可内置模拟标定证据；未来真实标定须由独立校验器接入
         allowed_fixture = json.loads(
             (self.example / "assets" / "camera_to_arm.json").read_text(encoding="utf-8")
@@ -461,15 +706,37 @@ class RobotSystems:
                 )
         record = {
             "id": key,
-            "name": name.strip(),
+            "name": self._available_name(name),
             "example_id": example,
             "content": content,
             "configured": bool(system.get("configured")),
             "revision": 1,
-            "pending_task_drafts": clean_drafts,
+            "pending_task_drafts": [],
             "pending_task_plans": clean_plans,
+            "pending_state_machines": clean_machines,
         }
         self.store.put("robot_system", key, record)
+        for draft in clean_drafts:
+            self.store.put('tree_draft', draft['id'], {**draft, 'revision': 1, 'layout_revision': 1,
+                'base_snapshot_id': self.context.snapshot_id, 'validation': None, 'published': None, 'robot_system_id': key})
+        self.store.put_many('ros_schema', [(item['id'], item) for item in clean_schemas])
+        self.store.put_many('interface_workspace', [(item['id'], item) for item in clean_workspaces])
+        if foundation:
+            self.store.put('interface_foundation', key, {'id': key, 'path': '', 'definitions': foundation})
+        self.store.put('interface_catalog', key, {'id': key, 'schema_ids': list(selected_schemas.values()),
+            'sources': [], 'base_path': '', 'choices': {}, 'primary_types': list(selected_schemas),
+            'workspaces_migrated': 'interface_workspaces' in bundle,
+            'default_workspace_ids': [clean_workspaces[0]['id']] if len(clean_workspaces) == 1 else []})
+        for item in clean_ros_tasks:
+            endpoint = item.pop('interface', '')
+            self.store.put('ros_task',item['id'],item)
+            binding_id = key + '_' + item['id']
+            self.store.put('ros_binding', binding_id, {'id': binding_id, 'task_id': item['id'], 'robot_system_id': key, 'interface': endpoint})
+        for machine in clean_machines:
+            mid='machine_'+uuid4().hex
+            self.store.put('state_machine',mid,{'id':mid,'name':machine['name'],'document':machine['document'],'layout':machine.get('layout',{'positions':{}}),'revision':1,'robot_system_id':key,'needs_tree_rebinding':machine['needs_tree_rebinding']})
+        record.pop('pending_state_machines',None)
+        self.store.put('robot_system',key,record)
         return record
 
     def restore_imported_tasks(self, record):
@@ -510,6 +777,10 @@ class RobotSystems:
         self.store.put("robot_system", record["id"], record)
 
     def require_stopped(self):
+        if getattr(self, 'deployment', None) and (self.deployment.has_processes() or self.deployment.lock.locked()):
+            fail('$.modules', 'modules_running', '请先在运行台停止子系统，再切换机器人')
+        if any(r['snapshot']['state'] in {'ACCEPTED','RUNNING','CANCELING','UNKNOWN'} or r['snapshot']['stop_state']=='UNCONFIRMED' for r in self.store.list('ros_operation')):
+            fail('$.operations','operation_not_stopped','ROS 操作停止未确认，不能切换系统')
         if self.context.state != "STOPPED":
             fail("$.system", "apply_not_stopped", "请先确认机器人系统已经停止")
         if any(
@@ -529,7 +800,13 @@ class RobotSystems:
                 "存在未确认停止的操作，不能切换系统",
             )
 
+    def require_profile_available(self, key):
+        entry = next((item for item in self.store.list('robot_profile') if item['id'] == key), None)
+        if entry and entry.get('error'):
+            fail('$.storage_path', 'profile_requires_reopen', '工程恢复失败，请修复后重新打开：' + entry['error'])
+
     def choose_blank(self, key):
+        self.require_profile_available(key)
         record = self.store.get("robot_system", key)
         if record["configured"]:
             fail("$.system_id", "activation_required", "已配置系统需要先执行安全切换")
@@ -537,6 +814,16 @@ class RobotSystems:
         self.store.put(
             "robot_selection", "current", {"id": "current", "system_id": key}
         )
+        self.restore_imported_tasks(record)
+        return self.listing()
+
+    def deselect(self):
+        """Close the selected workspace, never bypassing physical stop confirmation."""
+        self.require_stopped()
+        with self.store.db:
+            self.store.db.execute(
+                "DELETE FROM documents WHERE kind='robot_selection' AND id='current'"
+            )
         return self.listing()
 
     def set_configuration(self, key, revision, content):
@@ -572,6 +859,7 @@ class RobotSystems:
         return updated
 
     async def activate(self, key, phase):
+        self.require_profile_available(key)
         record = self.store.get("robot_system", key)
         if not record["configured"]:
             fail("$.system_id", "system_not_configured", "请先在系统搭建中完成配置")

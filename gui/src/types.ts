@@ -37,6 +37,6 @@ export interface Settings { theme: 'system' | 'dark' | 'light'; language: Langua
 
 declare global {
   interface Window {
-    agroDesktop?: { connectLocal(): Promise<string>; openRobotProject(): Promise<unknown|null>; saveRobotProject(bundle: unknown): Promise<boolean>; copyReport(taskId: string): Promise<void>; exportReport(taskId: string): Promise<void>; exportTreeXml(draftId: string): Promise<void>; minimize(): Promise<void>; maximize(): Promise<void>; close(): Promise<void> }
+    agroDesktop?: { chooseInterfaceFolder(): Promise<string|null>; connectLocal(): Promise<string>; openRobotProject(): Promise<unknown|null>; saveRobotProject(bundle: unknown): Promise<boolean>; copyReport(taskId: string): Promise<void>; exportReport(taskId: string): Promise<void>; exportTreeXml(draftId: string): Promise<void>; minimize(): Promise<void>; maximize(): Promise<void>; close(): Promise<void> }
   }
 }

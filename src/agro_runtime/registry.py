@@ -166,7 +166,7 @@ def _compatible(expected, offered, path):
         fail(path, 'incompatible_type', '输入或输出字段集合不兼容')
     for name, spec in expected.items():
         other = offered[name]
-        for field in ('type', 'unit', 'frame_id', 'clock_domain', 'max_age_s', 'minimum', 'maximum', 'choices'):
+        for field in ('type', 'unit', 'frame_id', 'clock_domain', 'max_age_s', 'minimum', 'maximum', 'choices', 'frame_path', 'stamp_path'):
             if getattr(spec, field) != getattr(other, field):
                 fail(f'{path}.{name}.{field}', 'incompatible_type', '角色与能力的数据契约不兼容')
 

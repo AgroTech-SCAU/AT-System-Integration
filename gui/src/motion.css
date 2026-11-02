@@ -1,0 +1,57 @@
+:root{--motion-feedback:120ms;--motion-change:180ms;--motion-ease:cubic-bezier(.2,0,.2,1)}
+button,.file-button,input,select,textarea{transition:background-color var(--motion-feedback) var(--motion-ease),border-color var(--motion-feedback) var(--motion-ease),color var(--motion-feedback) var(--motion-ease),box-shadow var(--motion-change) var(--motion-ease)}
+button{line-height:1.4;touch-action:manipulation;transform-origin:center;flex-shrink:0}
+input,select,textarea{line-height:1.5}
+.field,.field>span,.wb-property,.wb-property>span{min-width:0;line-height:1.5}
+.field>span,.wb-property>span{display:block}
+.ros-form-grid{align-items:end}
+.ros-task-name{align-self:end}
+.ros-task-name .field{min-width:0}
+.ros-section-title p,.connection-header small{line-height:1.6}
+.ros-toolbar-actions,.connection-header>.buttons,.run-console-header>.buttons{flex-wrap:wrap;row-gap:6px}
+.robot-manager-heading h2,.ros-section-title h2{line-height:1.4}
+.robot-row-description strong,.robot-row-description small{line-height:1.6}
+.robot-switch-label,.robot-current-badge,.robot-manager-toolbar>button{white-space:nowrap}
+.app.atil-shell .sidebar .nav-item{position:relative;isolation:isolate}
+.app.atil-shell .sidebar .nav-item[aria-current]{background:transparent;border-color:transparent}
+.app.atil-shell .sidebar .nav-item>.navigation-selection{position:absolute;inset:0;z-index:-1;display:block;flex:none;width:auto;height:auto;min-width:0;margin:0;border-radius:8px;background:var(--tint);border:1px solid color-mix(in srgb,var(--accent) 18%,transparent);pointer-events:none}
+.studio-sections button,.bw-pane-tabs button,.run-console-header nav button,.ros-detail-tabs button{position:relative;isolation:isolate}
+.workspace-selection{position:absolute;inset:0;z-index:-1;border-radius:6px;background:var(--tint);pointer-events:none}
+.ros-detail-tabs .workspace-selection{inset:auto 0 -2px;height:2px;background:var(--accent);border-radius:2px}
+.studio-surface{position:relative}
+.robot-manager-body{min-height:0;display:flex;flex-direction:column;overflow:hidden}
+.robot-manager-row,.interface-list>button,.ros-browser-items>button,.bw-command-list>button,.run-history-list>button{transition:background-color var(--motion-feedback) var(--motion-ease),border-color var(--motion-feedback) var(--motion-ease)}
+.wb-node-body,.wb-container-bg,.wb-edge-line,.bw-node-bg{transition:fill var(--motion-feedback) var(--motion-ease),stroke var(--motion-feedback) var(--motion-ease)}
+.studio-popover{transform-origin:var(--popover-origin,50% 0)}
+.wb-outline,.wb-inspector,.bw-inspector{overflow:hidden}
+:lang(en) .wb-command-bar,:lang(en) .wb-action-strip{flex-wrap:wrap}
+:lang(en) .wb-document-select{max-width:220px}
+:lang(en) .bw-inspector .bw-node-actions{flex-wrap:wrap}
+:lang(en) .bw-inspector .bw-node-actions button{flex:1;min-width:70px}
+:lang(en) .robot-source-options small{white-space:normal}
+:lang(en) .robot-manager-toolbar>button{padding-inline:10px}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important}button,.file-button,input,select,textarea,.robot-manager-row,.interface-list>button,.ros-browser-items>button,.bw-command-list>button,.run-history-list>button,.wb-node-body,.wb-container-bg,.wb-edge-line,.bw-node-bg{transition:none!important}}
+:root{--state-outline-width:196px;--state-inspector-width:274px;--tree-library-width:206px;--tree-inspector-width:278px}
+.spatial-panel-content{display:flex;flex-direction:column;height:100%;min-height:0;flex:none;overflow:hidden}
+.connection-settings-region{overflow:hidden;flex:none}
+.app .studio-sections button[aria-current]{background:transparent;box-shadow:none}
+.ros-detail-tabs button[aria-selected=true]{border-bottom-color:transparent}
+.ros-detail-tabs button>span:not(.workspace-selection){color:inherit;font-size:inherit}
+.ros-detail-tabs button>span:last-child:not(:first-child):not(.workspace-selection){font-size:10px}
+.behavior-workbench .bw-workspace{grid-template-columns:var(--tree-library-width) minmax(0,1fr) auto}
+.bw-library{grid-column:1}.bw-graph{grid-column:2}.bw-inspector{grid-column:3}
+@media(max-width:1300px){:root{--tree-library-width:176px;--tree-inspector-width:250px}}
+@media(max-width:1150px){:root{--state-outline-width:174px;--state-inspector-width:248px}}
+@media(max-width:1000px){:root{--state-outline-width:154px;--state-inspector-width:230px}}
+@media(max-width:1100px){:root{--tree-library-width:150px;--tree-inspector-width:278px}}
+@media(max-width:760px){:root{--state-inspector-width:246px}}
+@media(max-width:560px){:root{--tree-library-width:0px}}
+.segmented label{position:relative;isolation:isolate}
+.segmented label.selected{background:transparent;box-shadow:none}
+.segmented .segmented-selection{position:absolute;inset:0;z-index:-1;border-radius:6px;background:var(--card);box-shadow:var(--shadow);pointer-events:none}
+.behavior-workbench .bw-inspector-toggle{display:inline-flex}
+.behavior-workbench .bw-inspector-close{display:flex}
+@media(max-width:650px){:root{--tree-library-width:0px}}
+.run-console-header nav button[aria-current]{background:transparent}
+.bw-pane-tabs button[aria-pressed=true]{border-bottom-color:transparent}
+.bw-pane-tabs .workspace-selection{inset:auto 0 -1px;height:2px;border-radius:2px;background:var(--accent)}

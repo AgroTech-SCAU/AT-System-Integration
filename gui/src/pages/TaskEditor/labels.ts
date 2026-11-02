@@ -12,15 +12,17 @@ const names:Record<string,string>={
  'manipulation.collection_pose':'移动至收集位',
  'end_effector.grip':'控制末端夹爪',
  'job.record_pick':'记录采摘结果',
+ 'ForEachTarget':'遍历目标', 'HasTarget':'存在目标', 'IsTrue':'判断真值', 'MakePickResult':'生成采摘结果', 'PickSucceeded':'采摘成功', 'SelectTarget':'选择目标', 'TargetsFromPose':'从位姿生成目标',
  'Sequence':'顺序执行', 'Fallback':'失败时尝试备选', 'ReactiveSequence':'响应式顺序',
  'ReactiveFallback':'响应式选择', 'Parallel':'并行执行', 'RetryUntilSuccessful':'失败重试',
  'Repeat':'重复执行', 'Inverter':'结果反转', 'ForceSuccess':'强制成功', 'ForceFailure':'强制失败',
  'SubTree':'调用子树', 'AlwaysSuccess':'始终成功', 'AlwaysFailure':'始终失败',
 }
+const englishNames:Record<string,string>={ForEachTarget:'For each target',HasTarget:'Has target',IsTrue:'Check true',MakePickResult:'Build pick result',PickSucceeded:'Pick succeeded',SelectTarget:'Select target',TargetsFromPose:'Targets from pose',Sequence:'Sequence',Fallback:'Fallback',ReactiveSequence:'Reactive sequence',ReactiveFallback:'Reactive fallback',Parallel:'Parallel',RetryUntilSuccessful:'Retry on failure',Repeat:'Repeat',Inverter:'Invert result',ForceSuccess:'Force success',ForceFailure:'Force failure',SubTree:'Call subtree',AlwaysSuccess:'Always succeed',AlwaysFailure:'Always fail','navigation.move_to_waypoint':'Navigate to waypoint','perception.detect_tomato':'Detect tomato','perception.detect_targets':'Detect targets','perception.verify_pick':'Verify grasp','perception.verify_place':'Verify placement','geometry.transform_pose':'Transform pose','geometry.offset_pose':'Offset pose','manipulation.move_to_pose':'Move arm','manipulation.check_reachability':'Check reachability','manipulation.collection_pose':'Move to collection pose','end_effector.grip':'Control gripper','job.record_pick':'Record pick'}
 export function nodeLabel(id:string, language:'zh'|'en'='zh'){
   const encoded=id.startsWith('Capability_')?id.slice('Capability_'.length):id
   const found=Object.keys(names).find(key=>key.replace(/\./g,'_')===encoded)
-  if(language==='en')return found||encoded
+  if(language==='en')return englishNames[found||id]||encoded.replace(/_/g,' ')
   return found?names[found]:(names[id]||encoded.replace(/_/g,' '))
 }
 export function nodeGroup(id:string){

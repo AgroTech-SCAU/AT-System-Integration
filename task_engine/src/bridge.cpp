@@ -238,15 +238,15 @@ void Broker::work() {
           op->submitted = true;
           submit_call = true;
           method = "POST";
-          path = "/operations";
+          path = op->request.contains("ros_task_id") ? "/ros/operations" : "/operations";
           body = op->request;
         } else if (op->cancel_requested && !op->cancel_sent) {
           op->cancel_sent = true;
           method = "POST";
-          path = "/operations/" + op->operation_id + "/cancel";
+          path = (op->request.contains("ros_task_id") ? "/ros/operations/" : "/operations/") + op->operation_id + "/cancel";
         } else {
           method = "GET";
-          path = "/operations/" + op->operation_id;
+          path = (op->request.contains("ros_task_id") ? "/ros/operations/" : "/operations/") + op->operation_id;
         }
         break;
       }
@@ -278,11 +278,15 @@ void Broker::work() {
             it.key() != "stop_state" && it.key() != "feedback" &&
             it.key() != "result" && it.key() != "error" &&
             it.key() != "cancel_requested" && it.key() != "cancel_accepted" &&
+            it.key() != "previous_session" && it.key() != "terminal_received" &&
             it.key() != "extensions")
           throw std::runtime_error("unknown_snapshot_field");
       for (const auto key : {"cancel_requested", "cancel_accepted"})
         if (result.contains(key) && !result[key].is_boolean())
           throw std::runtime_error("invalid_cancel_flag");
+      for (const auto key : {"previous_session", "terminal_received"})
+        if (result.contains(key) && !result[key].is_boolean())
+          throw std::runtime_error("invalid_snapshot_flag");
       if (result.value("cancel_accepted", false) &&
           !result.value("cancel_requested", false))
         throw std::runtime_error("invalid_cancel_state");
@@ -415,6 +419,9 @@ std::ostream &operator<<(std::ostream &s, const TargetList &v) {
     j.push_back(t.value);
   return s << j.dump();
 }
+std::ostream &operator<<(std::ostream &s, const JsonValue &v) {
+  return s << v.value.dump();
+}
 std::ostream &operator<<(std::ostream &s, const PickResult &v) {
   return s << v.value.dump();
 }
@@ -458,6 +465,10 @@ agro_bt::TargetList convertFromString<agro_bt::TargetList>(StringView text) {
   for (const auto &t : j)
     result.targets.push_back({t});
   return result;
+}
+template <>
+agro_bt::JsonValue convertFromString<agro_bt::JsonValue>(StringView text) {
+  return {literal(text)};
 }
 template <>
 agro_bt::PickResult convertFromString<agro_bt::PickResult>(StringView text) {

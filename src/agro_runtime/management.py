@@ -23,7 +23,7 @@ class ManagementJobs:
                 if job['fingerprint']!=digest:
                     fail('$.request_id','request_id_conflict','同一管理请求不能对应不同载荷')
                 return job
-        if action != 'stop' and any(not t.done() for t in self.workers.values()):
+        if action not in ('stop', 'stop_subsystems') and any(not t.done() for t in self.workers.values()):
             fail('$.management','management_busy','上一管理操作尚未完成')
         key='job_'+uuid4().hex
         record={'id':key,'request_id':request_id,'action':action,'fingerprint':digest,

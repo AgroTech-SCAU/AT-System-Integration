@@ -3,7 +3,7 @@
 
 本目录用于存放 AgroTech 项目的 GitHub Rulesets 配置
 
-当前统一使用：
+当前统一使用
 
 ```text
 .github/rulesets/main-protection.json
@@ -13,7 +13,7 @@
 
 ## 1. 当前规则做什么
 
-`main-protection.json` 只保护 `main`：
+`main-protection.json` 只保护 `main`
 
 - 禁止直接更新 `main`
 - 禁止删除 `main`
@@ -23,14 +23,14 @@
 - Repository Admin 可以在 **Pull Request 场景**下完成最终合并
 - 基础模板不强制额外 Approval，也不要求 CODEOWNERS
 
-协会项目通常约定：
+协会项目通常约定
 
 ```text
 项目负责人 = Repository Admin
 项目成员   = Write
 ```
 
-因此可以理解为：
+因此可以理解为
 
 > 成员负责提交修改，项目负责人负责最终合并
 
@@ -38,7 +38,7 @@
 
 协会既有多人项目，也有负责人单独维护的项目；如果基础模板统一要求至少 1 人 Approval，单人项目会被迫找其他人做形式审批
 
-因此基础模板采用：
+因此基础模板采用
 
 ```text
 必须 PR
@@ -50,7 +50,7 @@
 
 ## 3. Repository Admin 为什么仍然不能直接 Push main
 
-Ruleset 的 bypass 为：
+Ruleset 的 bypass 为
 
 ```text
 Repository Admin
@@ -75,7 +75,7 @@ Pull Request
 项目负责人 Merge
 ```
 
-推荐分支示例：
+推荐分支示例
 
 ```text
 feat/auto-navigation
@@ -88,7 +88,7 @@ docs/deployment-flow
 
 ## 5. Push main 被拒绝怎么办
 
-如果执行：
+如果执行
 
 ```bash
 git push origin main
@@ -98,7 +98,7 @@ GitHub 返回 `GH013`、protected branch、rule violation，或者 Git 本地提
 
 ### 情况 A：还没有 Commit
 
-直接创建任务 Branch：
+直接创建任务 Branch
 
 ```bash
 git switch -c feat/your-work
@@ -116,7 +116,7 @@ git switch -c feat/your-work
 git push -u origin HEAD
 ```
 
-确认 GitHub 上已经看到新 Branch 与提交后，再恢复本地 `main`：
+确认 GitHub 上已经看到新 Branch 与提交后，再恢复本地 `main`
 
 ```bash
 git switch main
@@ -130,7 +130,7 @@ git reset --hard origin/main
 
 ## 6. 可选的本地防误操作提醒
 
-模板附带：
+模板附带
 
 ```text
 .githooks/pre-commit
@@ -141,13 +141,13 @@ scripts/setup-git.ps1
 
 Git 不会在 Clone 后自动启用仓库自带 Hook，因此需要每份 Clone 主动运行一次 setup 脚本
 
-Linux / Ubuntu：
+Linux / Ubuntu
 
 ```bash
 bash scripts/setup-git.sh
 ```
 
-Windows PowerShell：
+Windows PowerShell
 
 ```powershell
 .\scripts\setup-git.ps1
@@ -157,7 +157,7 @@ Hook 只是为了更早提示，**不是安全边界**；即使成员完全没�
 
 ## 7. 初始化方式
 
-项目负责人创建公开项目仓库后：
+项目负责人创建公开项目仓库后
 
 1. 进入仓库 `Settings`
 2. 打开 `Rules → Rulesets`

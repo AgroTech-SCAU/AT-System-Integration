@@ -50,16 +50,61 @@ class WorkspaceStore:
     def list(self, kind):
         return [json.loads(r[0]) for r in self.db.execute('SELECT body FROM documents WHERE kind=? ORDER BY rowid',(kind,))]
 
+    def _profile_owners(self, kind, values):
+        from .robot_profiles import PROJECT_KINDS
+        if kind == 'package':
+            identities = {value['id'] for value in values}
+            return {robot['id'] for robot in self.list('robot_system')
+                    if any(item.get('package_id') in identities for item in robot.get('content', {}).get('backends', []))}
+        if kind not in PROJECT_KINDS or kind == 'interface_catalog':
+            return set()
+        return {value.get('robot_system_id') or value.get('project_id') or value.get('id')
+                for value in values} - {None}
+
+    def _flush_profiles(self, kind, values):
+        from .robot_profiles import RobotProfiles
+        profiles = RobotProfiles(self)
+        for owner in sorted(self._profile_owners(kind, values)):
+            try:
+                profiles.flush(owner)
+            except OSError as error:
+                fail('$.storage_path', 'profile_write_failed', '无法保存机器人工程：' + str(error))
+
     def put(self, kind, key, value):
-        identifier(key)
+        return self.put_many(kind, [(key, value)])[0]
+
+    def put_many(self, kind, items):
+        rows, values, previous = [], [], {}
+        for key, value in items:
+            identifier(key)
+            rows.append((kind, key, encoded(value)))
+            values.append(value)
+            if key not in previous:
+                previous[key] = self.db.execute('SELECT body FROM documents WHERE kind=? AND id=?', (kind, key)).fetchone()
         with self.db:
-            self.db.execute('INSERT OR REPLACE INTO documents VALUES (?,?,?)',(kind,key,encoded(value)))
-        return value
+            self.db.executemany('INSERT OR REPLACE INTO documents VALUES (?,?,?)', rows)
+        try:
+            self._flush_profiles(kind, values)
+        except BaseException:
+            with self.db:
+                for key, record in previous.items():
+                    if record:
+                        self.db.execute('INSERT OR REPLACE INTO documents VALUES (?,?,?)', (kind, key, record[0]))
+                    else:
+                        self.db.execute('DELETE FROM documents WHERE kind=? AND id=?', (kind, key))
+            raise
+        return values
 
     def delete(self, kind, key):
-        self.get(kind,key)
+        value = self.get(kind, key)
         with self.db:
-            self.db.execute('DELETE FROM documents WHERE kind=? AND id=?',(kind,key))
+            self.db.execute('DELETE FROM documents WHERE kind=? AND id=?', (kind, key))
+        try:
+            self._flush_profiles(kind, [value])
+        except BaseException:
+            with self.db:
+                self.db.execute('INSERT OR REPLACE INTO documents VALUES (?,?,?)', (kind, key, encoded(value)))
+            raise
 
 
 class ActiveContext:
@@ -212,6 +257,8 @@ class ConfigurationService:
                 fail('$.system','apply_not_stopped','应用需要停止态，且任务和设备停止均已确认')
             if any(o.state.value=='UNKNOWN' or o.stop_state.value=='UNCONFIRMED' or o.state.value in {'ACCEPTED','RUNNING','CANCELING'} for o in old.records.list_operations()):
                 fail('$.operations','unresolved_operation','存在未核对操作，不能应用')
+            if any(r['snapshot']['state'] in {'ACCEPTED','RUNNING','CANCELING','UNKNOWN'} or r['snapshot']['stop_state']=='UNCONFIRMED' for r in self.store.list('ros_operation')):
+                fail('$.operations','unresolved_operation','存在未核对 ROS 操作，不能应用')
             for name,descriptor in old.modules.items():
                 manager=old.managers[descriptor.manager]
                 measured=await asyncio.wait_for(manager.status(name,descriptor),descriptor.start_timeout_s)

@@ -1,5 +1,6 @@
 """描述与执行共用的严格数据契约"""
 import math
+import json
 from enum import Enum
 from typing import Annotated, Literal
 
@@ -38,7 +39,7 @@ class ContractModel(BaseModel):
 
 
 class TypeDescriptor(ContractModel):
-    type: Literal['string', 'integer', 'number', 'boolean', 'stamped_pose', 'target_list', 'pick_result']
+    type: Literal['string', 'integer', 'number', 'boolean', 'stamped_pose', 'target_list', 'pick_result', 'json']
     unit: Nonempty | None = None
     minimum: Number | None = None
     maximum: Number | None = None
@@ -46,9 +47,15 @@ class TypeDescriptor(ContractModel):
     frame_id: QualifiedName | None = None
     clock_domain: QualifiedName | None = None
     max_age_s: Positive | None = None
+    frame_path: StrictStr | None = None
+    stamp_path: StrictStr | None = None
 
     @model_validator(mode='after')
     def check_type(self):
+        if self.extensions.get('ros_shape') is not None:
+            from .data_contracts import valid_shape
+            if not valid_shape(self.extensions['ros_shape']):
+                invalid(('extensions',), 'invalid_ros_shape', 'ROS 字段结构无效')
         if self.type in {'integer', 'number', 'stamped_pose', 'target_list'} and self.unit is None:
             invalid(('unit',), 'unit_required', '数值与位姿必须声明单位，无量纲数值使用 1')
         if self.minimum is not None and self.maximum is not None and self.minimum > self.maximum:
@@ -61,8 +68,14 @@ class TypeDescriptor(ContractModel):
             for field in ('frame_id', 'clock_domain', 'max_age_s'):
                 if getattr(self, field) is None:
                     invalid((field,), 'required_field', '位姿描述必须声明坐标系、时间域和有效期')
-        elif any(getattr(self, f) is not None for f in ('frame_id', 'clock_domain', 'max_age_s')):
-            invalid(('frame_id',), 'invalid_type', '位姿约束只能用于 stamped_pose')
+        for name in ('frame_path', 'stamp_path'):
+            path = getattr(self, name)
+            if path is not None and (self.type != 'json' or not __import__('re').fullmatch(r'[A-Za-z_]\w*(?:\.(?:[A-Za-z_]\w*|[0-9]+))*', path)):
+                invalid((name,), 'invalid_semantic_path', '字段路径需要对应 JSON 消息中的字段')
+        if self.frame_path and not self.frame_id:
+            invalid(('frame_id',), 'required_field', '坐标系字段需要声明期望坐标系')
+        if self.stamp_path and (self.max_age_s is None or self.clock_domain not in ('ros', 'system')):
+            invalid(('stamp_path',), 'invalid_clock', '采样时间需要有效期和明确的 ros 或 system 时间域')
         if self.choices is not None:
             if not self.choices:
                 invalid(('choices',), 'invalid_choices', '可选值不能为空')
@@ -74,13 +87,18 @@ class TypeDescriptor(ContractModel):
 
 
 def scalar_error(spec, value, *, check_choices=True):
+    def valid_json(value):
+        try:
+            return len(json.dumps(value, allow_nan=False)) <= 262144
+        except (TypeError, ValueError):
+            return False
     types = {'string': lambda x: isinstance(x, str),
              'integer': lambda x: type(x) is int,
              'number': lambda x: type(x) is int or (type(x) is float and math.isfinite(x)),
              'boolean': lambda x: type(x) is bool,
              'stamped_pose': lambda x: isinstance(x, dict),
              'target_list': lambda x: isinstance(x, list),
-             'pick_result': lambda x: isinstance(x, dict)}
+             'pick_result': lambda x: isinstance(x, dict), 'json': valid_json}
     if not types[spec.type](value):
         return 'invalid_type', f'需要 {spec.type} 类型'
     if spec.type in {'number', 'integer'}:
@@ -90,11 +108,25 @@ def scalar_error(spec, value, *, check_choices=True):
             return 'out_of_range', f'值不能大于 {spec.maximum}'
     if check_choices and spec.choices is not None and value not in spec.choices:
         return 'invalid_choice', '值不在声明的可选值中'
+    if spec.extensions.get('ros_shape'):
+        from .ros_interfaces import validate_schema_value
+        from .errors import ContractValidationError
+        try:
+            validate_schema_value(value, spec.extensions['ros_shape'], '$.value')
+        except ContractValidationError:
+            return 'ros_shape_mismatch', '数据不符合声明的 ROS 字段结构或范围'
+    if spec.frame_path:
+        from .data_contracts import field_at_path
+        try:
+            if field_at_path(value, spec.frame_path) != spec.frame_id:
+                return 'frame_mismatch', '数据中的坐标系与端口声明不同'
+        except (KeyError, IndexError, TypeError, ValueError):
+            return 'missing_frame', '数据中缺少声明的坐标系字段'
     return None, None
 
 
 class ParameterDescriptor(TypeDescriptor):
-    type: Literal['string', 'integer', 'number', 'boolean']
+    type: Literal['string', 'integer', 'number', 'boolean', 'json']
     required: StrictBool = False
     default: JsonValue = None
     apply_policy: Literal['immediate', 'idle', 'restart']
