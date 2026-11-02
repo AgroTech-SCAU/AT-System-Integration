@@ -15,6 +15,8 @@ import {ApiError} from '../api'
 import type {Json,PageProps} from './shared'
 import type {Workspace} from '../types'
 import DataContractEditor from './DataContractEditor'
+import DataBindingField,{type BindingChoice} from './DataBindingField'
+import type {StudioLocation} from '../studio-links'
 import {activeStatus,blankMachine,canReparent,descendants,diagnoseMachine,eventBranches,fingerprint,isFallback,isIdentifier,normalizeInitials,reorderState,snapshotOf,statePath,transitionPlan,type Diagnostic,type MachineSnapshot,type MachineState,type SavedMachine,type Scalar,type Transition} from './hsm-model'
 import './hsm-workbench.css'
 
@@ -23,7 +25,7 @@ type StateDrop={target:string;placement:'before'|'inside'|'after';parent:string}
 type CheckIssue=Diagnostic&{taskId?:string;path?:string;phase?:Phase}
 type CheckResult={key:string;status:'checking'|'passed'|'failed';message:string;issues:CheckIssue[]}
 export type OpenStateTask={kind:'ros'|'tree';reference?:string;stateId:string;stateLabel:string;phase:Phase;machineId?:string}
-type Props=PageProps & {onNavigate:(page:Workspace)=>void;onOpenRos:()=>void;onOpenTask?:(request:OpenStateTask)=>void}
+type Props=PageProps & {onNavigate:(page:Workspace)=>void;onOpenRos:()=>void;onOpenTask?:(request:OpenStateTask)=>void;studioLocation?:StudioLocation}
 const phaseLabels={entry:'进入时',do:'状态期间',exit:'离开时'}
 const newMachineId=()=>'machine_'+crypto.randomUUID().replaceAll('-','')
 const statusLabels:Record<string,string>={ENTERING:'进入状态',RUNNING:'运行中',TRANSITIONING:'切换状态',STOPPING:'正在停止',STOPPED:'已停止',SUCCEEDED:'已完成',FAILED:'执行失败',UNKNOWN:'状态待确认',CANCELED:'已取消'}
@@ -43,8 +45,9 @@ function ScalarInput({value,onChange,label,onValidity}:{value:Scalar;onChange:(v
  return <input aria-label={label} type={typeof value==='number'?'number':'text'} step="any" value={typeof value==='number'?text:value} aria-invalid={invalid} onChange={event=>{if(typeof value==='number'){setText(event.target.value);if(event.target.value===''||!Number.isFinite(Number(event.target.value))){setInvalid(true);onValidity?.(false);return}setInvalid(false);onValidity?.(true);onChange(Number(event.target.value))}else onChange(event.target.value)}}/>
 }
 
-export default function StateMachineEditor({client,onNavigate,onOpenRos,onOpenTask}:Props){
+export default function StateMachineEditor({client,onNavigate,onOpenRos,onOpenTask,studioLocation}:Props){
  const [historyEvent,setHistoryEvent]=useState<Json|null>(null)
+ const studioSeen=useRef<StudioLocation|null>(null)
  const [phaseQuery,setPhaseQuery]=useState('')
  const {t}=useLocale()
 
@@ -308,6 +311,30 @@ export default function StateMachineEditor({client,onNavigate,onOpenRos,onOpenTa
   return()=>{valid=false}
  },[client,loadAttempt,setEditor])
  useEffect(()=>{
+  if(!loaded||!studioLocation||studioSeen.current===studioLocation||(!studioLocation.machineId&&!studioLocation.stateId))return
+  const target=studioLocation.machineId?machines.find(item=>item.id===studioLocation.machineId):current
+  if(studioLocation.machineId&&!target)return
+  studioSeen.current=studioLocation
+  void (async()=>{
+   if(target&&target.id!==current?.id&&!await loadMachine(target))return
+   const spec=snapshotRef.current.document,id=studioLocation.stateId||spec.initial,item=spec.states.find(candidate=>candidate.id===id)
+   if(!item)return
+   setSelected(id);setEdgeIndex(null);setScope(item.parent||spec.initial);setInspectorOpen(true);setHistoryEvent(null)
+   setCollapsed(previous=>{const next=new Set(previous);for(const identity of statePath(spec,id))next.delete(identity);return next})
+   setReveal(previous=>({id,nonce:(previous?.nonce||0)+1}))
+   if(studioLocation.section==='diagnostics')setBottom('diagnostics')
+   requestAnimationFrame(()=>requestAnimationFrame(()=>{
+    const phase=studioLocation.field?.match(/(?:^|\.)(entry|do|exit)(?:\.|$)/)?.[1]
+    const port=studioLocation.field?.split('.').at(-1)
+    const scope=phase?editor.current?.querySelector<HTMLElement>(`[data-state-phase="${phase}"]`):editor.current
+    const target=port?Array.from(scope?.querySelectorAll<HTMLElement>('[data-binding-field]')||[]).find(row=>row.dataset.bindingField===port):scope?.querySelector<HTMLElement>('.wb-phase-data')
+    if(!target)return
+    for(let card=target.closest('.disclosure-card');card;card=card.parentElement?.closest('.disclosure-card')||null){const toggle=card.querySelector<HTMLButtonElement>(':scope > .disclosure-card-heading .disclosure-card-toggle');if(toggle?.getAttribute('aria-expanded')==='false')toggle.click()}
+    requestAnimationFrame(()=>{target.scrollIntoView({block:'center',behavior:'smooth'});target.querySelector<HTMLElement>('button,input,select,textarea')?.focus({preventScroll:true})})
+   }))
+  })().catch(cause=>setError(errorMessage(cause,t)))
+ },[loaded,studioLocation,machines,current?.id])
+ useEffect(()=>{
   let valid=true,timer=0
   const refresh=async()=>{try{const result=await client.request<Json>('/state-machines/status');if(valid){setSession(result.session);setStatusConnected(true)}}catch{if(valid)setStatusConnected(false)}finally{if(valid)timer=window.setTimeout(refresh,1200)}}
   void refresh();return()=>{valid=false;clearTimeout(timer)}
@@ -404,30 +431,51 @@ export default function StateMachineEditor({client,onNavigate,onOpenRos,onOpenTa
  }
  const phaseBindings=(phase:Phase)=>{
   if(!state?.[phase])return null
-  const ports=behaviorPorts(state[phase])
-  const sources=document.states.flatMap(source=>(['entry','do','exit'] as Phase[]).flatMap(sourcePhase=>source.id===selected&&sourcePhase===phase?[]:Object.entries(behaviorPorts(source[sourcePhase]).outputs).map(([port,contract])=>({state:source.id,phase:sourcePhase,port,contract:contract as DataContract,label:source.label+' · '+phaseLabels[sourcePhase]+' · '+port}))))
+  const ports=behaviorPorts(state[phase]),phases:Phase[]=['entry','do','exit']
+  const ancestors=statePath(document,selected),predecessors=new Set(ancestors)
+  let changed=true
+  while(changed){changed=false;for(const edge of document.transitions)if(predecessors.has(edge.target)&&!predecessors.has(edge.source)){predecessors.add(edge.source);changed=true}}
+  const sources=document.states.flatMap(source=>phases.flatMap(sourcePhase=>source.id===selected&&sourcePhase===phase?[]:Object.entries(behaviorPorts(source[sourcePhase]).outputs).map(([port,contract])=>({
+   state:source.id,phase:sourcePhase,port,contract:contract as DataContract,
+   label:source.label+' · '+t(phaseLabels[sourcePhase])+' · '+port,
+   variable:source.bindings?.[sourcePhase]?.outputs?.[port]||(port in document.variables?port:undefined),
+   previous:source.id===selected?phases.indexOf(sourcePhase)<phases.indexOf(phase):ancestors.includes(source.id)?sourcePhase==='entry':predecessors.has(source.id)
+  }))))
   const connect=(direction:'inputs'|'outputs',port:string,value:string)=>edit(draft=>{
    const item=draft.document.states.find(item=>item.id===selected)!;item.bindings??={};item.bindings[phase]??={};const mapping=item.bindings[phase]![direction]??={}
    if(!value){delete mapping[port];return}
    const source=value.startsWith('@source:')?sources[Number(value.slice(8))]:undefined
    if(source||value==='@new'){
     const base=((source?.port||port).replace(/[^a-z0-9_]/g,'_').replace(/^[^a-z]+/,'')||'data').slice(0,48)
-    let variable=source?draft.document.states.find(item=>item.id===source.state)?.bindings?.[source.phase]?.outputs?.[source.port]:undefined
+    let variable=source?.variable
     if(!variable||!(variable in draft.document.variables)){variable=base;let n=2;while(variable in draft.document.variables)variable=base+'_'+n++;draft.document.variables[variable]=null}
-    draft.document.variable_contracts??={};draft.document.variable_contracts[variable]=structuredClone(source?.contract||ports[direction][port])
+    draft.document.variable_contracts??={}
+    if(!draft.document.variable_contracts[variable])draft.document.variable_contracts[variable]=structuredClone(source?.contract||ports[direction][port])
     if(source){const producer=draft.document.states.find(item=>item.id===source.state)!;producer.bindings??={};producer.bindings[source.phase]??={};producer.bindings[source.phase]!.outputs??={};producer.bindings[source.phase]!.outputs![source.port]=variable}
     mapping[port]=variable
    }else mapping[port]=value
   })
   if(!Object.keys(ports.inputs).length&&!Object.keys(ports.outputs).length)return null
-  return <DisclosureCard className="wb-phase-data" title={t("输入与输出")} count={Object.keys(ports.inputs).length+Object.keys(ports.outputs).length}>{(['inputs','outputs'] as const).map(direction=>!!Object.keys(ports[direction]).length&&<div key={direction}><span className="wb-binding-direction">{t(direction==='inputs'?'输入':'输出')}</span>{Object.entries(ports[direction]).map(([port,raw])=>{
-   const contract=raw as DataContract,binding=state.bindings?.[phase]?.[direction]?.[port]||''
-   const existing=document.variable_contracts?.[binding],reason=existing?(direction==='inputs'?contractReason(existing,contract):contractReason(contract,existing)):''
-   return <div className="wb-port-binding" key={port}><code>{port}</code><small>{contract.extensions?.ros_type||contract.type}{contract.unit&&contract.unit!=='unspecified'?' · '+contract.unit:''}</small><select aria-label={`${phaseLabels[phase]} ${direction} ${port}`} aria-invalid={!!reason} value={binding} onChange={event=>connect(direction,port,event.target.value)}><option value="">{port in document.variables?t('同名变量'):direction==='inputs'?t('任务默认值'):t('不写入变量')}</option>{direction==='outputs'&&<option value="@new">{t('新建输出变量')}</option>}{direction==='inputs'&&!!sources.length&&<optgroup label={t('任务输出')}>{sources.map((source,index)=>{const issue=contractReason(source.contract,contract);return <option key={index} value={'@source:'+index} disabled={!!issue}>{source.label}{issue?' · '+t(issue):''}</option>})}</optgroup>}<optgroup label={t('流程变量')}>{Object.keys(document.variables).map(name=>{const candidate=document.variable_contracts?.[name],issue=candidate?(direction==='inputs'?contractReason(candidate,contract):contractReason(contract,candidate)):'';return <option key={name} value={name} disabled={!!issue}>{name}{issue?' · '+t(issue):candidate?'':' · '+t('类型待确认')}</option>})}</optgroup></select>{reason&&<small className="ros-invalid">{t(reason)}</small>}{direction==='inputs'&&binding&&<small>{t('使用前需由来源任务提供数据')}</small>}</div>
+  return <DisclosureCard className="wb-phase-data" title={t("输入与输出")} count={Object.keys(ports.inputs).length+Object.keys(ports.outputs).length}>{!!Object.keys(ports.inputs).length&&<p className="wb-data-binding-note">{t('类型匹配后仍需校验执行路径，确认输入使用前已经产生')}</p>}{(['inputs','outputs'] as const).map(direction=>!!Object.keys(ports[direction]).length&&<div key={direction}><span className="wb-binding-direction">{t(direction==='inputs'?'输入':'输出')}</span>{Object.entries(ports[direction]).map(([port,raw])=>{
+   const contract=raw as DataContract,binding=state.bindings?.[phase]?.[direction]?.[port]||(port in document.variables?port:'')
+   const choices:BindingChoice[]=Object.keys(document.variables).map(name=>{
+    const candidate=document.variable_contracts?.[name],producers=sources.filter(source=>source.variable===name)
+    const reason=candidate?(direction==='inputs'?contractReason(candidate,contract):contractReason(contract,candidate)):''
+    const hint=producers.length?producers.map(source=>source.label).join(' / '):document.variables[name]!==null?t('已有初始值'):t('尚未获得来源数据')
+    return {value:name,label:t('流程变量')+' · '+name,contract:candidate,reason,hint:candidate?hint:t('类型待确认')+' · '+hint,priority:candidate?(producers.some(source=>source.previous)?0:1):3}
+   })
+   if(direction==='inputs')sources.forEach((source,index)=>{
+    const variable=source.variable&&document.variable_contracts?.[source.variable]
+    if(source.variable&&source.variable in document.variables&&variable)return
+    const reason=contractReason(source.contract,contract)
+    choices.push({value:'@source:'+index,label:t(source.previous?'前序任务输出':'其他任务输出')+' · '+source.label,contract:source.contract,reason,hint:t('选择后关联来源输出与流程变量'),priority:source.previous?0:2})
+   })
+   else choices.unshift({value:'@new',label:t('新建输出变量'),contract,priority:0})
+   return <DataBindingField key={port} name={port} label={t(phaseLabels[phase])+' · '+t(direction==='inputs'?'输入':'输出')+' · '+port} contract={contract} value={binding} choices={choices} output={direction==='outputs'} fallback={port in document.variables?t('同名变量')+' · '+port:direction==='inputs'?(state[phase]?.startsWith('ros:')?t('选择数据来源'):t('任务默认值')):t('不写入变量')} onChange={value=>connect(direction,port,value)} onManage={()=>setBottom('variables')}/>
   })}</div>)}<button className="wb-text-button" onClick={()=>setBottom('variables')}>{t("管理状态变量 ")}{tinyIcon('chevron')}</button></DisclosureCard>
  }
  const phaseDefinitions=(phase:Phase)=>definitions.filter(item=>item.id===state?.[phase]||!item.draft_id||!definitions.some(other=>other.id===item.draft_id))
- const phaseEditor=(phase:Phase)=>state&&<div className={'wb-phase'+(phase==='do'?' is-main':'')} key={phase}>
+ const phaseEditor=(phase:Phase)=>state&&<div className={'wb-phase'+(phase==='do'?' is-main':'')} key={phase} data-state-phase={phase}>
   <div className="wb-phase-heading"><span>{t(phaseLabels[phase])}</span></div>
   <div className="wb-phase-binding"><button className="wb-phase-choice" onClick={()=>state[phase]?openTask(phase):setPhaseMenu(phaseMenu===phase?null:phase)}>{state[phase]?taskLabels[state[phase]!]||t("原行为不可用"):t("添加行为")}</button><button className="wb-icon-button" aria-label={t("选择状态行为")} onClick={()=>{setPhaseMenu(phaseMenu===phase?null:phase);setPhaseQuery('')}}>{tinyIcon('plus')}</button></div>
   {state[phase]&&referenceUses(state[phase]!)>1&&<div className="wb-shared-behavior"><small>{t('被 {0} 处引用，直接编辑会同步影响这些位置',{0:referenceUses(state[phase]!)})}</small><button disabled={!!busy} onClick={()=>void copyPhase(phase)}>{t('复制为独立行为')}</button></div>}

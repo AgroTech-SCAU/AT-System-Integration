@@ -185,7 +185,97 @@ class Deployment:
         tasks = self.tasks_for(kind, reference)
         return {'kind':kind,'reference':reference,**self.plan_tasks(tasks)}
 
-    def preflight(self, kind, reference, inputs=None):
+    def readiness(self, kind, reference, inputs=None):
+        """Explain saved configuration gaps without loading environments or starting devices."""
+        from .errors import ContractValidationError
+        design, execution, notes = [], [], []
+        target = ({'page':'editor','machineId':reference} if kind=='flow' else
+                  {'page':'editor','treeId':reference} if kind=='tree' else
+                  {'page':'system','taskId':reference,'section':'message'})
+
+        def task_location(identity, path, code=''):
+            field=path.removeprefix('$.')
+            section='message'
+            if field=='interface' or code in ('missing_endpoint','missing_binding'):
+                section,field='communication','interface'
+            elif field.split('.')[0] in ('workspace_ids','ros_type','schema_id','kind','name'):
+                section='interfaces'
+            elif field.split('.')[0] in ('execution_workspace_id','module_ids','startup_policy'):
+                section='provider'
+            elif field.split('.')[0] in ('inputs','outputs','input_bindings','output_bindings'):
+                section='ports'
+            return {'page':'system','taskId':identity,'section':section,'field':field}
+
+        def errors(error, destination, location):
+            if isinstance(error, ContractValidationError):
+                for issue in error.issues:
+                    parts=issue.path.split('.')
+                    specific=dict(location)
+                    if location.get('machineId') and len(parts)>2 and parts[1]=='states':
+                        specific.update(stateId=parts[2],field='.'.join(parts[3:]))
+                    elif location.get('taskId'):
+                        specific=task_location(location['taskId'],issue.path,issue.code)
+                    elif location.get('treeId'):
+                        specific['section']='diagnostics'
+                    elif location.get('section')=='environment' and issue.path in ('$.setup','$.python'):
+                        specific['field']=parts[1]
+                    destination.append({'code':issue.code,'reason':issue.reason,'path':issue.path,'target':specific})
+            else:
+                destination.append({'code':'configuration_unavailable','reason':str(error),'target':location})
+
+        try:
+            if kind=='flow':
+                checked=self.hsm.check(reference)
+                for item in checked.get('diagnostics',[]):
+                    specific=(task_location(item['task_id'],item.get('path') or '') if item.get('task_id') else
+                              {**target,'stateId':item.get('state_id'),'field':'.'.join(filter(None,[item.get('phase'),item.get('path')]))})
+                    design.append({'code':'workflow_not_ready','reason':item.get('message') or item.get('reason'),
+                                   'path':item.get('path'), 'target':specific})
+                if checked['valid']:self.preflight(kind,reference,inputs,flow_check=checked)
+            else:
+                self.preflight(kind,reference,inputs)
+        except (ContractValidationError, OSError, ValueError) as error:
+            errors(error,design,target)
+        plan={'tasks':[],'modules':[],'issues':[]}
+        tasks=[]
+        try:
+            tasks=self.tasks_for(kind,reference)
+            plan=self.plan_tasks(tasks)
+        except (ContractValidationError, OSError, ValueError) as error:
+            errors(error,execution,target)
+        for item in plan['issues']:
+            execution.append({**item,'target':{'page':'system','taskId':item['task_id'],'section':'provider'}})
+        required={module['workspace_id'] for module in plan['modules']}
+        for task in tasks:
+            try:required.add(self.ros.environments.workspace_for(task))
+            except (ContractValidationError, OSError, ValueError) as error:
+                errors(error,execution,{'page':'system','taskId':task['id'],'section':'provider'})
+        unresolved=[record for record in self.store.list('ros_operation')
+                    if record.get('definition',{}).get('robot_system_id')==self.ros._robot()
+                    and record.get('snapshot',{}).get('state') not in ('ACCEPTED','RUNNING','CANCELING')
+                    and (record.get('snapshot',{}).get('state')=='UNKNOWN' or record.get('snapshot',{}).get('stop_state')=='UNCONFIRMED')]
+        for run in sorted({record['task_run_id'] for record in unresolved}):
+            execution.append({'code':'stop_unconfirmed','reason':'仍有操作结果或设备停止状态需要核对，请在运行台完成停止核对',
+                              'target':{'page':'runtime','section':'recovery','runId':run}})
+        environments=[]
+        for workspace in sorted(required):
+            location={'page':'overview','workspaceId':workspace,'section':'environment'}
+            try:
+                loaded=bool(self.ros.environments.active(workspace))
+                config=(self.ros.environments.snapshot(workspace_id=workspace) if loaded else
+                        self.ros.environments._configuration(workspace,''))
+                environments.append({'workspace_id':workspace,'name':config.get('name',workspace),
+                                     'configured':True,'loaded':loaded})
+                if not loaded:
+                    notes.append({'reason':'开始运行时将检查并加载执行环境','name':config.get('name',workspace),'target':location})
+            except (ContractValidationError, OSError, ValueError) as error:
+                environments.append({'workspace_id':workspace,'configured':False})
+                errors(error,execution,location)
+        return {'kind':kind,'reference':reference,'offline_ready':not design,
+                'prepare_ready':not design and not execution,'design_issues':design,'execution_issues':execution,
+                'execution_notes':notes,'environments':environments,'tasks':plan['tasks'],'modules':plan['modules']}
+
+    def preflight(self, kind, reference, inputs=None, *, flow_check=None):
         """Validate the requested workflow and supplied inputs before starting modules."""
         from .errors import ContractValidationError, ValidationIssue
         references = set()
@@ -196,7 +286,7 @@ class Deployment:
             task = self.ros.freeze(reference)
             prepared_task(task, inputs, self.ros.validate_structure(task))
         elif kind == 'flow':
-            checked = self.hsm.check(reference)
+            checked = flow_check if flow_check is not None else self.hsm.check(reference)
             if not checked['valid']:
                 raise ContractValidationError([ValidationIssue(
                     path='$.states.' + item.get('state_id', '') + '.' + item.get('phase', '') + '.' + item.get('path', ''),

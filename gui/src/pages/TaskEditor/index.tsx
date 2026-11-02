@@ -1,4 +1,5 @@
 import {contractReason} from '../../data-contracts'
+import type {StudioLocation} from '../../studio-links'
 import {confirmDialog, unsavedDialog, deferNavigation} from '../../components/StudioDialogs'
 import {AnimatePresence, motion} from 'motion/react'
 import {springs, fade, PresenceLayer} from '../../motion'
@@ -20,7 +21,7 @@ import Icon from './WorkbenchIcon'
 import type {Workspace} from '../../types'
 import './behavior-workbench.css'
 
-type Props=PageProps&{configured?:boolean;onNavigate?:(page:Workspace)=>void;requestedDefinition?:string;requestKey?:number;browseKey?:number;owner?:{machine_id?:string;state_id:string;phase:string};onRememberReference?:(reference:string)=>void;onBound?:(reference:string)=>void;onBack?:()=>void;contextLabel?:string}
+type Props=PageProps&{configured?:boolean;onNavigate?:(page:Workspace)=>void;requestedDefinition?:string;requestKey?:number;browseKey?:number;owner?:{machine_id?:string;state_id:string;phase:string};onRememberReference?:(reference:string)=>void;onBound?:(reference:string)=>void;onBack?:()=>void;contextLabel?:string;studioLocation?:StudioLocation}
 function useWorkbenchOperation(){
  const [busy,setBusy]=useState(false),[phase,setPhase]=useState(''),[error,assignError]=useState<unknown>(null),locked=useRef(false),controller=useRef<AbortController|null>(null),alive=useRef(true)
  function setError(value:unknown){assignError(value instanceof Error&&!(value instanceof ApiError)?new ApiError('response',[{path:'',code:'editor_operation',reason:value.message}]):value)}
@@ -32,7 +33,7 @@ function useWorkbenchOperation(){
  }
  return {busy,phase,error,setError,run}
 }
-export default function TaskEditor({client,observation,language,changed,configured,onNavigate,requestedDefinition,requestKey,browseKey,owner,onRememberReference,onBound,onBack,contextLabel}:Props){
+export default function TaskEditor({client,observation,language,changed,configured,onNavigate,requestedDefinition,requestKey,browseKey,owner,onRememberReference,onBound,onBack,contextLabel,studioLocation}:Props){
  const {t}=useLocale()
 
  const [definitions,setDefinitions]=useState<Json[]>([]),[models,setModels]=useState<Json|null>(null),[draft,setDraft]=useState<Json|null>(null),[value,setValue]=useState<EditorValue|null>(null)
@@ -44,7 +45,8 @@ export default function TaskEditor({client,observation,language,changed,configur
  const [library,setLibrary]=useState<Json[]>([]),[showLibrary,setShowLibrary]=useState(true)
  const [inspectorOpen,setInspectorOpen]=useState(()=>window.matchMedia('(min-width:1101px)').matches),[libraryTab,setLibraryTab]=useState<'nodes'|'structure'>('nodes'),[inspectorTab,setInspectorTab]=useState<'node'|'task'>('node'),[diagnosticsOpen,setDiagnosticsOpen]=useState(false),[paletteOpen,setPaletteOpen]=useState(false),[quickSearch,setQuickSearch]=useState(''),[commandIndex,setCommandIndex]=useState(0),[extractOpen,setExtractOpen]=useState(false),[layoutKey,setLayoutKey]=useState(0),[loaded,setLoaded]=useState(false)
  const root=useRef<HTMLDivElement>(null),history=useRef<{past:EditorValue[];future:EditorValue[]}>({past:[],future:[]}),taskIntent=useRef<string|null>(null),dirtyRef=useRef(false),op=useWorkbenchOperation(),reader=useRef(0),editSequence=useRef(0),lastEdit=useRef({key:'',time:0}),clipboard=useRef<Fragment|null>(null),externalRequest=useRef(''),insertion=useRef<{parent:string;before?:string}|null>(null),treePath=useRef<string[]>([]),returnFocus=useRef<HTMLElement|null>(null)
- const currentValue=useRef(value),currentDraft=useRef(draft)
+ const currentValue=useRef(value),currentDraft=useRef(draft),studioSeen=useRef<StudioLocation|null>(null)
+ const [pendingStudioLocation,setPendingStudioLocation]=useState<StudioLocation|null>(null)
  currentValue.current=value;currentDraft.current=draft;dirtyRef.current=dirty
  async function load(){
   const [m,d,p,l]=await Promise.all([client.request<Json>('/trees/models'),client.request<Json>('/trees/drafts'),client.request<Json>('/trees/definitions'),client.request<Json>('/trees/library')])
@@ -62,6 +64,29 @@ export default function TaskEditor({client,observation,language,changed,configur
    setView('edit');setInspectorTab('node')
   })
  },[loaded,requestKey,requestedDefinition,op.busy])
+ useEffect(()=>{
+  if(!loaded||!studioLocation?.treeId||studioSeen.current===studioLocation||op.busy)return
+  studioSeen.current=studioLocation
+  void op.run(t('定位行为树'),async()=>{
+   if(currentDraft.current?.id!==studioLocation.treeId)await openBehavior(studioLocation.treeId!)
+   else setShowLibrary(false)
+   setPendingStudioLocation(studioLocation);setView('edit')
+  })
+ },[loaded,studioLocation,op.busy])
+ useEffect(()=>{
+  if(!pendingStudioLocation||!value||showLibrary)return
+  const request=pendingStudioLocation
+  const target=request.subtreeId&&value.document.trees[request.subtreeId]?request.subtreeId:request.nodeId?Object.keys(value.document.trees).find(id=>!!value.document.trees[id].nodes[request.nodeId!])||value.document.main_tree_id:value.document.main_tree_id
+  setTreeId(target);setSelected(request.nodeId&&value.document.trees[target].nodes[request.nodeId]?request.nodeId:value.document.trees[target].root_id)
+  setInspectorTab('node');setInspectorOpen(true);if(request.section==='diagnostics')setDiagnosticsOpen(true)
+  setPendingStudioLocation(null)
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{
+   const target=request.field?Array.from(root.current?.querySelectorAll<HTMLElement>('[data-port-name]')||[]).find(item=>item.dataset.portName===request.field):null
+   if(!target)return
+   for(let card=target.querySelector('.disclosure-card');card;card=card.parentElement?.closest('.disclosure-card')||null){const toggle=card.querySelector<HTMLButtonElement>(':scope > .disclosure-card-heading .disclosure-card-toggle');if(toggle?.getAttribute('aria-expanded')==='false')toggle.click()}
+   requestAnimationFrame(()=>{target.scrollIntoView({block:'center',behavior:'smooth'});target.querySelector<HTMLElement>('input,select,textarea,button')?.focus({preventScroll:true})})
+  }))
+ },[pendingStudioLocation,value,showLibrary])
  useEffect(()=>{
   const unload=(event:BeforeUnloadEvent)=>{if(dirtyRef.current){event.preventDefault();event.returnValue=''}}
   const navigate=(event:Event)=>{if((event.type==='agro:navigate'||!root.current?.closest('[hidden]'))&&dirtyRef.current)deferNavigation(event,()=>unsavedDialog(currentValue.current?.name||t('行为树'),async()=>Boolean(await save()),()=>{const saved=currentDraft.current;if(saved)choose(saved);dirtyRef.current=false;setDirty(false)}))}
@@ -137,8 +162,8 @@ export default function TaskEditor({client,observation,language,changed,configur
  const choices=editableModels.filter(model=>(nodeFilter==='all'||category(model)===nodeFilter)&&(!nodeSearch||`${title(model)} ${model.registration_id} ${model.description||''}`.toLowerCase().includes(nodeSearch.toLowerCase())))
  const quickChoices=editableModels.filter(model=>!quickSearch||`${title(model)} ${model.registration_id} ${model.description||''}`.toLowerCase().includes(quickSearch.toLowerCase()))
  const portModels=Object.fromEntries((Object.values(tree?.nodes||{}) as Json[]).map(n=>[n.editor_id,n.registration_id==='SubTree'?Object.fromEntries(Object.entries(value?.document.trees[n.attributes.ID]?.ports||{}).map(([name,spec]:[string,any])=>[name,{...spec.type,direction:spec.direction}])):models?.nodes[n.registration_id]?.ports||{}]))
- function suggestedBindings(portSpec:Json){
-  if(!value||!tree)return [] as {key:string;label:string}[]
+ function suggestedBindings(portSpec:Json,portName?:string){
+  if(!value||!tree)return []
   const target=typeof portSpec.type==='object'?{...portSpec,...portSpec.type}:portSpec,options:{key:string;label:string;contract:Json}[]=[]
   for(const [key,contract] of Object.entries(value.document.inputs||{}) as [string,Json][])options.push({key,label:t("任务参数 · {0}", {0: key}),contract})
   for(const [key,port] of Object.entries(tree.ports||{}) as [string,Json][])if(port.direction==='INPUT'||port.direction==='INOUT')options.push({key,label:t("子树输入 · {0}", {0: key}),contract:typeof port.type==='object'?port.type:port})
@@ -146,8 +171,16 @@ export default function TaskEditor({client,observation,language,changed,configur
    if(item.editor_id===selected)continue
    for(const [name,binding] of Object.entries(item.ports) as [string,Json][]){const spec=portModels[item.editor_id]?.[name];if((spec?.direction==='OUTPUT'||spec?.direction==='INOUT')&&binding.kind==='blackboard_reference'&&binding.key)options.push({key:binding.key,label:`${value.layout.labels[item.editor_id]||models?.nodes[item.registration_id]?.label||nodeLabel(item.registration_id,language)} · ${name.replace(/^out_/,'')}`,contract:typeof spec.type==='object'?spec.type:spec})}
   }
-  const seen=new Set<string>()
-  return options.filter(candidate=>{if(seen.has(candidate.key))return false;seen.add(candidate.key);return true}).map(({key,label,contract})=>({key,label,reason:contractReason(contract as any,target as any)}))
+  const grouped=new Map<string,typeof options>()
+  for(const option of options)grouped.set(option.key,[...(grouped.get(option.key)||[]),option])
+  return Array.from(grouped,([key,candidates])=>{
+   const confirmed=sources.find(source=>source.tree_id===treeId&&source.editor_id===selected&&source.port===portName&&source.key===key)
+   const mismatch=candidates.find(candidate=>!!contractReason(candidate.contract as any,target as any))
+   const contract=confirmed?.type||mismatch?.contract||candidates[0].contract
+   const reason=contractReason(contract as any,target as any)
+   return {key,label:key+' · '+candidates.map(candidate=>candidate.label).join(' / '),contract,reason,
+    hint:confirmed?t('执行路径已找到来源'):t('类型匹配后仍需校验执行路径，确认输入使用前已经产生')}
+  }).sort((a,b)=>Number(!!a.reason)-Number(!!b.reason))
  }
  function invalidJsonKey(){
   const value=currentValue.current

@@ -60,12 +60,30 @@
 .robot-form-hint{font-size:11px;line-height:1.7;color:var(--muted);margin:16px 0 0}
 .robot-manager-form footer{display:flex;align-items:center;justify-content:flex-end;gap:9px;margin-top:25px;padding-top:18px;border-top:1px solid var(--line)}
 .robot-manager-form footer button{min-width:74px;font-size:12px;min-height:34px}
-.robot-import-form{display:flex;flex-direction:column;align-items:center;text-align:center;padding-top:16px}
-.robot-import-art .association-icon{width:72px;height:72px}
-.robot-import-form h3{font-size:16px;font-weight:550;margin:19px 0 9px}
-.robot-import-form p{font-size:12px;color:var(--muted);line-height:1.8;margin:0 0 24px}
-.robot-import-form>small{font-size:11px;color:var(--dim);margin-top:13px}
-.robot-import-form>footer{width:100%;margin-top:30px}
+.robot-import-form{display:flex;flex-direction:column;align-items:stretch;gap:14px;text-align:left;padding-top:4px}
+.robot-import-card{padding:24px;border:1px solid var(--line);border-radius:13px;background:var(--card);min-width:0}
+.robot-import-intro{display:flex;align-items:center;gap:14px;margin-bottom:24px}
+.robot-import-art{display:grid;place-items:center;flex:none;width:52px;height:52px;border-radius:12px;background:var(--tint)}
+.robot-import-art .association-icon{width:42px;height:42px}
+.robot-import-form h3{font-size:16px;font-weight:550;margin:0;line-height:1.5}
+.robot-import-form p{font-size:12px;color:var(--muted);line-height:1.8;margin:5px 0 0}
+.robot-import-directory{margin:0}
+.robot-import-directory>label{display:block;font-size:12px;color:var(--muted);margin-bottom:9px}
+.robot-import-path{display:flex;align-items:stretch;gap:9px;min-width:0}
+.robot-import-path input{flex:1;width:100%;min-width:0;min-height:38px;font-size:12px}
+.robot-import-path button{flex:none;white-space:nowrap;font-size:12px;gap:6px}
+.robot-import-path svg,.robot-import-actions svg{width:15px;height:15px}
+.robot-import-card .robot-import-actions{justify-content:space-between;margin-top:22px;padding-top:18px}
+.robot-import-legacy{border:1px solid var(--line);border-radius:11px;background:var(--subtle);min-width:0}
+.robot-import-legacy>summary{display:flex;align-items:center;gap:8px;list-style:none;padding:14px 16px;font-size:12px;color:var(--muted)}
+.robot-import-legacy>summary::-webkit-details-marker{display:none}
+.robot-import-legacy>summary>svg{width:14px;height:14px;flex:none}
+.robot-import-legacy[open]>summary>svg{transform:rotate(90deg)}
+.robot-import-legacy>summary>span{flex:1}
+.robot-import-legacy>summary>small{font-size:11px;color:var(--dim);font-family:ui-monospace,monospace}
+.robot-import-legacy>div{padding:0 16px 16px}
+.robot-import-legacy>div>button{font-size:12px;gap:7px}
+@media(max-width:560px){.robot-import-card{padding:18px}.robot-import-intro{align-items:flex-start;gap:11px}.robot-import-art{width:44px;height:44px}.robot-import-art .association-icon{width:36px;height:36px}.robot-import-path{flex-wrap:wrap}.robot-import-path input{flex-basis:100%}.robot-import-path button{margin-left:auto}.robot-import-legacy>summary{flex-wrap:wrap}}
 .robot-edit-summary{display:flex;align-items:center;gap:11px;margin:0 0 20px;min-width:0}
 .robot-edit-summary strong{font-size:14px;font-weight:550;overflow-wrap:anywhere}
 .robot-delete-explanation{font-size:12px;color:var(--muted);line-height:1.9;margin:0 0 22px}

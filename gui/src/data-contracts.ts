@@ -11,6 +11,16 @@ export function contractReason(source:DataContract,target:DataContract):string{
  if(target.max_age_s!=null&&(source.max_age_s==null||source.max_age_s>target.max_age_s))return '来源数据有效期不满足目标要求'
  return ''
 }
+export function contractSummary(contract?:DataContract):string{
+ if(!contract)return ''
+ const parts=[contract.type,contract.extensions?.ros_type,contract.unit,contract.frame_id,contract.clock_domain]
+ if(contract.frame_path)parts.push(contract.frame_path)
+ if(contract.stamp_path)parts.push(contract.stamp_path)
+ if(contract.max_age_s!=null)parts.push('≤ '+contract.max_age_s+' s')
+ if(contract.minimum!=null||contract.maximum!=null)parts.push('['+(contract.minimum??'−∞')+', '+(contract.maximum??'∞')+']')
+ if(contract.choices?.length)parts.push(contract.choices.map((value:unknown)=>JSON.stringify(value)).join(' / '))
+ return parts.filter((value,index)=>value!=null&&value!==''&&parts.indexOf(value)===index).join(' · ')
+}
 export function wireShape(schema:FieldSchema):Record<string,unknown>{return Object.fromEntries([...['type','kind','length','max_length','min','max'].filter(key=>(schema as any)[key]!==undefined&&!(schema.kind==='integer'&&['min','max'].includes(key)&&Math.abs((schema as any)[key])>Number.MAX_SAFE_INTEGER)).map(key=>[key,(schema as any)[key]]),...(schema.fields?[['fields',Object.fromEntries(Object.entries(schema.fields).map(([name,child])=>[name,wireShape(child)]))]]:[]),...(schema.item?[['item',wireShape(schema.item)]]:[])])}
 export function fieldContract(schema:FieldSchema):DataContract{
  const type=['array','object'].includes(schema.kind)?'json':schema.kind,numeric=['integer','number'].includes(type)

@@ -49,9 +49,9 @@ export default function RosCommunicationField({client,robotId,kind,rosType,value
     finally{if(alive.current)setBusy(false)}
   }
   const invalid=!!value.trim()&&(!value.trim().startsWith('/')||/\s/.test(value.trim())||value.trim().length>240)
-  return <div className="ros-communication-field"><label className="field"><span>{label}</span><div className="ros-communication-input"><input aria-label={label} aria-invalid={invalid} disabled={disabled} value={value} placeholder={t('填写实际通信名称，以 / 开头')} onChange={event=>onChange(event.target.value)}/><button type="button" disabled={disabled||!rosType} aria-label={t('选择离线扫描的通信名称')} aria-haspopup="dialog" aria-expanded={!!anchor} onClick={event=>setAnchor(anchor?null:event.currentTarget)}><Icon name="chevron-down"/></button></div></label>
-    <div className="ros-communication-status"><span>{t(!value.trim()?'选择扫描结果或填写通信名称':invalid?'通信名称格式待修正':offlineFound?'已匹配离线声明':'通信名称已配置')}</span><button type="button" disabled={disabled||busy} onClick={()=>void discover()}><Icon name="refresh"/>{t(busy?'正在观测':'在线对照')}</button></div>
-    <p className="ros-field-hint">{t('接口类型决定参数格式，通信名称指定实际使用的话题、服务或 Action')}</p>
+  return <div className="ros-communication-field" data-task-section="communication"><label className="field"><span>{label}</span><div className="ros-communication-input"><input data-studio-field="interface" aria-label={label} aria-invalid={invalid} disabled={disabled} value={value} placeholder={t('填写实际通信名称，以 / 开头')} onChange={event=>onChange(event.target.value)}/><button type="button" disabled={disabled||!rosType} aria-label={t('选择离线扫描的通信名称')} aria-haspopup="dialog" aria-expanded={!!anchor} onClick={event=>setAnchor(anchor?null:event.currentTarget)}><Icon name="chevron-down"/></button></div></label>
+    <div className="ros-communication-status"><span>{t(!value.trim()?unique.length>1?'存在多个离线通信名称，请选择':'选择扫描结果或填写通信名称':invalid?'通信名称格式待修正':offlineFound?'已匹配离线声明':'通信名称已配置')}</span><button type="button" disabled={disabled||busy} onClick={()=>void discover()}><Icon name="refresh"/>{t(busy?'正在观测':'在线对照')}</button></div>
+    <p className="ros-field-hint">{t('接口类型决定参数格式，通信名称指定实际使用的话题、服务或 Action')}</p><p className="ros-field-hint">{t('离线扫描结果可直接选用，在线对照仅核实当前运行状态')}</p>
     {invalid&&<small className="ros-invalid">{t('填写以 / 开头且不含空格的通信名称')}</small>}
     {found&&isOnline&&<p className="ros-field-hint">{t('在线观测已发现此名称')}</p>}
     {notice&&<p className="ros-field-hint" role="status">{notice}</p>}

@@ -671,6 +671,10 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     async def deployment_plan(body: dict):
         return deployment.plan(body.get('kind'),body.get('reference'))
 
+    @api.post('/deployment/readiness')
+    async def deployment_readiness(body: dict):
+        return deployment.readiness(body.get('kind'),body.get('reference'),body.get('inputs'))
+
     @api.post('/deployment/prepare',status_code=202)
     async def deployment_prepare(body: dict):
         if body.get('confirm_safety') is not True:fail('$.safety','confirmation_required','请确认设备环境后准备运行')
@@ -824,7 +828,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
         result=store.get('hsm_session',run_id)
         if not robot_systems.selected_id() or result.get('robot_system_id')!=robot_systems.selected_id():
             fail('$.run','ownership','运行记录不属于当前机器人')
-        return result
+        return {**result,'operations':ros_operations.operations(run_id)}
 
     @api.get('/studio/task-runs')
     async def studio_task_runs():

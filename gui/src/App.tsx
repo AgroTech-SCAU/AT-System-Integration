@@ -13,6 +13,7 @@ import RosTaskLibrary from './pages/RosTaskLibrary'
 import RuntimeConsole from './pages/RuntimeConsole'
 import TaskWorkspace from './pages/TaskWorkspace'
 import RobotLibrary, {type RobotDirectory} from './pages/RobotLibrary'
+import {rememberStudioLocation,type StudioLocation} from './studio-links'
 
 const SETTINGS_KEY = 'agro.gui.appearance'
 function loadSettings(): Settings {
@@ -198,6 +199,23 @@ export default function App() {
   const selectedRobot=robotDirectory?.systems.find(item=>item.id===robotDirectory.selected_id)
   const canUseRobot=Boolean(selectedRobot&&robotDirectory?.active)
   const canEditRobot=Boolean(selectedRobot)
+  useEffect(()=>{
+    const locate=async(event:Event)=>{
+      const {respond,...target}=(event as CustomEvent<StudioLocation&{respond?:(accepted:boolean)=>void}>).detail
+      if(!selectedRobot||target.robotId&&target.robotId!==selectedRobot.id){respond?.(false);return}
+      try{
+        if(!await requestNavigation()){respond?.(false);return}
+        const location={...target,robotId:selectedRobot.id}
+        if(location.returnTo&&location.returnTo.page!==location.page)rememberStudioLocation(selectedRobot.id,{...location.returnTo,robotId:selectedRobot.id})
+        rememberStudioLocation(selectedRobot.id,location)
+        if(target.page!==workspace){history.pushState(null,'',`/ui/${target.page}`);setWorkspace(target.page)}
+        else window.dispatchEvent(new CustomEvent('agro:studio:located',{detail:location}))
+        respond?.(true)
+      }catch(cause){reportError(cause);respond?.(false)}
+    }
+    window.addEventListener('agro:studio:locate',locate)
+    return()=>window.removeEventListener('agro:studio:locate',locate)
+  },[selectedRobot?.id,workspace])
   function openRobotManager(section:'create'|'manage'|'import'='manage'){setProjectSection(section);setProjectPicker(true)}
   useEffect(()=>{
     if(!projectPicker||!client)return
@@ -294,7 +312,7 @@ export default function App() {
             {workspace === 'overview' && selectedRobot && <RobotConnection key={selectedRobot.id} robotId={selectedRobot.id} client={client} observation={observation} language={settings.language} changed={refreshProjects} onNavigate={navigate}/>}
             {workspace === 'system' && selectedRobot && <RosTaskLibrary key={selectedRobot.id} robotId={selectedRobot.id} client={client} observation={observation} language={settings.language} changed={refreshProjects} onNavigate={navigate}/>}
              {workspace === 'editor' && canEditRobot && <><TaskWorkspace key={selectedRobot?.id} robotId={selectedRobot?.id} client={client} observation={observation} language={settings.language} changed={() => observe(client)} configured={canUseRobot} onNavigate={navigate} /></>}
-             {(workspace === 'runtime'||workspace==='records') && canEditRobot && <RuntimeConsole key={selectedRobot?.id} client={client} observation={observation} language={settings.language} changed={() => observe(client)} onNavigate={navigate} initialHistory={workspace==='records'}/>}
+             {(workspace === 'runtime'||workspace==='records') && canEditRobot && <RuntimeConsole key={selectedRobot?.id} robotId={selectedRobot?.id} client={client} observation={observation} language={settings.language} changed={() => observe(client)} onNavigate={navigate} initialHistory={workspace==='records'}/>}
           </>}
 
           </>}
