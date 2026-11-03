@@ -16,7 +16,7 @@ type Surface='hsm'|'tree'|'ros'
 type TaskRequest={kind:'ros'|'tree';reference?:string;stateId:string;stateLabel:string;phase:'entry'|'do'|'exit';machineId?:string}
 const phases={entry:'进入',do:'持续',exit:'退出'}
 
-type Props=PageProps & {robotId?:string;robotExampleId?:string|null;configured:boolean;onNavigate:(page:Workspace)=>void}
+type Props=PageProps & {robotId?:string;configured:boolean;onNavigate:(page:Workspace)=>void}
 export default function TaskWorkspace(props:Props){return <TaskWorkspaceContent key={props.robotId||'none'} {...props}/>}
 function TaskWorkspaceContent(props:Props){
  const {t}=useLocale()

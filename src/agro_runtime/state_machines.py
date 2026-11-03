@@ -494,7 +494,8 @@ class StateMachines:
                 last_feedback = time.monotonic()
                 instance['feedback'] = operation['feedback']
                 self._behavior_status()
-            await asyncio.sleep(.05)
+            if operation['state'] in ACTIVE:
+                await asyncio.sleep(.05)
         if operation['stop_state'] == 'UNCONFIRMED' or operation['state'] == 'UNKNOWN':
             fail('$.task', 'stop_unconfirmed', 'ROS 行为停止状态未确认')
         if operation.get('error'):
@@ -583,7 +584,8 @@ class StateMachines:
                     return
                 name = 'completed' if result == 'SUCCEEDED' else 'failed'
                 if result == 'CANCELED':
-                    return
+                    instance.setdefault('error', '状态行为已取消，流程未完成')
+                    self._behavior_status()
                 route = self._path(owner, by_id)
                 if any(edge['event'] == name and edge['source'] in route for edge in self._spec['transitions']):
                     await self.event(name, {}, source=owner, instance_id=instance['id'])

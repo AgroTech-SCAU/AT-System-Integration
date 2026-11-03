@@ -12,11 +12,7 @@ dependencies = ["pydantic>=2.10,<3", "PyYAML>=6,<7", "fastapi>=0.115,<1", "uvico
 agroctl = "agro_runtime.cli:main"
 
 [tool.setuptools]
-packages = ["agro_runtime", "agro_mock"]
+packages = ["agro_runtime"]
 
 [tool.setuptools.package-dir]
 "" = "src"
-agro_mock = "adapters/mock"
-
-[tool.setuptools.package-data]
-agro_mock = ["package.yaml", "system.yaml"]

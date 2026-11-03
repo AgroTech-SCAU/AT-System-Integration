@@ -5,7 +5,6 @@ import hashlib
 import json
 import os
 import signal
-import sys
 from pathlib import Path
 from uuid import uuid4
 
@@ -167,20 +166,17 @@ class LocalProcessManager:
         self._forget(name)
         self._claim(name)
         argv = descriptor.argv
-        mock_worker = not argv and descriptor.manager == 'local_process' and descriptor.target in {'tomato_simulator', 'tomato_simulator.vision', 'tomato_simulator.navigation', 'tomato_simulator.arm', 'tomato_simulator.control'}
         if not argv:
-            if not mock_worker:
-                fail(f'$.modules.{name}.argv', 'module_command_missing', '本地模块必须声明 argv')
-            argv = [sys.executable, '-m', 'agro_mock.worker']
+            fail(f'$.modules.{name}.argv', 'module_command_missing', '本地模块必须声明 argv')
         lock = self.locks.get(name)
         output = None
-        if self.directory and not mock_worker:
+        if self.directory:
             output = (self.directory / (name + '.log')).open('ab', buffering=0)
         try:
             process = await asyncio.create_subprocess_exec(
                 *argv, start_new_session=True, pass_fds=(lock.fileno(),) if lock else (),
                 stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE if mock_worker else output or asyncio.subprocess.DEVNULL,
+                stdout=output or asyncio.subprocess.DEVNULL,
                 stderr=output or asyncio.subprocess.DEVNULL)
         except BaseException:
             self._forget(name)
@@ -191,8 +187,6 @@ class LocalProcessManager:
         self._save(name, {'pid': process.pid, 'identity': self._identity(process.pid),
                           'target': descriptor.target, 'argv': descriptor.argv,
                           'config_identity': self.config_identity})
-        if mock_worker and await process.stdout.readline() != b'READY\n':
-            fail(f'$.modules.{name}', 'module_start_failed', '模拟进程未确认接口就绪')
 
     async def status(self, name, descriptor):
         record = self.identities.get(name)
@@ -317,8 +311,7 @@ class Runtime:
         self.managers = {'local_process': local, 'ros_launch': local, 'systemd': SystemdManager()}
         self.managers.update(managers or {})
         self.probe = readiness_probe
-        self.allowed_entrypoints = (frozenset({'agro_mock:create_adapter'}) if allowed_entrypoints is None
-                                    else frozenset(allowed_entrypoints))
+        self.allowed_entrypoints = frozenset(allowed_entrypoints or ())
         self.adapter_options = adapter_options or {}
         self.native_appliers = native_appliers or {}
         self._loaded_backends = set()
@@ -341,8 +334,6 @@ class Runtime:
 
     def _enable_adapter(self, name):
         options = {} if name in self._loaded_backends else dict(self.adapter_options.get(name, {}))
-        if name not in self._loaded_backends and self.tasks and self.registry.packages[self.bound.backends[name].package_id].adapter_entrypoint == 'agro_mock:create_adapter':
-            options['completed_targets'] = self.tasks.completed_targets(name)
         self.engine.enable_adapter(name, allowed_entrypoints=self.allowed_entrypoints, **options)
         self._loaded_backends.add(name)
 
@@ -460,9 +451,6 @@ class Runtime:
                         module.update(process=process['running'], pid=process.get('pid'))
                         if process['running']:
                             self._enable_adapter(name)
-                            module['interface'] = (descriptor.health_check == 'mock_status'
-                                                   and self.registry.packages[self.bound.backends[name].package_id].adapter_entrypoint
-                                                   == 'agro_mock:create_adapter')
                             interface = self._checks(name)['interface']
                             module['interface'] = bool(interface['ready'])
                             if module['interface']:

@@ -261,13 +261,19 @@ class Deployment:
         for workspace in sorted(required):
             location={'page':'overview','workspaceId':workspace,'section':'environment'}
             try:
-                loaded=bool(self.ros.environments.active(workspace))
+                state=self.ros.environments.status(workspace)
+                loaded=state['loaded']
+                saved=state.get('active') or {}
                 config=(self.ros.environments.snapshot(workspace_id=workspace) if loaded else
-                        self.ros.environments._configuration(workspace,''))
+                        self.ros.environments._configuration(workspace,saved.get('python',''),saved.get('setup','')))
                 environments.append({'workspace_id':workspace,'name':config.get('name',workspace),
                                      'configured':True,'loaded':loaded})
                 if not loaded:
-                    notes.append({'reason':'开始运行时将检查并加载执行环境','name':config.get('name',workspace),'target':location})
+                    if self.has_processes():
+                        execution.append({'code':'environment_busy','reason':'执行环境需要重新加载，请先停止子系统',
+                                          'target':location})
+                    else:
+                        notes.append({'reason':'开始运行时将检查并加载执行环境','name':config.get('name',workspace),'target':location})
             except (ContractValidationError, OSError, ValueError) as error:
                 environments.append({'workspace_id':workspace,'configured':False})
                 errors(error,execution,location)
@@ -401,10 +407,15 @@ class Deployment:
                 workspaces={m['workspace_id'] for m in plan['modules']}
                 for task in task_values:
                     workspaces.add(self.ros.environments.workspace_for(task))
+                environments={identity:self.ros.environments.status(identity) for identity in sorted(workspaces)}
+                if self.has_processes() and any(not state['loaded'] for state in environments.values()):
+                    fail('$.environment','environment_busy','执行环境需要重新加载，请先停止子系统')
                 for identity in sorted(workspaces):
                     if self.stopping:raise RuntimeError('启动已取消')
-                    if not self.ros.environments.active(identity):
-                        result=await asyncio.to_thread(self.ros.environments.manage,self.ros._robot(),'load',identity)
+                    if not environments[identity]['loaded']:
+                        saved=environments[identity].get('active') or {}
+                        result=await asyncio.to_thread(self.ros.environments.manage,self.ros._robot(),'load',identity,
+                                                      saved.get('python',''),saved.get('setup',''))
                         if not result['loaded']:fail('$.environment','environment_not_ready',result['report']['reason'])
                     configs[identity]=self.ros.environments.snapshot(workspace_id=identity)
                 for module in plan['modules']:

@@ -13,7 +13,7 @@ import {requestId, waitJob, type Json} from './shared'
 import './robot-manager.css'
 
 export type RobotSystem = {
-    id: string; name: string; storage_path?: string; profile_error?: string | null; example_id: string | null; content: Json; configured: boolean; revision: number
+    id: string; name: string; storage_path?: string; profile_error?: string | null; content: Json; configured: boolean; revision: number
     connection?: {domain_id: number; namespace: string} | null
 }
 export type RobotDirectory = {
@@ -210,13 +210,13 @@ export default function RobotLibrary({client, directory, onRefresh, onReconnect,
             {switchReason && systems.some(robot => robot.id !== directory?.selected_id) && <p className="robot-switch-note"><Icon name="info"/>{t(switchReason)}</p>}
         </> : section === 'create' ? <form className="robot-manager-form" onSubmit={event => {event.preventDefault(); void create()}}>
             <fieldset disabled={locked}><label className="field robot-manager-name"><span>{t("机器人名称")}</span><input data-initial-focus value={name} onChange={event => setName(event.target.value)} maxLength={60} placeholder={t("机器人名称")} required/></label>
-                <label className="field"><span>{t("机器人存储位置")}</span><input required value={storagePath} onChange={e=>setStoragePath(e.target.value)} placeholder="/path/to/Bringup/src/robot-profile"/>{window.agroDesktop&&<button type="button" onClick={async()=>{const path=await window.agroDesktop!.chooseInterfaceFolder();if(path)setStoragePath(path)}}>{t("选择文件夹")}</button>}</label><p className="robot-form-hint">{t("任务、流程和标定资产保存在此目录，新建工程请选择空目录")}</p>
+                <label className="field"><span>{t("机器人存储位置")}</span><input required value={storagePath} onChange={e=>setStoragePath(e.target.value)} placeholder="/path/to/robot-profile"/>{window.agroDesktop&&<button type="button" onClick={async()=>{const path=await window.agroDesktop!.chooseInterfaceFolder();if(path)setStoragePath(path)}}>{t("选择文件夹")}</button>}</label><p className="robot-form-hint">{t("任务、流程和工程资源保存在此目录，新建工程请选择空目录")}</p>
                 <footer><button type="button" onClick={() => changeSection('manage')}>{t("取消")}</button><button className="primary" type="submit" disabled={!name.trim() || !storagePath.trim() || busy}>{t("创建机器人")}</button></footer>
             </fieldset>
         </form> : section === 'import' ? <div className="robot-manager-form robot-import-form">
             <form className="robot-import-card" onSubmit={event=>{event.preventDefault();if(!locked&&!switchReason&&openPath.trim())void openDirectory()}}>
                 <header className="robot-import-intro"><div className="robot-import-art"><Icon name="association"/></div><div><h3>{t("打开机器人工程")}</h3><p>{t("选择包含 robot.json 的目录，打开工程不会启动设备")}</p></div></header>
-                <div className="field robot-import-directory"><label htmlFor="robot-project-directory">{t("工程目录")}</label><div className="robot-import-path"><input id="robot-project-directory" data-initial-focus disabled={locked} value={openPath} onChange={event=>setOpenPath(event.target.value)} placeholder="/path/to/Bringup/src/robot-profile"/>{window.agroDesktop&&<button type="button" disabled={locked} onClick={async()=>{const path=await window.agroDesktop!.chooseInterfaceFolder();if(path)setOpenPath(path)}}><Icon name="import"/>{t("选择文件夹")}</button>}</div></div>
+                <div className="field robot-import-directory"><label htmlFor="robot-project-directory">{t("工程目录")}</label><div className="robot-import-path"><input id="robot-project-directory" data-initial-focus disabled={locked} value={openPath} onChange={event=>setOpenPath(event.target.value)} placeholder="/path/to/robot-profile"/>{window.agroDesktop&&<button type="button" disabled={locked} onClick={async()=>{const path=await window.agroDesktop!.chooseInterfaceFolder();if(path)setOpenPath(path)}}><Icon name="import"/>{t("选择文件夹")}</button>}</div></div>
                 <footer className="robot-import-actions"><button type="button" disabled={busy} onClick={()=>changeSection('manage')}>{t("返回列表")}</button><button className="primary" type="submit" disabled={locked||!!switchReason||!openPath.trim()}>{t("打开工程")}<Icon name="chevron-right"/></button></footer>
             </form>
             <details className="robot-import-legacy"><summary><Icon name="chevron-right"/><span>{t("导入旧工程文件")}</span><small>.agrobot.json</small></summary><div><button disabled={locked} onClick={()=>void importProject()}><Icon name="import"/>{t("选择工程文件")}</button></div></details>

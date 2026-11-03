@@ -141,15 +141,33 @@ def _run_task(data, stop, feedback=None, *, context=None, unconfirmed=None):
         if kind == 'service':
             cls = get_service(ros_type)
             client = node.create_client(cls, interface)
+            readonly = data.get('execution_policy', {}).get('readonly') is True
+
+            def ended_wait():
+                canceled = stop.is_set()
+                result = {'state': 'CANCELED' if canceled else 'FAILED',
+                          'response': {}, 'stop_confirmed': True}
+                if not canceled:
+                    result['error'] = {'code': 'task_timeout', 'reason': 'Service 等待响应超时',
+                                       'retryable': False}
+                return result
+
             while not client.wait_for_service(timeout_sec=.1):
-                if stop.is_set(): return 'CANCELED'
-                if remaining() <= 0: return 'FAILED'
+                if stop.is_set() or remaining() <= 0:
+                    return ended_wait()
+            if stop.is_set() or remaining() <= 0:
+                return ended_wait()
             future = client.call_async(message(cls.Request, data.get('payload', {})))
-            if not spin_until(future):
+            finished = spin_until(future)
+            if not finished or readonly and (stop.is_set() or remaining() <= 0):
                 future.cancel()
+                if readonly:
+                    return ended_wait()
                 # 服务请求可能已到达设备，取消本地等待并不等于服务端停止执行
                 raise RuntimeError('Service 请求已发出但未收到响应，设备执行状态未知，请人工核对')
             result = future.result()
+            if readonly and (stop.is_set() or remaining() <= 0):
+                return ended_wait()
             if feedback:
                 feedback(_message_as_dict(result))
             # 服务响应仅表示服务调用结束，并不证明实体动作已经完成

@@ -1,10 +1,10 @@
 <root BTCPP_format="4" main_tree_to_execute="Main">
   <BehaviorTree ID="Main">
     <Sequence>
-      <Capability_perception_detect_tomato node_id="observe" role="vision" out_target="{observed}"/>
-      <SubTree ID="CheckTarget" target="{observed}"/>
-      <TargetsFromPose target="{observed}" targets="{targets}"/>
+      <IsTrue value="true"/>
+      <TargetsFromPose target="json:{&quot;target_id&quot;:&quot;target_1&quot;,&quot;frame_id&quot;:&quot;map&quot;,&quot;clock_domain&quot;:&quot;simulation&quot;,&quot;timestamp&quot;:0,&quot;position&quot;:[0,0,0],&quot;position_unit&quot;:&quot;m&quot;,&quot;orientation&quot;:[0,0,0,1]}" targets="{targets}"/>
       <SelectTarget targets="{targets}" index="json:{&quot;value&quot;:0,&quot;unit&quot;:&quot;1&quot;}" target="{selected}"/>
+      <SubTree ID="CheckTarget" target="{selected}"/>
       <Fallback>
         <AlwaysFailure/>
         <HasTarget target="{selected}"/>

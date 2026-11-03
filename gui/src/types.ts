@@ -31,7 +31,7 @@ export interface Observation {
   control: { mode: string; estop: boolean }
   tasks: { tasks: TaskSummary[] }
 }
-export type Workspace = 'overview' | 'system' | 'templates' | 'runtime' | 'settings' | 'records' | 'editor'
+export type Workspace = 'overview' | 'system' | 'runtime' | 'settings' | 'records' | 'editor'
 export type Language = 'zh' | 'en'
 export interface Settings { theme: 'system' | 'dark' | 'light'; language: Language; compact: boolean }
 

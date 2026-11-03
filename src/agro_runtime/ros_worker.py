@@ -66,8 +66,6 @@ def main():
             import importlib
             module,function=request['entrypoint'].split(':')
             if not callable(getattr(importlib.import_module(module),function)):raise ValueError('计算入口不可调用')
-        elif request.get('operation') in ('transform_targets','bounded_pose_step'):
-            import numpy
         emit('result', {'ready':True})
         return
     if op == 'ready':

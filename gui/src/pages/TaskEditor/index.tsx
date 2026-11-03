@@ -60,7 +60,7 @@ export default function TaskEditor({client,observation,language,changed,configur
   void op.run(t("打开状态行为"),async()=>{
    if(dirtyRef.current)await save()
    if(requestedDefinition)await openBehavior(requestedDefinition)
-   else await create('general',contextLabel)
+   else await create(contextLabel)
    setView('edit');setInspectorTab('node')
   })
  },[loaded,requestKey,requestedDefinition,op.busy])
@@ -95,9 +95,9 @@ export default function TaskEditor({client,observation,language,changed,configur
  },[])
  useEffect(()=>{
   if(!value||draft?.document.readonly)return
-  const controller=new AbortController(),timer=setTimeout(()=>{client.request<Json>('/trees/validate','POST',{document:value.document,policy:draft?.policy,parameters:value.parameters},controller.signal).then(result=>{if(!controller.signal.aborted){setDiagnostics(result.diagnostics);setSources(result.sources)}}).catch(error=>{if(!controller.signal.aborted)op.setError(error)})},450)
+  const controller=new AbortController(),timer=setTimeout(()=>{client.request<Json>('/trees/validate','POST',{document:value.document,parameters:value.parameters},controller.signal).then(result=>{if(!controller.signal.aborted){setDiagnostics(result.diagnostics);setSources(result.sources)}}).catch(error=>{if(!controller.signal.aborted)op.setError(error)})},450)
   return()=>{clearTimeout(timer);controller.abort()}
- },[value?.document,value?.parameters,client,draft?.policy])
+ },[value?.document,value?.parameters,client])
  useEffect(()=>{
   if(view!=='run')return
   let active=true;const controller=new AbortController(),sequence=++reader.current
@@ -128,10 +128,10 @@ export default function TaskEditor({client,observation,language,changed,configur
   setView('edit')
  }
  async function backToLibrary(){if(dirtyRef.current)await save();setShowLibrary(true);setView('edit');setDiagnosticsOpen(false);await load()}
- async function importFile(file:File){if(file.size>1048576)throw Error(t('文件超过允许大小'));if(dirtyRef.current)await save();choose(await client.request<Json>('/trees/drafts','POST',{xml:await file.text(),template:'general',name:file.name.replace(/\.xml$/i,'').slice(0,80)||t('未命名行为树')}));await load()}
- async function create(template='general',name?:string){
+ async function importFile(file:File){if(file.size>1048576)throw Error(t('文件超过允许大小'));if(dirtyRef.current)await save();choose(await client.request<Json>('/trees/drafts','POST',{xml:await file.text(),name:file.name.replace(/\.xml$/i,'').slice(0,80)||t('未命名行为树')}));await load()}
+ async function create(name?:string){
   if(dirtyRef.current)await save()
-  const next=await client.request<Json>('/trees/drafts','POST',{template,name:(name||t('未命名行为树')).slice(0,80),owner})
+  const next=await client.request<Json>('/trees/drafts','POST',{name:(name||t('未命名行为树')).slice(0,80),owner})
   onRememberReference?.(next.id)
   choose(next);await load()
  }
@@ -217,7 +217,7 @@ export default function TaskEditor({client,observation,language,changed,configur
  async function checked(){
   requireValidInputs()
   const current=dirtyRef.current?await save():currentDraft.current;if(!current)return null
-  const result=models?.offline_only?await client.request<Json>('/trees/validate','POST',{document:current.document,policy:current.policy,parameters:current.parameters}):await client.request<Json>(`/trees/drafts/${current.id}/validate`,'POST',{})
+  const result=models?.offline_only?await client.request<Json>('/trees/validate','POST',{document:current.document,parameters:current.parameters}):await client.request<Json>(`/trees/drafts/${current.id}/validate`,'POST',{})
   setDiagnostics(result.diagnostics);setSources(result.sources)
   if(result.valid){setCheckFeedback({ok:true,messages:[t("结构和数据校验通过")]})}
   else{const messages=(result.diagnostics||[]).map((issue:Json)=>String(issue.reason||issue.code||t("校验未通过")));setCheckFeedback({ok:false,messages});setDiagnosticsOpen(true);throw new ApiError('response',result.diagnostics.map((issue:Json)=>({path:`${issue.tree_id||'$'}/${issue.editor_id||''}/${issue.port||''}`,code:issue.code,reason:issue.reason})))}
@@ -320,7 +320,7 @@ export default function TaskEditor({client,observation,language,changed,configur
 
  if(showLibrary)return <div ref={root} className="behavior-workbench"><BehaviorLibrary items={library} busy={op.busy} loaded={loaded}
   onOpen={item=>{setTransitionId(item.id);void op.run(t('打开行为树'),()=>openBehavior(item.id))}}
-  onCreate={name=>op.run(t('新建行为树'),()=>create('general',name))}
+  onCreate={name=>op.run(t('新建行为树'),()=>create(name))}
   onRename={(item,name)=>op.run(t('重命名行为树'),async()=>{await client.request(`/trees/behaviors/${item.id}`,'PATCH',{name});await load()})}
   onCopy={(item,name)=>op.run(t('复制行为树'),async()=>{await client.request(`/trees/behaviors/${item.id}/copy`,'POST',{name});await load()})}
   onDelete={item=>op.run(t('删除行为树'),async()=>{await client.request(`/trees/behaviors/${item.id}`,'DELETE');if(draft?.id===item.id){setDraft(null);setValue(null)}await load()})}

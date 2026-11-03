@@ -72,8 +72,6 @@ BT::PortInfo port(const Json &spec, BT::PortDirection direction) {
     return BT::CreatePort<TargetList>(direction, "value").second;
   if (type == "json")
     return BT::CreatePort<JsonValue>(direction, "value").second;
-  if (type == "pick_result")
-    return BT::CreatePort<PickResult>(direction, "value").second;
   throw std::runtime_error("unsupported_contract_type:" + type);
 }
 template <class T> T input(BT::TreeNode &node, const std::string &key) {
@@ -105,8 +103,6 @@ Json read_port(BT::TreeNode &node, const std::string &key, const Json &spec) {
       value.push_back(p.value);
   } else if (type == "json")
     value = input<JsonValue>(node, key).value;
-  else if (type == "pick_result")
-    value = input<PickResult>(node, key).value;
   else
     throw std::runtime_error("unsupported_contract_type");
   validate_value(spec, value);
@@ -138,8 +134,6 @@ void write_port(BT::TreeNode &node, const std::string &key, const Json &spec,
     result = node.setOutput(key, targets);
   } else if (type == "json")
     result = node.setOutput(key, JsonValue{value});
-  else if (type == "pick_result")
-    result = node.setOutput(key, PickResult{value});
   if (!result)
     throw std::runtime_error("output_port:" + key + ":" + result.error());
 }
@@ -281,7 +275,7 @@ public:
     return {BT::InputPort<TargetList>("targets"),
             BT::OutputPort<StampedPose>("target"),
             BT::OutputPort<std::string>("target_id"),
-            BT::InputPort<int>("max_targets", 8, "Finite candidate bound")};
+            BT::InputPort<int>("max_targets")};
   }
   BT::NodeStatus tick() override {
     if (status() == BT::NodeStatus::IDLE) {
@@ -289,7 +283,7 @@ public:
       index_ = 0;
       supplied_ = false;
       auto bound = input<int>(*this, "max_targets");
-      require(bound > 0 && bound <= 8 &&
+      require(bound > 0 &&
                   targets_.targets.size() <= static_cast<size_t>(bound),
               "candidate_limit_exceeded");
       std::set<std::string> ids;
@@ -365,29 +359,6 @@ void validate_value(const Json &spec, const Json &value) {
               "clock_mismatch");
       require(p.at("position_unit") == spec.at("unit"), "unit_mismatch");
     }
-  } else if (type == "pick_result") {
-    require(value.is_object() && value.at("target_id").is_string() &&
-                is_identifier(value.at("target_id")),
-            "invalid_pick_result");
-    require(value.size() <= 4, "unknown_pick_field");
-    for (auto it = value.begin(); it != value.end(); ++it)
-      require(it.key() == "target_id" || it.key() == "outcome" ||
-                  it.key() == "reason" || it.key() == "extensions",
-              "unknown_pick_field");
-    if (value.contains("reason") && !value["reason"].is_null())
-      require(value["reason"].is_string() &&
-                  !value["reason"].get<std::string>().empty(),
-              "invalid_pick_reason");
-    if (value.contains("extensions"))
-      require(value["extensions"].is_object(), "invalid_extensions");
-    const auto outcome = value.at("outcome");
-    require(outcome == "picked" || outcome == "skipped" ||
-                outcome == "failed" || outcome == "unknown",
-            "invalid_pick_outcome");
-    if (outcome == "unknown" || outcome == "failed")
-      require(value.contains("reason") && value.at("reason").is_string() &&
-                  !value.at("reason").get<std::string>().empty(),
-              "pick_reason_required");
   } else if (type == "json") {
     require(value.dump().size() <= 262144, "json_value_too_large");
   } else
@@ -482,15 +453,6 @@ Executor::Executor(Json registry, std::shared_ptr<Broker> broker, Json control,
                                      return BT::NodeStatus::SUCCESS;
                                    },
                                    {BT::InputPort<StampedPose>("target")});
-  factory_.registerSimpleCondition(
-      "PickSucceeded",
-      [](BT::TreeNode &node) {
-        auto result = input<PickResult>(node, "result");
-        validate_value({{"type", "pick_result"}}, result.value);
-        return result.value.at("outcome") == "picked" ? BT::NodeStatus::SUCCESS
-                                                      : BT::NodeStatus::FAILURE;
-      },
-      {BT::InputPort<PickResult>("result")});
   factory_.registerSimpleAction(
       "TargetsFromPose",
       [](BT::TreeNode &node) {
@@ -518,24 +480,6 @@ Executor::Executor(Json registry, std::shared_ptr<Broker> broker, Json control,
       {BT::InputPort<TargetList>("targets"),
        BT::InputPort<IntegerQuantity>("index"),
        BT::OutputPort<StampedPose>("target")});
-  factory_.registerSimpleAction(
-      "MakePickResult",
-      [](BT::TreeNode &node) {
-        Json result = {{"target_id", input<std::string>(node, "target_id")},
-                       {"outcome", input<std::string>(node, "outcome")}};
-        auto reason = input<std::string>(node, "reason");
-        if (!reason.empty())
-          result["reason"] = reason;
-        validate_value({{"type", "pick_result"}}, result);
-        require(bool(node.setOutput("result", PickResult{result})),
-                "output_port_invalid");
-        return BT::NodeStatus::SUCCESS;
-      },
-      {BT::InputPort<std::string>("target_id"),
-       BT::InputPort<std::string>("outcome"),
-       BT::InputPort<std::string>("reason", std::string(""),
-                                  "Optional business reason"),
-       BT::OutputPort<PickResult>("result")});
 }
 void Executor::load_xml(const std::string &xml, const Json &initial) {
   auto blackboard = BT::Blackboard::create();
@@ -569,9 +513,6 @@ void Executor::load_xml(const std::string &xml, const Json &initial) {
     } else if (type == "json") {
       validate_value({{"type", "json"}}, value);
       blackboard->set(item.key(), JsonValue{value});
-    } else if (type == "pick_result") {
-      validate_value({{"type", "pick_result"}}, value);
-      blackboard->set(item.key(), PickResult{value});
     } else
       throw std::runtime_error("unsupported_blackboard_type");
   }
@@ -764,8 +705,8 @@ Json Executor::describe() const {
   Json nodes = Json::object();
   const std::set<std::string> editable = {"AlwaysSuccess", "AlwaysFailure", "Sequence", "Fallback", "Parallel", "Inverter",
     "RetryUntilSuccessful", "Repeat", "ReactiveSequence", "ReactiveFallback",
-    "ForEachTarget", "IsTrue", "HasTarget", "PickSucceeded", "TargetsFromPose",
-    "SelectTarget", "MakePickResult", "SubTree"};
+    "ForEachTarget", "IsTrue", "HasTarget", "TargetsFromPose",
+    "SelectTarget", "SubTree"};
   for (const auto &entry : factory_.manifests()) {
     const auto &model = entry.second;
     Json ports = Json::object();
@@ -778,7 +719,6 @@ Json Executor::describe() const {
       else if (p.type() == typeid(Quantity)) type = "number";
       else if (p.type() == typeid(StampedPose)) type = "stamped_pose";
       else if (p.type() == typeid(TargetList)) type = "target_list";
-      else if (p.type() == typeid(PickResult)) type = "pick_result";
       else if (p.type() == typeid(JsonValue)) type = "json";
       ports[item.first] = {{"direction", BT::toStr(p.direction())}, {"type", type},
         {"required", p.defaultValue().empty()}, {"default_xml", p.defaultValueString()},

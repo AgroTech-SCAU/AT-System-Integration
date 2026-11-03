@@ -12,7 +12,7 @@ import yaml
 from .errors import ContractValidationError, fail, parse
 from .models import (BackendInstance, CapabilityDescriptor, ExecutionRequest,
                      OperationSnapshot, PackageDescriptor, ParameterDescriptor,
-                     StampedPose, SystemConfig, PickResult, scalar_error)
+                     StampedPose, SystemConfig, scalar_error)
 
 
 class DescriptorLoader(yaml.SafeLoader):
@@ -134,8 +134,6 @@ def _values(values, descriptors, path, *, parameters=False, now=None, clock_doma
         code, reason = scalar_error(spec, value)
         if code:
             fail(field, code, reason)
-        if spec.type == 'pick_result':
-            result[name] = parse(PickResult, value, field).model_dump(mode='json')
         if spec.type == 'target_list':
             pose_spec = spec.model_copy(update={'type': 'stamped_pose', 'choices': None})
             result[name] = [_values({'target': item}, {'target': pose_spec}, f'{field}[{index}]',

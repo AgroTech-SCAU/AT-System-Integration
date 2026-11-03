@@ -1,4 +1,5 @@
 """Persistent observation context with serialized, cancellable data operations."""
+import inspect
 import json
 import queue
 import sys
@@ -36,7 +37,9 @@ def main():
                 if task['operation']=='extension':
                     import importlib
                     module, function=task['compute_entrypoint'].split(':')
-                    result=getattr(importlib.import_module(module),function)(task.get('payload',{}),stop)
+                    entrypoint=getattr(importlib.import_module(module),function)
+                    options={'context':context} if 'context' in inspect.signature(entrypoint).parameters else {}
+                    result=entrypoint(task.get('payload',{}),stop,**options)
                     if not isinstance(result,dict):raise ValueError('计算扩展必须返回 JSON 对象')
                 else:
                     result=context.run(task['operation'],task.get('payload',{}),stop)

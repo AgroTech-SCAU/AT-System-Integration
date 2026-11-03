@@ -266,13 +266,6 @@ class ConfigurationService:
                     fail('$.modules','process_still_present','遗留进程或管理身份尚未清理')
             phase('validating')
             path,bound,registry=self.materialize(draft)
-            # 设备和模拟场景身份不能靠变更配置摘要重置
-            if any(old.tasks.store.targets(t['task_run_id']) for t in old.tasks.list()):
-                if ({k:v.model_dump(mode='json') for k,v in old.bound.backends.items()} !=
-                    {k:v.model_dump(mode='json') for k,v in bound.backends.items()} or
-                    {k:v.model_dump(mode='json') for k,v in old.registry.packages.items()} !=
-                    {k:v.model_dump(mode='json') for k,v in registry.packages.items()}):
-                    fail('$.backends','device_continuity_required','已有目标台账，无法证明设备与场景连续的变更不能应用')
             old_path=old.config_path
             options=getattr(old,'replacement_options',{})
             task_options={'executable':old.tasks.executable,'endpoint':old.tasks.endpoint,'session_secret':old.tasks.session_secret,'documents':getattr(old.tasks,'documents',None)}

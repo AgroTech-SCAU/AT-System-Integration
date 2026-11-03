@@ -18,10 +18,29 @@ from .registry import _values
 IDENT = re.compile(r'^[a-z][a-z0-9_]{0,63}$')
 KINDS = {'service', 'action', 'publish_once', 'publish_periodic', 'subscribe_wait', 'compute'}
 WAIT_MODES = {'response', 'result', 'message', 'sent', 'until_stopped'}
+STOP_OBSERVATION_OUTPUTS = {'$stop_observation.after_ns': 'integer', '$stop_observation.pose': 'json'}
+
+
+def stop_observation_output(data, port, path):
+    """Validate the two executor evidence fields, separate from the native ROS result."""
+    if not isinstance(path, str) or not path.startswith('$stop_observation'):
+        return None
+    location = '$.output_bindings.' + port
+    if path not in STOP_OBSERVATION_OUTPUTS:
+        fail(location, 'invalid_binding', '停止观测仅支持 after_ns 和 pose 输出')
+    observation = data.get('stop_observation')
+    if data.get('kind') != 'action' or not isinstance(observation, dict) or not observation:
+        fail(location, 'stop_observation_required', '此输出需要 Action 任务配置停止观测')
+    if path == '$stop_observation.pose' and not all(isinstance(observation.get(key), str) and observation[key].strip()
+                                                 for key in ('base_frame', 'tcp_frame')):
+        fail(location, 'stop_pose_required', '停止位姿输出需要配置基坐标系和工具坐标系')
+    if data.get('outputs', {}).get(port, {}).get('type') != STOP_OBSERVATION_OUTPUTS[path]:
+        fail(location, 'invalid_output_type', '停止观测输出类型应为 ' + STOP_OBSERVATION_OUTPUTS[path])
+    return path.split('.', 1)[1]
 
 
 def execution_policy(task):
-    readonly = task.get('kind') == 'subscribe_wait' or task.get('kind') == 'compute' and task.get('operation') in {'wait_stationary','transform_targets','bounded_pose_step','copy_fields'}
+    readonly = task.get('kind') == 'subscribe_wait' or task.get('kind') == 'compute' and task.get('operation') in {'wait_stationary','copy_fields'}
     defaults = {'readonly':readonly, 'repeatable':readonly, 'cancelable':readonly, 'concurrent':readonly}
     return {**defaults, **task.get('execution_policy', {})}
 
@@ -129,7 +148,8 @@ def validate_task(raw):
             fail('$.'+field, 'invalid_bindings', '字段映射必须是对象')
         for key, value in mapping.items():
             path, port_name = (key, value) if field == 'input_bindings' else (value, key)
-            if not isinstance(path, str) or path!='$' and not re.fullmatch(r'[A-Za-z_]\w*(?:\.(?:[A-Za-z_]\w*|[0-9]+))*', path) or port_name not in names:
+            evidence = stop_observation_output(data, port_name, path) if field == 'output_bindings' else None
+            if not isinstance(path, str) or path!='$' and not evidence and not re.fullmatch(r'[A-Za-z_]\w*(?:\.(?:[A-Za-z_]\w*|[0-9]+))*', path) or port_name not in names:
                 fail('$.'+field, 'invalid_binding', '字段路径或端口名称无效')
         if field == 'output_bindings' and set(mapping) != set(names):
             fail('$.'+field, 'missing_binding', '每个输出端口都需要结果字段映射')
@@ -194,6 +214,8 @@ def validate_task_schema(data, schema):
         if path == '$' and len(data['input_bindings']) != 1:
             fail('$.input_bindings', 'invalid_root_binding', '完整消息绑定需要单个 JSON 对象输入')
     for port, path in data.get('output_bindings', {}).items():
+        if stop_observation_output(data, port, path):
+            continue
         descriptor = descriptor_at(path, response, '$.output_bindings.' + port)
         _check_field_contract(data['outputs'][port], descriptor, '$.output_bindings.' + port)
     for name in ('condition', 'success_condition'):
@@ -264,8 +286,11 @@ def prepared_task(data, inputs=None, schema=None):
     return prepared
 
 
-def mapped_outputs(data, response):
-    output = {key: field_value(response, path) for key, path in data.get('output_bindings', {}).items()}
+def mapped_outputs(data, response, *, stop_observation=None):
+    output = {}
+    for key, path in data.get('output_bindings', {}).items():
+        evidence = stop_observation_output(data, key, path)
+        output[key] = field_value(stop_observation or {}, evidence) if evidence else field_value(response, path)
     return _values(output, {name: parse(TypeDescriptor, spec) for name, spec in data.get('outputs', {}).items()}, '$.outputs')
 
 
@@ -626,6 +651,7 @@ class RosTasks:
         result = await asyncio.to_thread(self._execute, data, stop, feedback)
         if isinstance(result, str):
             result = {'state':result,'response':data.get('payload',{})}
+        stop_evidence = None
         if original.get('stop_observation') and result.get('terminal_received') and original['kind']=='action':
             confirmation={'kind':'compute','operation':'wait_stationary','payload':original['stop_observation'],
                           'timeout_s':original['stop_observation'].get('timeout_s',5),'_ros_domain':original.get('_ros_domain',self.connection()['domain_id'])}
@@ -638,6 +664,8 @@ class RosTasks:
                 result.update(state='UNKNOWN',stop_confirmed=False,error={'code':'stop_unconfirmed','reason':'动作已结束但关节停止尚未确认','retryable':False})
             else:
                 result.update(state=result.get('terminal_state',result['state']),stop_confirmed=True)
+                if result['state'] == 'SUCCEEDED':
+                    stop_evidence = measured.get('response', {})
                 if result.get('error',{}).get('code')=='stop_unconfirmed':
                     result['error']={'code':'action_failed','reason':'动作未成功完成，已确认关节停止','retryable':False} if result['state']=='FAILED' else None
         if result['state']=='SUCCEEDED' and not _matches_value(result.get('response',{}),data.get('success_condition',{})):
@@ -645,7 +673,7 @@ class RosTasks:
             result['error']={'code':'completion_condition_failed','reason':'返回结果未满足完成条件','retryable':False}
         if result['state'] == 'SUCCEEDED':
             try:
-                result['output'] = mapped_outputs(data, result.get('response', {}))
+                result['output'] = mapped_outputs(data, result.get('response', {}), stop_observation=stop_evidence)
             except ContractValidationError as exc:
                 result.update(state='FAILED',output={},error={'code':'output_binding_failed','reason':str(exc),'retryable':False})
         else:

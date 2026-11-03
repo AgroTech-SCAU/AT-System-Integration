@@ -14,7 +14,7 @@ from .errors import ContractValidationError, fail
 PROJECT_KINDS = {
     'robot_system', 'ros_connection', 'interface_workspace', 'interface_foundation',
     'interface_catalog', 'ros_schema', 'ros_task', 'ros_resource', 'ros_binding',
-    'tree_draft', 'tree_definition', 'state_machine', 'plan', 'asset',
+    'tree_draft', 'tree_definition', 'state_machine', 'asset',
     'execution_environment', 'subsystem_module', 'data_task',
 }
 

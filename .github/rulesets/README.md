@@ -79,7 +79,7 @@ Pull Request
 
 ```text
 feat/auto-navigation
-fix/pick-timeout
+fix/task-timeout
 refactor/arm-interface
 docs/deployment-flow
 ```

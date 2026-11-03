@@ -98,17 +98,14 @@ body:has(.window-controls) .pending-backdrop{top:44px}body:has(.window-controls)
 .saved-robot-actions{display:flex;flex-direction:column;gap:5px}.saved-robot-actions button{padding:6px 9px}
 @media(max-width:1250px){.library-columns-three{grid-template-columns:repeat(2,minmax(0,1fr))}.library-columns-three .library-pane:last-child{grid-column:span 2}}
 @media(max-width:790px){.library-columns-three{grid-template-columns:1fr}.library-columns-three .library-pane:last-child{grid-column:auto}}
-/* 标题栏教学入口 */
-.guide-header-button{display:flex;align-items:center;gap:6px;width:auto;padding:0 10px;font-size:11px}
-.guide-header-button>span:first-child{width:16px;height:16px;display:grid;place-items:center;border:1px solid currentColor;border-radius:50%;font-weight:750;font-size:10px}
-@media(max-width:680px){.guide-header-label{display:none}}
+
 
 /* 表单与内容区统一节奏 */
-.card-body>.field,.card-body>[data-guide]>.field,.card-body>[data-guide]>.primary,
-.card-body>[data-guide]+.field,.card-body>.field+.primary{margin-block:0 16px}
+.card-body>.field,
+.card-body>.field+.primary{margin-block:0 16px}
 .card-body>.field+.field{margin-top:16px}
-.card-body>.field+button,.card-body>[data-guide]+button{margin-top:8px;margin-bottom:18px}
-.card-body>button+.field,.card-body>[data-guide]+.field{margin-top:18px}
+.card-body>.field+button{margin-top:8px;margin-bottom:18px}
+.card-body>button+.field{margin-top:18px}
 .card-body>.callout+.field{margin-top:16px}
 .card-body>h3{margin:0 0 14px}
 .card-body>.buttons+.field,.card-body>.buttons+.panel{margin-top:18px}
@@ -142,21 +139,7 @@ body:has(.window-controls) .pending-backdrop{top:44px}body:has(.window-controls)
 @media(max-width:790px){.library-columns-three{grid-template-columns:1fr}.library-columns-three .library-pane{padding:18px}}
 @media(max-width:540px){.robot-delete-dialog{padding:19px}.saved-robot-actions button{flex:1}}
 
-/* 任务方案表单：字段、主要操作、复查操作各占一行 */
-.task-template-form-block{margin-top:20px}
-.task-template-form-block .field{margin:0}
-.task-template-action-row{display:flex;flex-wrap:wrap;gap:12px;margin-top:20px;margin-bottom:24px}
-.task-template-plan-block{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:12px;padding-top:18px;border-top:1px solid var(--line)}
-.task-template-plan-block .field{margin:0}
-.task-template-plan-block button{min-height:39px;white-space:nowrap}
-.task-template-check{margin-top:20px}
-.task-template-check>p{margin-bottom:12px}
-@media(max-width:520px){.task-template-plan-block{grid-template-columns:1fr}.task-template-plan-block button{width:100%}}
-@media(min-width:1180px){
-  body.guide-rail-active .library-columns-three{grid-template-columns:repeat(2,minmax(0,1fr))}
-  body.guide-rail-active .library-columns-three .library-pane:last-child{grid-column:span 2}
-  body.guide-rail-active .robot-system-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
-}
+
 
 /* Task-specific input definitions */
 .task-input-add{display:flex;align-items:end;gap:12px;flex-wrap:wrap;margin-bottom:16px}
@@ -199,10 +182,7 @@ body:has(.window-controls) .pending-backdrop{top:44px}body:has(.window-controls)
 @media(max-width:920px){.library-columns-three{grid-template-columns:minmax(0,1fr)}.library-columns-three .library-pane:last-child{grid-column:auto}.project-continue,.runtime-dashboard,.editor-intro{align-items:flex-start;flex-direction:column}.project-continue-actions{justify-content:flex-start;max-width:100%}}
 @media(max-width:760px){.tree-editor-grid{display:flex;flex-direction:column}.tree-editor-grid>div{width:100%}.node-palette{grid-template-columns:repeat(auto-fit,minmax(125px,1fr))}.task-workspace-switch .task-run-shortcut{margin-left:0}}
 @media(max-width:520px){.project-continue,.runtime-dashboard,.editor-intro{padding:15px}.project-continue-actions button{flex:1}.workspace-context button{margin-left:0}.runtime-dashboard .runtime-state{text-align:left}}
-/* Guide mode must not force a fixed-width editor underneath the help rail. */
-body.guide-rail-active .tree-editor-grid{grid-template-columns:minmax(190px,240px) minmax(0,1fr)}
-body.guide-rail-active .tree-editor-grid>div:last-child{grid-column:1/-1}
-@media(max-width:950px){body.guide-rail-active .tree-editor-grid{display:flex;flex-direction:column}}
+
 
 /* Robot studio workspaces */
 .studio-hero,.studio-save,.studio-composer>header{display:flex;justify-content:space-between;align-items:center;gap:20px}

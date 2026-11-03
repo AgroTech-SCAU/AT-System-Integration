@@ -54,20 +54,10 @@ def _parser():
     config_apply.add_argument('--revision', type=int, required=True)
     config_apply.add_argument('--base-snapshot', required=True)
     config_apply.add_argument('--request-id', required=True)
-    for name in ('catalog', 'asset'):
-        commands = groups.add_parser(name).add_subparsers(dest='command', required=True)
-        commands.add_parser('list')
-        commands.add_parser('import').add_argument('path', type=Path)
-        if name == 'catalog':
-            commands.add_parser('delete').add_argument('identity')
-    plans = groups.add_parser('plan').add_subparsers(dest='command', required=True)
-    plans.add_parser('list')
-    plans.add_parser('preflight').add_argument('identity')
-    plan_create = plans.add_parser('create')
-    plan_create.add_argument('--parameters', type=Path)
-    plan_create.add_argument('--asset')
-    templates = groups.add_parser('template').add_subparsers(dest='command', required=True)
-    templates.add_parser('list')
+    catalog = groups.add_parser('catalog').add_subparsers(dest='command', required=True)
+    catalog.add_parser('list')
+    catalog.add_parser('import').add_argument('path', type=Path)
+    catalog.add_parser('delete').add_argument('identity')
     reports = groups.add_parser('report')
     reports.add_argument('identity')
     reports.set_defaults(command='report')
@@ -77,10 +67,8 @@ def _parser():
     for command in ('models','list','definitions'):
         trees.add_parser(command)
     tree_new=trees.add_parser('new')
-    tree_new.add_argument('--template',choices=['general','simulation_inspection','tomato_picker'],default='general')
     tree_import=trees.add_parser('import')
     tree_import.add_argument('path',type=Path)
-    tree_import.add_argument('--template',choices=['general','simulation_inspection','tomato_picker'],default='general')
     for command in ('validate','xml'):
         trees.add_parser(command).add_argument('identity')
     tree_save=trees.add_parser('save');tree_save.add_argument('identity');tree_save.add_argument('path',type=Path)
@@ -128,7 +116,7 @@ def _remote(args):
             path='/trees/'+command
         elif command=='list':path='/trees/drafts'
         elif command in ('new','import'):
-            method,path,body='POST','/trees/drafts',{'template':args.template}
+            method,path,body='POST','/trees/drafts',{}
             if command=='import':body['xml']=args.path.read_text(encoding='utf-8')
         elif command=='extract':method,path,body='POST','/trees/extract',read_document(args.path)
         elif command=='save':method,path,body='PUT','/trees/drafts/'+quote(args.identity,safe=''),read_document(args.path)
@@ -147,20 +135,12 @@ def _remote(args):
                 'revision': args.revision, 'base_snapshot_id': args.base_snapshot, 'request_id': args.request_id}
         else:
             path = '/config/status'
-    elif args.group in ('catalog', 'asset'):
-        path = '/catalog' if args.group == 'catalog' else '/assets'
+    elif args.group == 'catalog':
+        path = '/catalog'
         if args.command == 'import':
             method, body = 'POST', {'filename': args.path.name, 'content': args.path.read_text(encoding='utf-8')}
         elif args.command == 'delete':
             method, path = 'DELETE', path + '/' + quote(args.identity, safe='')
-    elif args.group == 'plan':
-        path = '/plans'
-        if args.command == 'create':
-            method, body = 'POST', {'parameters': read_document(args.parameters) if args.parameters else {}, 'asset_id': args.asset}
-        elif args.command == 'preflight':
-            path += '/' + quote(args.identity, safe='') + '/preflight'
-    elif args.group == 'template':
-        path = '/templates'
     elif args.group == 'report':
         path = '/tasks/' + quote(args.identity, safe='') + '/report'
     elif args.group == 'management':

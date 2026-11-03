@@ -51,7 +51,7 @@ root = Path(installation)
 data = {'project_directory': project, 'python': str(root / 'venv/bin/python'),
         'task_engine': str(root / 'task-engine/agro-bt'), 'ui_directory': gui,
         'state_directory': str(root / 'state'), 'desktop_directory': str(root / 'desktop'),
-        'config': str(Path(project) / 'examples/tomato_picker/system.yaml')}
+        'config': str(Path(project) / 'config/system.yaml')}
 path = root / 'installation.json'
 temporary = path.with_suffix('.tmp')
 temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')

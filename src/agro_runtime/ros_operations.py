@@ -210,8 +210,6 @@ class RosOperations:
                 and all(o['state'] not in ACTIVE and o['stop_state'] in ('CONFIRMED','NOT_APPLICABLE') for o in operations)
                 and ((status.get('error') or {}).get('code') not in ('restart_requires_review','task_monitor_failed') or previous_session)):
             status.update(state='FAILED', stop_confirmed=True, error={'code':'stop_recovered','reason':'设备已确认停止，原任务未成功完成'})
-            if status.get('business_result'):
-                status['business_result']['outcome']='failed'
             self.tasks.store.save(task_id,status)
             self.tasks.store.event(task_id,{'type':'device_stop_confirmed','operation_id':identity,'state':'FAILED'})
             control = self.context.engine.control
