@@ -2031,4 +2031,8 @@ export const english: Record<string, string> = {
   "类型待确认": "Type needs review",
   "使用前需由来源任务提供数据": "The source task must provide data before use",
   "离线配置检查通过": "Offline configuration passed",
+  "运行将准备所需子系统并向设备发送命令，请确认设备环境安全": "Running will prepare the required subsystems and send commands to devices. Confirm that the device environment is safe",
+  "准备并运行": "Prepare and run",
+  "运行状态待刷新": "Waiting for execution status",
+  "查看活动执行": "Show active execution",
 }

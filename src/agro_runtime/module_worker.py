@@ -52,10 +52,12 @@ def description(module, outcome=None):
     else:
         parameters = [resolve(v) for v in module.get('parameter_files', [])]
         parameters += [parameter_values(resolve(module.get('parameters', {})))]
-        common = dict(package=module['package'], name=module.get('node_name') or module['id'],
+        common = dict(package=module['package'],
                       namespace=module.get('namespace', ''), parameters=parameters,
                       remappings=[tuple(v) for v in module.get('remappings', [])])
+        if module.get('node_name'):common['name']=module['node_name']
         if kind == 'component':
+            common.setdefault('name',module['id'])
             component = ComposableNode(plugin=module['plugin'], **common)
             action = ComposableNodeContainer(name=module['id']+'_container', namespace='', package='rclcpp_components', executable='component_container_mt', composable_node_descriptions=[component], output='screen')
         else:

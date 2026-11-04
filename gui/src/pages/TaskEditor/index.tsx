@@ -8,6 +8,7 @@ import {useLocale} from '../../locale'
 import {useEffect,useRef,useState} from 'react'
 import {Field} from '../../components/Foundation'
 import {ApiError} from '../../api'
+import {prepareRobot} from '../prepareRobot'
 import {ErrorFields,JsonInputDraftContext,durableIntent,type Json,type PageProps} from '../shared'
 import {clone,copyFragment,duplicate,nodeId,positions,remove,reparent,parentOf,pasteFragment,includeSubtrees,restoreSubtrees,translateBranch,orderSibling,canReferenceTree,type EditorValue,type Fragment} from './editor'
 import TreeCanvas from './TreeCanvas'
@@ -294,8 +295,9 @@ export default function TaskEditor({client,observation,language,changed,configur
  async function start(){
   const prepared=await publish();if(!prepared)return
   const definition=prepared
+  await prepareRobot(client,{kind:'tree',reference:definition.id,confirm_safety:safetyConfirmed})
   const request=durableIntent('tree-start',{definition_id:definition.id,previous:task&&!['RUNNING','ACCEPTED','CANCELING'].includes(task.state)?task.task_run_id:null});taskIntent.current=request;localStorage.setItem('agro.tree_request',request)
-  try{remember(await client.request<Json>(`/trees/definitions/${definition.id}/start`,'POST',{request_id:request,confirm_safety:!configured&&safetyConfirmed}))}catch(error){if(error instanceof ApiError&&error.kind==='offline'){const found=await client.request<Json>(`/tasks/by-request/${request}`);if(found.found)remember(found.task);else throw error}else throw error}
+  try{remember(await client.request<Json>(`/trees/definitions/${definition.id}/start`,'POST',{request_id:request,confirm_safety:safetyConfirmed}))}catch(error){if(error instanceof ApiError&&error.kind==='offline'){const found=await client.request<Json>(`/tasks/by-request/${request}`);if(found.found)remember(found.task);else throw error}else throw error}
   setView('run');await changed()
  }
  async function exportXml(){const current=dirtyRef.current?await save():currentDraft.current;if(!current)return;const result=await client.request<Json>(`/trees/drafts/${current.id}/xml`);if(window.agroDesktop)await window.agroDesktop.exportTreeXml(current.id);else{const url=URL.createObjectURL(new Blob([result.xml],{type:'application/xml'})),anchor=document.createElement('a');anchor.href=url;anchor.download=`${current.document.main_tree_id}.xml`;anchor.click();URL.revokeObjectURL(url)}setXml(result.xml)}
@@ -340,7 +342,7 @@ export default function TaskEditor({client,observation,language,changed,configur
   </div>
   {((!configured&&needsBackend)||models?.offline_only)&&<div className="bw-notice"><span>{!configured&&needsBackend?t("设计内容可离线保存，执行前需要应用机器人配置"):t("离线设计可保存并关联，执行前检查运行环境")}</span>{!configured&&needsBackend&&onNavigate&&<button onClick={()=>onNavigate('system')}>{t("打开机器人配置 ")}<Icon name="arrow"/></button>}</div>}
 
-  {view==='run'?<div className="bw-runtime">{!configured&&<label className="bw-safety-confirm"><input type="checkbox" checked={safetyConfirmed} onChange={event=>setSafetyConfirmed(event.target.checked)}/><span>{t("已确认设备急停、动作取消与通信失联保护可用")}</span></label>}<div className="bw-runtime-toolbar"><button disabled={op.busy||!draft||(configured?observation?.system.state!=='READY':!safetyConfirmed)||observation?.control.mode!=='STANDBY'} onClick={()=>void op.run(t("启动行为"),start)}><Icon name="play"/>{t('试运行当前行为树')}</button><button disabled={op.busy||!task||!['RUNNING','ACCEPTED','CANCELING'].includes(task.state)} onClick={()=>void op.run(t("取消任务"),cancelTask)}>{t("取消任务")}</button></div>{dirty&&<div className="bw-notice">{t("执行前将保存并检查当前修改")}</div>}{stale&&<p className="bw-field-error">{t("连接中断 · 恢复后继续观察当前任务")}</p>}{task?<RuntimeTree task={task} language={language}/>:<div className="bw-empty"><Icon name="play"/><h3>{t("等待运行")}</h3><p>{t('试运行当前行为树，或前往运行台查看完整记录')}</p></div>}</div>:tree&&value&&models?<>
+  {view==='run'?<div className="bw-runtime"><label className="bw-safety-confirm"><input type="checkbox" checked={safetyConfirmed} onChange={event=>setSafetyConfirmed(event.target.checked)}/><span>{t("已确认设备急停、动作取消与通信失联保护可用")}</span></label><div className="bw-runtime-toolbar"><button disabled={op.busy||!draft||!safetyConfirmed||!['READY','STOPPED'].includes(observation?.system.state||'')||observation?.control.mode!=='STANDBY'} onClick={()=>void op.run(t("启动行为"),start)}><Icon name="play"/>{t('试运行当前行为树')}</button><button disabled={op.busy||!task||!['RUNNING','ACCEPTED','CANCELING'].includes(task.state)} onClick={()=>void op.run(t("取消任务"),cancelTask)}>{t("取消任务")}</button></div>{dirty&&<div className="bw-notice">{t("执行前将保存并检查当前修改")}</div>}{stale&&<p className="bw-field-error">{t("连接中断 · 恢复后继续观察当前任务")}</p>}{task?<RuntimeTree task={task} language={language}/>:<div className="bw-empty"><Icon name="play"/><h3>{t("等待运行")}</h3><p>{t('试运行当前行为树，或前往运行台查看完整记录')}</p></div>}</div>:tree&&value&&models?<>
    {readonly&&<div className="bw-notice">{t("导入的 XML 含有未支持节点 · 当前为只读")}</div>}
    <div className="bw-workspace">
     <aside className="bw-library"><div className="bw-pane-tabs"><button aria-pressed={libraryTab==='nodes'} onClick={()=>setLibraryTab('nodes')}>{libraryTab==='nodes'&&<motion.span layoutId="tree-library-tab" className="workspace-selection" transition={springs.quick}/>}<span>{t("节点库")}</span></button><button aria-pressed={libraryTab==='structure'} onClick={()=>setLibraryTab('structure')}>{libraryTab==='structure'&&<motion.span layoutId="tree-library-tab" className="workspace-selection" transition={springs.quick}/>}<span>{t("结构")}</span></button></div>

@@ -18,6 +18,7 @@ def validate_checks(checks):
 
 def probe(request):
     import rclpy
+    from rclpy.executors import SingleThreadedExecutor
     from rclpy.qos import qos_profile_sensor_data
     from rosidl_runtime_py.utilities import get_message
     try:
@@ -28,6 +29,7 @@ def probe(request):
     validate_checks(checks)
     context=rclpy.context.Context();rclpy.init(context=context,domain_id=request.get('domain_id') or 0)
     node=rclpy.create_node('atil_health_'+uuid4().hex[:8],context=context)
+    executor=SingleThreadedExecutor(context=context);executor.add_node(node)
     samples={};clients={};subscriptions=[]
     try:
         for index,check in enumerate(checks):
@@ -41,7 +43,7 @@ def probe(request):
         deadline=time.monotonic()+request.get('probe_timeout_s',2)
         missing=[]
         while time.monotonic()<deadline:
-            rclpy.spin_once(node,timeout_sec=.1)
+            executor.spin_once(timeout_sec=.1)
             services=dict(node.get_service_names_and_types())
             topics=dict(node.get_topic_names_and_types())
             names={('/'+namespace.strip('/')+'/'+name).replace('//','/') for name,namespace in node.get_node_names_and_namespaces()}
@@ -73,4 +75,4 @@ def probe(request):
             if not missing:return {'ready':True,'missing':[],'level':'healthy' if checks else 'interfaces'}
         return {'ready':False,'missing':missing,'level':'healthy' if checks else 'interfaces'}
     finally:
-        node.destroy_node();rclpy.shutdown(context=context)
+        executor.shutdown();node.destroy_node();rclpy.shutdown(context=context)

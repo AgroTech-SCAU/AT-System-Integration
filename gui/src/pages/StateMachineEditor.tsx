@@ -12,6 +12,7 @@ import {useCallback,useEffect,useMemo,useRef,useState,type CSSProperties,type Dr
 import HsmCanvas,{automaticHsmLayout} from './HsmCanvas'
 import type {RosTask} from './RosTaskLibrary'
 import {ApiError} from '../api'
+import {prepareRobot} from './prepareRobot'
 import type {Json,PageProps} from './shared'
 import type {Workspace} from '../types'
 import DataContractEditor from './DataContractEditor'
@@ -236,8 +237,9 @@ export default function StateMachineEditor({client,onNavigate,onOpenRos,onOpenTa
   try{
    let body:Json={mode:'auto'}
    if(action==='start'){
-    const systems=await client.request<Json>('/robot-systems'),robot=systems.systems?.find((item:Json)=>item.id===systems.selected_id)
-    if(robot&&!robot.configured){if(!await confirmDialog(t('此操作会向机器人发送真实命令，请确认设备急停和通信失联保护可用'),'启动运行'))return;body={mode:'auto',confirm_safety:true}}
+    if(!await confirmDialog(t('运行将准备所需子系统并向设备发送命令，请确认设备环境安全'),'准备并运行'))return
+    body={mode:'auto',confirm_safety:true}
+    await prepareRobot(client,{kind:'flow',reference:current!.id,confirm_safety:true})
    }
    await client.request(action==='start'?`/state-machines/${current!.id}/start`:'/state-machines/stop','POST',body)
    const status=await client.request<Json>('/state-machines/status');setSession(status.session);setNotice(action==='start'?t("启动请求已提交"):t("取消请求已提交，正在等待停止确认"))
