@@ -17,7 +17,6 @@ export function FlowOverview({run,machine,taskLabels,preparing=false,stopping=fa
  const outcome=run?.status==='SUCCEEDED'?view.outcomes?.[run.active]:null
  const behaviors:Json[]=run?.behaviors||[],live=behaviors.filter(item=>active(item.status)||item.status==='UNKNOWN')
  const lastFeedback=[...behaviors].reverse().find(item=>feedbackFields(item.feedback).length)
- const branches:Json[]=(machine?.document?.transitions||[]).filter((edge:Json)=>run?.path?.includes(edge.source))
  const stateLabel=(id:string)=>states.find(item=>item.id===id)?.label||id
  const stopped=['STOPPED','CANCELED'].includes(run?.status),failed=run?.status==='FAILED'
  const title=phase==='prepare'?t('正在准备工作流'):phase==='stop'?t('正在停止并确认设备状态'):preparationCancelled?t('准备已取消'):failedPreparation?t('工作流准备失败'):review?t('本次流程需要核对设备'):stopped?t('本次流程已停止'):failed?t('本次流程执行失败'):run?.status==='SUCCEEDED'?outcome?.title||t('本次流程已完成'):state?.label||machine?.name||t('尚未运行')
@@ -42,8 +41,15 @@ export function FlowOverview({run,machine,taskLabels,preparing=false,stopping=fa
    {!live.length&&<p className="runtime-muted">{running?t('当前没有执行中的任务，正在等待事件或状态转换'):run?t('执行已结束，完整结果保留在变量、事件与任务明细中'):t('工作流尚未开始')}</p>}
    {lastFeedback&&!live.some(item=>item.id===lastFeedback.id)&&<div className="runtime-last-feedback"><small>{t('最近任务反馈')} · {taskLabels[lastFeedback.reference]||lastFeedback.reference}</small><Feedback feedback={lastFeedback.feedback}/></div>}
   </section>}
-  {!preparing&&running&&branches.length>0&&<DisclosureCard title={t('后续分支')} summary={t('仅在事件发生且条件满足后进入对应状态')}><ul className="runtime-branches">{branches.map((edge,index)=><li key={index}><strong>{stateLabel(edge.target)}</strong><span>{stateLabel(edge.source)} · {t(eventName(edge.event))}</span><small>{guardText(edge.guard,t)}</small></li>)}</ul></DisclosureCard>}
  </>
+}
+export function FlowBranches({run,machine}:{run:Json|null;machine:Json|null}){
+ const {t}=useLocale()
+ const states:Json[]=machine?.document?.states||[]
+ const branches:Json[]=(machine?.document?.transitions||[]).filter((edge:Json)=>run?.path?.includes(edge.source))
+ if(!run||!active(run.status)||!branches.length)return null
+ const stateLabel=(id:string)=>states.find(item=>item.id===id)?.label||id
+ return <DisclosureCard title={t('后续分支')} summary={t('仅在事件发生且条件满足后进入对应状态')}><ul className="runtime-branches">{branches.map((edge,index)=><li key={index}><strong>{stateLabel(edge.target)}</strong><span>{stateLabel(edge.source)} · {t(eventName(edge.event))}</span><small>{guardText(edge.guard,t)}</small></li>)}</ul></DisclosureCard>
 }
 function guardText(guard:Json|undefined,t:(text:string)=>string){
  if(!guard||guard.operator==='always')return t('收到事件后允许转换')

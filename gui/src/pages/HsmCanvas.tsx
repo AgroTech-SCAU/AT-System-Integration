@@ -7,10 +7,14 @@ import {useCallback,useEffect,useId,useMemo,useRef,useState,type PointerEvent,ty
 import {nestedHsmLayout,projectedHsmEdges} from './hsm-layout'
 import {guardSummary,routeHsmEdges,roundedRoute} from './hsm-routing'
 import DisclosureCard from '../components/DisclosureCard'
+import {active} from './runtime-activity'
+import {runtimeStatusNames} from './runtime-model'
 
 type State={id:string;label:string;parent?:string;initial?:string;outcome?:'success'|'failure';entry?:string;do?:string;exit?:string}
 type Edge={source:string;target:string;event:string;guard?:{operator:string;key?:string;value?:unknown}}
 export type HsmLayout={positions:Record<string,[number,number]>;runtime_view?:Record<string,unknown>}
+type RuntimeBehavior={state_id:string;phase:string;reference:string;status:string;finished_at?:string|null}
+export type HsmCanvasRuntime={status?:string;active?:string|null;behaviors?:RuntimeBehavior[]}
 type View={x:number;y:number;scale:number}
 type Side='input'|'output'
 type Connection={id:string;side:Side;x:number;y:number;target?:string}
@@ -31,10 +35,10 @@ export function hsmConnectionPath(a:{x:number;y:number;width:number},b:{x:number
  return {path:`M${x1} ${y1} H${x1+20} Q${x1+32} ${y1} ${x1+32} ${y1-12} V${top+12} Q${x1+32} ${top} ${x1+20} ${top} H${x2-20} Q${x2-32} ${top} ${x2-32} ${top+12} V${y2-12} Q${x2-32} ${y2} ${x2-20} ${y2} H${x2}`,x:(x1+x2)/2,y:top-3}
 }
 
-export default function HsmCanvas({states,transitions,layout,selected,onSelect,onMove,onReset,scope,reveal,selectedTransition,onSelectTransition,onConnect,onCreate,onRename,onEnter,onOpenPhase,onReparent,onCreateIn,onDelete,onDeleteTransition,onMakeInitial,readOnly=false,viewingHistory=false,transitionPreview,activePath=[],taskLabels={}}:{
+export default function HsmCanvas({states,transitions,layout,selected,onSelect,onMove,onReset,scope,reveal,selectedTransition,onSelectTransition,onConnect,onCreate,onRename,onEnter,onOpenPhase,onReparent,onCreateIn,onDelete,onDeleteTransition,onMakeInitial,readOnly=false,viewingHistory=false,transitionPreview,activePath=[],runtime,taskLabels={}}:{
  states:State[];transitions:Edge[];layout:HsmLayout;selected:string;scope?:string;selectedTransition?:number|null;activePath?:string[];taskLabels?:Record<string,string>
  onSelect:(id:string)=>void;onMove:(id:string,x:number,y:number)=>void;onReset:(all?:boolean,collapsed?:Set<string>)=>void
- readOnly?:boolean;viewingHistory?:boolean;transitionPreview?:{exited:string[];retained:string[];entered:string[]}|null
+ readOnly?:boolean;viewingHistory?:boolean;runtime?:HsmCanvasRuntime|null;transitionPreview?:{exited:string[];retained:string[];entered:string[]}|null
  reveal?:{id:string;nonce:number}
  onReparent?:(id:string,parent:string)=>void
  onCreateIn?:(parent:string,x?:number,y?:number)=>void;onDelete?:(id:string)=>void;onDeleteTransition?:(index:number)=>void;onMakeInitial?:(id:string)=>void
@@ -52,6 +56,9 @@ export default function HsmCanvas({states,transitions,layout,selected,onSelect,o
  const layoutAnchor=useRef<HTMLButtonElement>(null)
  const scopeId=scope||states.find(s=>!s.parent)?.id||''
  const [collapsed,setCollapsed]=useState<Set<string>>(()=>new Set(states.filter(state=>state.parent&&states.some(parent=>parent.id===state.parent&&parent.parent)).map(state=>state.id))),[dropTarget,setDropTarget]=useState('')
+ const liveRuntime=!viewingHistory&&active(runtime?.status),currentState=liveRuntime?runtime?.active:null
+ const runningBehaviors=liveRuntime?(runtime?.behaviors||[]).filter(item=>['ACCEPTED','RUNNING','CANCELING'].includes(item.status)&&!item.finished_at):[]
+ const executingStates=[...new Set([currentState,...runningBehaviors.map(item=>item.state_id)].filter((id):id is string=>!!id))].sort().join('\0')
  const menuAnchor=useRef<HTMLSpanElement>(null)
  const [menu,setMenu]=useState<{x:number;y:number;point:{x:number;y:number};state?:string;edge?:number;parent?:string}|null>(null)
  const nested=useMemo(()=>nestedHsmLayout(states,scopeId,layout.positions,collapsed,preview,transitions),[states,scopeId,layout.positions,collapsed,preview,transitions])
@@ -106,6 +113,17 @@ export default function HsmCanvas({states,transitions,layout,selected,onSelect,o
   const x=clientX===undefined?bounds.width/2:clientX-bounds.left,y=clientY===undefined?bounds.height/2:clientY-bounds.top,current=viewRef.current,scale=clamp(current.scale*factor,.15,2.5)
   updateView({x:x-(x-current.x)/current.scale*scale,y:y-(y-current.y)/current.scale*scale,scale},direct)
  }
+ useEffect(()=>{
+  if(!executingStates)return
+  setCollapsed(previous=>{
+   const next=new Set(previous)
+   for(const id of executingStates.split('\0')){
+    let state=states.find(item=>item.id===id)
+    for(let depth=0;state?.parent&&depth<states.length;depth++){next.delete(state.parent);state=states.find(item=>item.id===state?.parent)}
+   }
+   return next.size===previous.size?previous:next
+  })
+ },[executingStates,scopeId])
  useEffect(()=>{if(!surface.current)return;let first=true;const observer=new ResizeObserver(([entry])=>{setSize({width:entry.contentRect.width,height:entry.contentRect.height});if(first&&entry.contentRect.width&&entry.contentRect.height){first=false;if(!views.current[scopeId])fitRef.current()}});observer.observe(surface.current);return()=>observer.disconnect()},[scopeId])
  useEffect(()=>{setRenaming(null);setExternalOpen(false);setLayoutMenu(false);setConnection(null);setMenu(null);const saved=views.current[scopeId];if(saved)updateView(saved);else requestAnimationFrame(()=>fitRef.current());return()=>{views.current[scopeId]=viewRef.current}},[scopeId,updateView])
  useEffect(()=>{
@@ -115,7 +133,18 @@ export default function HsmCanvas({states,transitions,layout,selected,onSelect,o
   frame=requestAnimationFrame(()=>{frame=requestAnimationFrame(()=>{const box=boxRef.current[reveal.id],bounds=surface.current?.getBoundingClientRect();if(!box||!bounds){fitRef.current();return}const scale=clamp(Math.min(camera.current().scale,(bounds.width-72)/box.width,(bounds.height-72)/box.height),.25,1.3);updateView({x:bounds.width/2-(box.x+box.width/2)*scale,y:bounds.height/2-(box.y+box.height/2)*scale,scale})})})
   return()=>cancelAnimationFrame(frame)
  },[reveal?.nonce,reveal?.id,scopeId,updateView])
- useEffect(()=>{const element=surface.current;if(!element)return;const wheel=(event:WheelEvent)=>{if((event.target as Element).closest('button,input,[role=menu]'))return;if(readOnly&&!event.ctrlKey&&!event.metaKey)return;if(!visible.length)return;event.preventDefault();const unit=event.deltaMode===1?16:event.deltaMode===2?element.clientHeight:1;zoomAt(Math.exp(-clamp(event.deltaY*unit,-150,150)*.0025),event.clientX,event.clientY)};element.addEventListener('wheel',wheel,{passive:false});return()=>element.removeEventListener('wheel',wheel)},[updateView,visible.length,readOnly])
+ useEffect(()=>{
+  const element=surface.current;if(!element)return
+  const wheel=(event:WheelEvent)=>{
+   if((event.target as Element).closest('input,[role=menu],.wb-external-menu'))return
+   if(!visible.length)return
+   event.preventDefault()
+   const unit=event.deltaMode===1?16:event.deltaMode===2?element.clientHeight:1
+   zoomAt(Math.exp(-clamp(event.deltaY*unit,-150,150)*.0025),event.clientX,event.clientY)
+  }
+  element.addEventListener('wheel',wheel,{passive:false})
+  return()=>element.removeEventListener('wheel',wheel)
+ },[updateView,visible.length])
  useEffect(()=>()=>{if(frame.current!==null)cancelAnimationFrame(frame.current)},[])
  const beginRename=(state:State)=>{if(!onRename)return;renameCanceled.current=false;setName(state.label);setRenaming(state.id)}
  const finishRename=()=>{if(renaming&&!renameCanceled.current&&name.trim())onRename?.(renaming,name.trim());setRenaming(null)}
@@ -173,6 +202,7 @@ export default function HsmCanvas({states,transitions,layout,selected,onSelect,o
  const toggleChildren=(id:string)=>setCollapsed(old=>{const next=new Set(old);next.has(id)?next.delete(id):next.add(id);return next})
 
  const owner=states.find(s=>s.id===scopeId),initial=owner?.initial&&positions[owner.initial]
+ const scopeBehaviors=runningBehaviors.filter(item=>item.state_id===scopeId)
  const scopeWidth=Math.max(320,...Object.values(boxes).map(box=>box.x+box.width+24)),scopeHeight=Math.max(200,...Object.values(boxes).map(box=>box.y+box.height+24))
  const menuState=states.find(state=>state.id===menu?.state)
  const menuAction=(action:()=>void)=>{setMenu(null);action()}
@@ -190,7 +220,7 @@ export default function HsmCanvas({states,transitions,layout,selected,onSelect,o
     <defs><marker id={marker+'-arrow'} markerUnits="userSpaceOnUse" markerWidth={10/view.scale} markerHeight={10/view.scale} viewBox="0 0 10 10" refX="9" refY="5" orient="auto"><path d="M1 1 L9 5 L1 9 Z"/></marker></defs>
     <motion.g style={{x:camera.x,y:camera.y,scale:camera.scale,originX:0,originY:0,transformBox:"view-box"}}>
      {visible.length>0&&<g className="wb-scope-frame"><rect className="wb-scope-body" x="0" y="0" width={scopeWidth} height={scopeHeight} rx="12"/><text className="wb-scope-title" x="18" y="28">{owner?.label||t("状态机")}</text><text className="wb-scope-kind" x={scopeWidth-16} y="28" textAnchor="end">{owner?.parent?t("复合状态"):t("根状态")} · {t("{0} 个子状态",{0:states.filter(state=>state.parent===scopeId).length})}</text><path d={`M0 42 H${scopeWidth}`}/></g>}
-     {visible.filter(state=>boxes[state.id].expanded).map(state=>{const b=boxes[state.id];return <rect x={b.x} y={b.y} width={b.width} height={b.height} key={'background'+state.id} className={'wb-container-bg'+(activePath.includes(state.id)?' is-live':'')} rx="9"/>})}
+     {visible.filter(state=>boxes[state.id].expanded).map(state=>{const b=boxes[state.id];return <rect x={b.x} y={b.y} width={b.width} height={b.height} key={'background'+state.id} className={'wb-container-bg'+(activePath.includes(state.id)?liveRuntime?' is-live':' is-path':'')} rx="9"/>})}
      {visible.filter(state=>boxes[state.id].expanded&&state.initial&&boxes[state.initial]).map(state=>{const b=boxes[state.initial!];return <g className="wb-initial" key={'initial'+state.id}><circle cx={b.x-17} cy={b.y+56} r="3"/><path d={`M${b.x-13} ${b.y+56} H${b.x-4}`} markerEnd={`url(#${marker}-arrow)`}/></g>})}
      {initial&&<g className="wb-initial" aria-label={t("初始状态")}><circle cx={initial[0]-32} cy={initial[1]+H/2} r="4"/><path d={`M${initial[0]-27} ${initial[1]+H/2} H${initial[0]-5}`} markerEnd={`url(#${marker}-arrow)`}/></g>}
      {routedEdges.map(route=>{
@@ -204,16 +234,24 @@ export default function HsmCanvas({states,transitions,layout,selected,onSelect,o
      {connection&&(()=>{const anchor=boxes[connection.id],target=connection.target&&boxes[connection.target];if(!anchor)return null;const point={x:connection.x+(connection.side==='input'?-6:7),y:connection.y-56,width:0};const route=connection.side==='output'?hsmConnectionPath(anchor,target||point):hsmConnectionPath(target||point,anchor);return <path className="wb-connection-preview" d={route.path} markerEnd={`url(#${marker}-arrow)`}/>})()}
 
      {visible.map(state=>{
-      const p=positions[state.id],box=boxes[state.id],width=box.width,height=box.height,children=states.filter(s=>s.parent===state.id),live=activePath.includes(state.id),task=state.do?taskLabels[state.do]||t("关联行为"):children.length?t("{0} 个子状态", {0: children.length}):t("添加状态行为")
-      return <g key={state.id} className={'wb-node'+(selected===state.id&&selectedTransition==null?' is-selected':'')+(preview?.id===state.id?' is-dragging':'')+(live?' is-live':'')+(connection?.target===state.id||dropTarget===state.id?' is-target':'')+(box.expanded?' is-composite':'')+(view.scale<.75?' is-overview':'')+(viewingHistory?' is-history':'')+(transitionPreview?.exited.includes(state.id)?' will-exit':transitionPreview?.entered.includes(state.id)?' will-enter':transitionPreview?.retained.includes(state.id)?' will-retain':'')} transform={`translate(${p[0]} ${p[1]})`} role="button" tabIndex={0} aria-label={t("状态 {0}", {0: state.label})} onPointerDown={event=>nodeDown(event,state)} onContextMenu={event=>showMenu(event,state.id)} onDoubleClick={event=>{event.stopPropagation();onEnter?.(state.id)}} onKeyDown={event=>{if(event.key==='Enter'){event.preventDefault();onSelect(state.id);if(children.length)onEnter?.(state.id)}if(event.key==='F2'){event.preventDefault();beginRename(state)}}}>
+      const p=positions[state.id],box=boxes[state.id],width=box.width,height=box.height,children=states.filter(s=>s.parent===state.id),onPath=activePath.includes(state.id),live=liveRuntime&&onPath,isCurrent=currentState===state.id,stateBehaviors=runningBehaviors.filter(item=>item.state_id===state.id)
+      return <g key={state.id} className={'wb-node'+(selected===state.id&&selectedTransition==null?' is-selected':'')+(preview?.id===state.id?' is-dragging':'')+(live?' is-live':onPath?' is-path':'')+(isCurrent?' is-current':'')+(stateBehaviors.length?' is-executing':'')+(connection?.target===state.id||dropTarget===state.id?' is-target':'')+(box.expanded?' is-composite':'')+(view.scale<.75?' is-overview':'')+(viewingHistory?' is-history':'')+(transitionPreview?.exited.includes(state.id)?' will-exit':transitionPreview?.entered.includes(state.id)?' will-enter':transitionPreview?.retained.includes(state.id)?' will-retain':'')} transform={`translate(${p[0]} ${p[1]})`} role="button" tabIndex={0} aria-label={t(isCurrent?'当前状态：{0}':live?'活动路径状态：{0}':onPath?'记录中的状态：{0}':"状态 {0}", {0: state.label})} aria-current={isCurrent?'step':undefined} onPointerDown={event=>nodeDown(event,state)} onContextMenu={event=>showMenu(event,state.id)} onDoubleClick={event=>{event.stopPropagation();onEnter?.(state.id)}} onKeyDown={event=>{if(event.key==='Enter'){event.preventDefault();onSelect(state.id);if(children.length)onEnter?.(state.id)}if(event.key==='F2'){event.preventDefault();beginRename(state)}}}>
        <rect className="wb-node-body" width={width} height={height} rx="9"/>{box.expanded&&<rect className="wb-container-handle" width={width} height="112" rx="9"/>}
+       {isCurrent&&<g className="wb-node-current-badge" aria-hidden="true" transform="translate(12 -10)"><rect width="70" height="19" rx="4"/><text x="35" y="13" textAnchor="middle">{t('当前状态')}</text></g>}
        <rect className="wb-node-separator" x="12" y="43" width={width-24} height=".6"/>
        <g className="wb-node-glyph" transform="translate(13 13)">{children.length?<><rect width="13" height="13" rx="3"/><path d="M3 5 H10 M3 8 H7"/></>:<rect width="13" height="13" rx="4"/>}</g>
        {renaming===state.id?<foreignObject x="34" y="7" width={width-80} height="32"><input className="wb-node-name-input" autoFocus aria-label={t("状态名称")} maxLength={80} value={name} onChange={event=>setName(event.target.value)} onFocus={event=>event.target.select()} onPointerDown={event=>event.stopPropagation()} onDoubleClick={event=>event.stopPropagation()} onBlur={finishRename} onKeyDown={event=>{event.stopPropagation();if(event.key==='Enter'){event.preventDefault();finishRename();surface.current?.focus()}if(event.key==='Escape'){renameCanceled.current=true;setRenaming(null);surface.current?.focus()}}}/></foreignObject>:<text className="wb-node-title" style={view.scale<.75?{fontSize:Math.min(18,12/view.scale)}:undefined} x="35" y="24">{state.label.slice(0,12)}</text>}
        {state.outcome&&<text className="wb-container-caption" x={width-14} y="37" textAnchor="end">{t(state.outcome==='success'?'成功终态':'失败终态')}</text>}
        {children.length>0&&<g className="wb-node-enter" role="button" aria-label={`${box.expanded?t("折叠"):t("展开")} ${state.label}`} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();toggleChildren(state.id)}} transform={`translate(${width-23} 15)`}><rect x="-6" y="-6" width="22" height="22"/><path d="M2 0 L6 4 L2 8"/></g>}
        {view.scale<.75&&<g className="wb-node-summary" pointerEvents="none"><text x="13" y="73">{t('行为 {0} · 子状态 {1}',{0:[state.entry,state.do,state.exit].filter(Boolean).length,1:children.length})}</text><text x="13" y="94">{state.do?(taskLabels[state.do]||t('关联行为')).slice(0,20):t('选择状态查看详情')}</text></g>}
-       {(['entry','do','exit'] as const).map((phase,index)=><g className="wb-node-behavior" key={phase} role="button" tabIndex={0} aria-label={t("{0} {1} 的 {2} 行为", {0: readOnly?t("查看"):t("编辑"), 1: state.label, 2: phase})} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();onSelect(state.id);onOpenPhase?.(state.id,phase)}} onDoubleClick={event=>event.stopPropagation()} onKeyDown={event=>{if(event.key==='Enter'){event.preventDefault();event.stopPropagation();onOpenPhase?.(state.id,phase)}}}><rect x="8" y={46+index*20} width={width-16} height="20" rx="4"/><text className="wb-node-phase" x="13" y={60+index*20}>{phase==='entry'?t("进入"):phase==='do'?t("持续"):t("退出")}</text><text className="wb-node-task" x="45" y={60+index*20}>{state[phase]?(taskLabels[state[phase]!]||t("关联行为")).slice(0,22):readOnly?t("未设置"):t("＋ 添加任务")}</text></g>)}
+       {(['entry','do','exit'] as const).map((phase,index)=>{
+        const behavior=stateBehaviors.find(item=>item.phase===phase),phaseLabel=t(phase==='entry'?'进入':phase==='do'?'持续':'退出'),reference=behavior?.reference||state[phase]
+        const label=reference?taskLabels[reference]||reference:readOnly?t('未设置'):t('＋ 添加任务')
+        const description=behavior?t('当前任务：{0} · {1} · {2}',{0:label,1:phaseLabel,2:t(runtimeStatusNames[behavior.status]||behavior.status)}):t('{0} {1} 的 {2} 行为',{0:readOnly?t('查看'):t('编辑'),1:state.label,2:phase})
+        return <g className={'wb-node-behavior'+(behavior?' is-executing':'')} key={phase} role="button" tabIndex={0} aria-label={description} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();onSelect(state.id);onOpenPhase?.(state.id,phase)}} onDoubleClick={event=>event.stopPropagation()} onKeyDown={event=>{if(event.key==='Enter'){event.preventDefault();event.stopPropagation();onOpenPhase?.(state.id,phase)}}}>
+         <title>{behavior?description:label}</title><rect x="8" y={46+index*20} width={width-16} height="20" rx="4"/>{behavior&&<circle className="wb-task-live" cx="15" cy={56+index*20} r="2.5"/>}<text className="wb-node-phase" x={behavior?23:13} y={60+index*20}>{phaseLabel}</text><text className="wb-node-task" style={behavior&&view.scale<.75?{fontSize:Math.min(14,10/view.scale)}:undefined} x={behavior?54:45} y={60+index*20}>{label.slice(0,22)}</text>
+        </g>
+       })}
        {box.expanded&&<><path className="wb-container-divider" d={`M12 120 H${width-12}`}/><text className="wb-container-caption" x="18" y="143">{t("子状态 · ")}{children.length}</text>{!readOnly&&onCreateIn&&<g className="wb-container-add" role="button" tabIndex={0} aria-label={t("在 {0} 中添加子状态",{0:state.label})} onPointerDown={event=>event.stopPropagation()} onDoubleClick={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();onCreateIn(state.id)}} onKeyDown={event=>{if(event.key==='Enter'){event.preventDefault();event.stopPropagation();onCreateIn(state.id)}}}><rect x={width-80} y="127" width="64" height="22" rx="4"/><text x={width-48} y="142" textAnchor="middle">{t("＋ 子状态")}</text></g>}</>}
        {live&&<circle className="wb-node-live" cx={width-13} cy="24" r="3"/>}
        {!readOnly&&<><circle className="wb-port wb-port-input" cx="0" cy="56" r="6" role="button" tabIndex={0} aria-label={t("连接到 {0}",{0:state.label})} onPointerDown={event=>portDown(event,state.id,'input')} onDoubleClick={event=>{event.preventDefault();event.stopPropagation()}} onKeyDown={event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();if(connection?.side==='output')completeConnection(connection,state.id);else setConnection({id:state.id,side:'input',x:p[0]-40,y:p[1]+56})}}}/>
@@ -222,9 +260,10 @@ export default function HsmCanvas({states,transitions,layout,selected,onSelect,o
      })}
     </motion.g>
    </svg>
+   {scopeBehaviors.length>0&&<div className="wb-scope-current-tasks" role="group" aria-label={t('当前任务')}><strong>{owner?.label||t('状态机')}</strong>{scopeBehaviors.map((behavior,index)=><span key={index}>{t(behavior.phase==='entry'?'进入':behavior.phase==='do'?'持续':'退出')} · {taskLabels[behavior.reference]||behavior.reference} · {t(runtimeStatusNames[behavior.status]||behavior.status)}</span>)}</div>}
    {!visible.length&&<div className="wb-canvas-empty"><span className="wb-empty-glyph">＋</span><strong>{t("在这里组织状态")}</strong><span>{t("添加第一个状态，配置进入、期间与离开行为")}</span>{!readOnly&&<button onClick={()=>onCreate?.(80,90)}>{t("添加第一个状态")}</button>}</div>}
    {visible.length>0&&<div className="wb-canvas-tools"><button onClick={()=>zoomAt(1/1.15)} aria-label={t("缩小画布")} title={t("缩小 −")}>−</button><button className="wb-zoom-value" onClick={()=>{const bounds=surface.current?.getBoundingClientRect();if(bounds)zoomAt(1/view.scale)}} title={t("恢复实际大小")}>{Math.round(view.scale*100)}%</button><button onClick={()=>zoomAt(1.15)} aria-label={t("放大画布")} title={t("放大 +")}>＋</button><span/><button onClick={fit} title={t("适合画布 0")}>{t("适合")}</button>{!readOnly&&<><button onClick={()=>{onReset(false,collapsed);requestAnimationFrame(()=>fitRef.current())}} title={t('整理当前层，保留内部排列')}>{t("整理")}</button><button ref={layoutAnchor} aria-label={t('更多整理选项')} aria-expanded={layoutMenu} onClick={()=>setLayoutMenu(!layoutMenu)}>⌄</button></>}</div>}
-   <div className="wb-canvas-hint">{readOnly?t("滚轮浏览 · Ctrl/⌘+滚轮缩放 · 拖动平移"):connection?t("选择另一状态的连接点 · Esc 取消"):visible.length?t("左键拖动 · 滚轮缩放 · 右键菜单"):''}</div>
+   <div className="wb-canvas-hint">{readOnly?t("滚轮缩放 · 拖动平移"):connection?t("选择另一状态的连接点 · Esc 取消"):visible.length?t("左键拖动 · 滚轮缩放 · 右键菜单"):''}</div>
    <span ref={menuAnchor} className="wb-context-anchor" style={{left:menu?.x||0,top:menu?.y||0}} aria-hidden="true"/>
    <AnimatePresence>{menu&&menuAnchor.current&&<AnchoredPopover anchor={menuAnchor.current} positionKey={`${menu.x}:${menu.y}`} onClose={()=>setMenu(null)} label={t("画布菜单")} role="menu" className="wb-context-menu" align="start">
     {menuState?<><small>{menuState.label}</small>{!readOnly&&<><button role="menuitem" disabled={!!menuState.outcome} onClick={()=>menuAction(()=>onCreateIn?.(menuState.id))}>{t("添加子状态")}</button><button role="menuitem" onClick={()=>menuAction(()=>beginRename(menuState))}>{t("重命名状态")}</button>{menuState.parent&&<button role="menuitem" disabled={states.find(state=>state.id===menuState.parent)?.initial===menuState.id} onClick={()=>menuAction(()=>onMakeInitial?.(menuState.id))}>{t("设为初始子状态")}</button>}</>}{states.some(state=>state.parent===menuState.id)&&<><button role="menuitem" onClick={()=>menuAction(()=>toggleChildren(menuState.id))}>{collapsed.has(menuState.id)?t("展开子状态"):t("折叠子状态")}</button><button role="menuitem" onClick={()=>menuAction(()=>onEnter?.(menuState.id))}>{t("进入子状态")}</button></>}{!readOnly&&onDelete&&menuState.parent&&<button role="menuitem" className="is-danger" onClick={()=>menuAction(()=>onDelete(menuState.id))}>{t("删除状态")}</button>}</>:menu.edge!==undefined?<><button role="menuitem" onClick={()=>menuAction(()=>onSelectTransition?.(menu.edge!))}>{t("编辑转换")}</button>{!readOnly&&onDeleteTransition&&<button role="menuitem" className="is-danger" onClick={()=>menuAction(()=>onDeleteTransition(menu.edge!))}>{t("删除转换")}</button>}</>:<>{!readOnly&&<button role="menuitem" onClick={()=>menuAction(()=>createAt(menu.point,menu.parent))}>{menu.parent?t("添加子状态"):t("添加状态")}</button>}<button role="menuitem" onClick={()=>menuAction(fit)}>{t("适合画布")}</button>{!readOnly&&<><button role="menuitem" onClick={()=>menuAction(()=>{onReset(false,collapsed);requestAnimationFrame(()=>fitRef.current())})}>{t("整理当前层")}</button><button role="menuitem" onClick={()=>menuAction(()=>{onReset(true,collapsed);requestAnimationFrame(()=>fitRef.current())})}>{t('整理全部层级')}</button></>}</>}

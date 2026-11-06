@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import queue
 import subprocess
+import tempfile
 import threading
 import time
 from uuid import uuid4
@@ -18,6 +19,12 @@ WORKER = Path(__file__).with_name('ros_worker.py')
 
 def _executable_file(path):
     return Path(path).is_file() and os.access(path, os.X_OK)
+
+
+def _worker_failure_reason(reason, diagnostics):
+    size = os.fstat(diagnostics.fileno()).st_size
+    detail = os.pread(diagnostics.fileno(), 8192, max(0, size - 8192)).decode('utf-8', errors='replace').strip()
+    return str(reason) + ('\n' + detail if detail else '')
 
 
 class WorkspaceEnvironments:
@@ -225,17 +232,20 @@ class WorkspaceEnvironments:
         env['ROS_LOG_DIR'] = str(self.store.root / 'ros_logs')
         command = ['bash', '--noprofile', '--norc', '-c',
                    'source "$1" >/dev/null && exec "$2" -u "$3"', 'atil-environment', config['setup'], config['python'], str(WORKER)]
+        diagnostics = tempfile.TemporaryFile(mode='w+t', encoding='utf-8')
         try:
-            process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=diagnostics,
                                        text=True, env=env, start_new_session=True)
         except OSError as error:
+            diagnostics.close()
             if request['op'] == 'run':
                 return {'state':'FAILED','stop_confirmed':True,'response':{},
                         'error':{'code':'environment_not_ready','reason':str(error),'retryable':False}}
             raise EnvironmentFailure(str(error)) from error
         try:self.record_worker(process, request.get('task', {}).get('_operation_id'))
         except BaseException:
-            process.terminate();process.communicate(timeout=5)
+            try:process.terminate();process.communicate(timeout=5)
+            finally:diagnostics.close()
             raise
         events = queue.Queue()
         def reader():
@@ -279,23 +289,22 @@ class WorkspaceEnvironments:
                     detached = True
                     raise EnvironmentFailure(value)
                 elif kind == 'error':
-                    if request['op'] == 'run' and not dispatched:
-                        return {'state': 'FAILED', 'response': {}, 'stop_confirmed': True,
-                                'error': {'code': 'environment_not_ready', 'reason': value['reason'], 'retryable': False}}
                     raise EnvironmentFailure(value['reason'], value.get('missing', ''))
                 elif kind == 'eof': raise EnvironmentFailure('执行进程退出，未返回有效结果')
         except (EnvironmentFailure, OSError) as error:
+            reason = _worker_failure_reason(error, diagnostics)
             if request['op'] == 'run' and not dispatched:
                 return {'state':'FAILED','stop_confirmed':True,'response':{},
-                        'error':{'code':'environment_not_ready','reason':str(error),'retryable':False}}
+                        'error':{'code':'environment_not_ready','reason':reason,'retryable':False}}
             if dispatched and process.poll() is None:
                 detached = True
                 try:
                     process.stdin.write('STOP\n'); process.stdin.flush()
                 except OSError:
                     pass
-            raise
+            raise EnvironmentFailure(reason, getattr(error, 'missing', '')) from error
         finally:
+            diagnostics.close()
             if detached:
                 # Preserve delayed-cancel ownership; resources remain UNCONFIRMED in Studio
                 def reap():
@@ -355,7 +364,12 @@ class WorkspaceEnvironments:
             for name in ('AMENT_PREFIX_PATH','CMAKE_PREFIX_PATH','COLCON_PREFIX_PATH','PYTHONPATH','PYTHONHOME','VIRTUAL_ENV','LD_LIBRARY_PATH'):env.pop(name,None)
             worker=Path(__file__).with_name('data_worker.py')
             command=['bash','--noprofile','--norc','-c','source "$1" >/dev/null && exec "$2" -u "$3"','atil-data',config['setup'],config['python'],str(worker)]
-            process=subprocess.Popen(command,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,env=env,start_new_session=True)
+            diagnostics=tempfile.TemporaryFile(mode='w+t',encoding='utf-8')
+            try:
+                process=subprocess.Popen(command,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=diagnostics,text=True,env=env,start_new_session=True)
+            except OSError as error:
+                diagnostics.close()
+                raise EnvironmentFailure('无法启动数据处理环境：'+str(error)) from error
             events=queue.Queue()
             def read():
                 for line in process.stdout:
@@ -364,12 +378,17 @@ class WorkspaceEnvironments:
                         except ValueError:pass
                 events.put({'error':'数据处理进程已退出'})
             threading.Thread(target=read,daemon=True).start()
-            process.stdin.write(json.dumps({'domain_id':domain})+'\n');process.stdin.flush()
             try:
-                value=events.get(timeout=20)
+                process.stdin.write(json.dumps({'domain_id':domain})+'\n');process.stdin.flush()
+                try:value=events.get(timeout=20)
+                except queue.Empty as error:raise EnvironmentFailure('数据处理环境启动超时') from error
                 if not value.get('ready'):raise EnvironmentFailure(value.get('error','无法启动数据处理环境'))
-            except BaseException:
-                process.terminate();process.wait(timeout=5);raise
+            except BaseException as error:
+                self._finish_worker(process)
+                if isinstance(error,(EnvironmentFailure,OSError)):
+                    raise EnvironmentFailure(_worker_failure_reason(error,diagnostics)) from error
+                raise
+            finally:diagnostics.close()
             result={'process':process,'events':events,'lock':threading.Lock()}
             self.computers[key]=result;self.processes[process]=(config['robot_system_id'],'data_context')
             return result

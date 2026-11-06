@@ -164,6 +164,7 @@ class StateMachines:
         self._spec = None
         self._dependencies = {}
         self._stop_requested = False
+        self._starting = False
         self._behaviors = {}
         self._do_watchers = {}
         self._control_token = None
@@ -306,7 +307,7 @@ class StateMachines:
                 'message': '离线配置检查通过' if not diagnostics else '运行前需补充配置'}
 
     def running(self):
-        return self._session is not None and self._session.get('status') in ('RUNNING','ENTERING','TRANSITIONING','STOPPING')
+        return self._starting or self._session is not None and self._session.get('status') in ('RUNNING','ENTERING','TRANSITIONING','STOPPING')
 
     def status(self):
         key = self.robots.selected_id()
@@ -702,7 +703,6 @@ class StateMachines:
                     if not ref or ref in dependencies:continue
                     if ref.startswith('ros:'):
                         dependencies[ref]=self.ros_tasks.freeze(ref[4:])
-                        self.ros_tasks.verify_support(dependencies[ref])
                     else:
                         dependencies[ref]=self.documents.prepare_behavior(ref)
                         if mode=='ros_only' and self.documents.requires_system(dependencies[ref]['document']):
@@ -712,6 +712,16 @@ class StateMachines:
                 for ref, dependency in dependencies.items():
                     task_set.extend([dependency] if ref.startswith('ros:') else dependency.get('ros_tasks', []))
                 self.ros_tasks.validate_task_workspaces(task_set)
+            self._starting=True
+            self._stop_requested=False
+            try:
+                for ref, dependency in dependencies.items():
+                    if ref.startswith('ros:'):
+                        await self.ros_tasks.verify_support_async(dependency)
+                        if self._stop_requested:
+                            fail('$.machine','start_canceled','启动已取消，未派发流程行为')
+            finally:
+                self._starting=False
             self._behaviors.clear()
             self._do_watchers.clear()
             self._control_token = None
@@ -720,7 +730,6 @@ class StateMachines:
             self._events.clear()
             self._activation+=1
             sid='session_'+uuid4().hex
-            self._stop_requested=False
             now=timestamp()
             self._event_values={name:value for name,value in spec.get('variables',{}).items()
                                 if value is None or type(value) in (str,int,float,bool)}
@@ -733,7 +742,7 @@ class StateMachines:
     async def event(self,name,values,*,activation=None,source=None,instance_id=None):
         if not isinstance(name,str) or not IDENT.fullmatch(name):
             fail('$.event','invalid_event','事件名称无效')
-        if not self.running() or self._stop_requested:
+        if self._starting or not self.running() or self._stop_requested:
             fail('$.machine','not_running','当前状态机不可接收事件')
         if not isinstance(values,dict) or any(k not in self._session['variables'] for k in values):
             fail('$.variables','invalid_variable','只能更新已声明的状态机变量')

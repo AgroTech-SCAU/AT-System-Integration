@@ -17,6 +17,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from .errors import ContractValidationError, field_path, fail
+from .execution_environments import EnvironmentFailure
 from .models import ExecutionRequest, Positive
 from .registry import load_package
 from .tasks import TaskManager, TaskStart
@@ -188,6 +189,11 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     @app.exception_handler(ContractValidationError)
     async def contract_error(request, exc):
         return JSONResponse(status_code=409, content={'errors': [issue.model_dump() for issue in exc.issues]})
+
+    @app.exception_handler(EnvironmentFailure)
+    async def environment_error(request, exc):
+        return JSONResponse(status_code=503, content={'errors': [{
+            'path': '$.environment', 'code': 'execution_environment_unavailable', 'reason': str(exc)}]})
 
     @app.exception_handler(RequestValidationError)
     async def request_error(request, exc):

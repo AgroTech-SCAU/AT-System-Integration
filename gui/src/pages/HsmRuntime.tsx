@@ -33,7 +33,7 @@ export default function HsmRuntime({client,onNavigate,observation}:PageProps & {
  async function request(work:()=>Promise<void>){if(locked.current)return;locked.current=true;setBusy(true);setError('');try{await work()}catch(cause){fail(cause)}finally{locked.current=false;setBusy(false)}}
  async function run(){
   if(!id)return
-  await client.request(`/state-machines/${id}/start`,'POST',{mode:'auto',confirm_safety:blankRobot&&safetyConfirmed})
+  await client.request(`/state-machines/${id}/start`,'POST',{mode:'auto',confirm_safety:blankRobot&&safetyConfirmed},undefined,120000)
   expected.current='start';setMessage('启动请求已提交');const response=await client.request<Json>('/state-machines/status');showSession(response.session)
  }
  async function send(event:string){

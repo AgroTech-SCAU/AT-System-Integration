@@ -582,8 +582,9 @@ class Deployment:
             try:
                 if self.hsm.running():
                     session=self.hsm.status()
-                    self._progress('cancel',current={'id':session['id'],'name':session.get('definition',{}).get('name') or session.get('machine_id',session['id']),'kind':'flow'},
-                                   deadline_at=None)
+                    if session:
+                        self._progress('cancel',current={'id':session['id'],'name':session.get('definition',{}).get('name') or session.get('machine_id',session['id']),'kind':'flow'},
+                                       deadline_at=None)
                     await self.hsm.stop()
                 self._progress('confirm_stop',current=None,deadline_at=None)
                 await self.robots.context.tasks.stop_all()

@@ -194,6 +194,10 @@ class LocalProcessManager:
         current = self._identity(record['pid']) if record else None
         running = bool(record and current and self._root_matches(record, current)
                        and current['state'] != 'Z')
+        process = self.processes.get(name)
+        if record and process and not running and (current is None or current['state'] == 'Z'):
+            # /proc may report exit before asyncio's child watcher delivers its status
+            await process.wait()
         return {'running': running, 'pid': record['pid'] if record else None}
 
     async def stop(self, name, descriptor):

@@ -579,12 +579,31 @@ class RosTasks:
         return copy.deepcopy(data)
 
     def verify_support(self, data):
+        schemas, config, request = self._prepare_support(data)
+        from .execution_environments import EnvironmentFailure
+        try:
+            result = self.environments.call(config, request) if config is not None else None
+        except EnvironmentFailure as error:
+            if data.get('kind') == 'compute':raise
+            fail('$.task.'+data['id'],'environment_not_ready',str(error))
+        self._validate_support(data, schemas, result)
+
+    async def verify_support_async(self, data):
+        schemas, config, request = self._prepare_support(data)
+        from .execution_environments import EnvironmentFailure
+        try:
+            result = await asyncio.to_thread(self.environments.call, config, request) if config is not None else None
+        except EnvironmentFailure as error:
+            if data.get('kind') == 'compute':raise
+            fail('$.task.'+data['id'],'environment_not_ready',str(error))
+        self._validate_support(data, schemas, result)
+
+    def _prepare_support(self, data):
         if data.get('kind')=='compute':
             self.validate_structure(data)
             config=self.environments.snapshot(data)
-            self.environments.call(config,{'op':'compute_probe','operation':data.get('operation'),'entrypoint':data.get('compute_entrypoint') if data.get('operation')=='extension' else ''})
-            return
-        from .ros_interfaces import InterfaceLibrary, PRIMITIVES, installed_schema
+            return None,config,{'op':'compute_probe','operation':data.get('operation'),'entrypoint':data.get('compute_entrypoint') if data.get('operation')=='extension' else ''}
+        from .ros_interfaces import InterfaceLibrary
         identity = data['id']
         expected = self.validate_structure(data)
         schemas = {data['ros_type']: expected}
@@ -593,13 +612,13 @@ class RosTasks:
             if record.get('project_id') != self._robot():
                 fail('$.task.' + identity, 'ownership', '任务接口定义不属于当前工程')
             schemas.update(InterfaceLibrary(self.store, self._robot()).compile(record['definitions'], saved_definitions=False))
-        actual_schemas = None
-        if self.environments:
-            from .execution_environments import EnvironmentFailure
-            try:
-                actual_schemas = self.environments.call(self.environments.snapshot(data), {'op':'verify','expected':schemas})['schemas']
-            except EnvironmentFailure as error:
-                fail('$.task.'+identity,'environment_not_ready',str(error))
+        return schemas,self.environments.snapshot(data) if self.environments else None,{'op':'verify','expected':schemas}
+
+    def _validate_support(self, data, schemas, result):
+        if schemas is None:return
+        from .ros_interfaces import PRIMITIVES, installed_schema
+        identity = data['id']
+        actual_schemas = result['schemas'] if result is not None else None
         def normalized(value, package):
             if isinstance(value, dict):
                 return {name: normalized(item, package) for name, item in value.items()}
