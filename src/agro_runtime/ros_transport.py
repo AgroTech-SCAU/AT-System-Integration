@@ -47,7 +47,7 @@ def _matches_value(value, cond):
     return value > right if op == 'greater' else value < right
 
 
-def _run_task(data, stop, feedback=None, *, context=None, unconfirmed=None):
+def _run_task(data, stop, feedback=None, *, context=None, unconfirmed=None, completed=None):
     rclpy, (get_message, get_service, get_action), fill, _ = _ros_modules()
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.action import ActionClient
@@ -171,7 +171,14 @@ def _run_task(data, stop, feedback=None, *, context=None, unconfirmed=None):
             if feedback:
                 feedback(_message_as_dict(result))
             # 服务响应仅表示服务调用结束，并不证明实体动作已经完成
-            return outcome({'state': 'SUCCEEDED', 'response': _message_as_dict(result)})
+            value = outcome({'state': 'SUCCEEDED', 'response': _message_as_dict(result)})
+            if readonly and value['state'] == 'SUCCEEDED':
+                if stop.is_set() or remaining() <= 0:
+                    return ended_wait()
+                value['stop_confirmed'] = True
+                if completed:
+                    completed(value)
+            return value
         if kind == 'action':
             cls = get_action(ros_type)
             client = ActionClient(node, cls, interface)

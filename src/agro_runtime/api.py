@@ -849,7 +849,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     async def hsm_status():
         session=hsm.status()
         if session:session={**session,'operations':ros_operations.operations(session['id'])}
-        return {'session':session}
+        return JSONResponse({'session':session})
 
     @api.post('/state-machines/{machine_id}/start',status_code=202)
     async def hsm_start(machine_id: str,body: StateMachineStart):

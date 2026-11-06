@@ -111,12 +111,18 @@ def main():
     context = rclpy.context.Context()
     rclpy.init(context=context, domain_id=data.get('_ros_domain') or 0)
     emit('dispatched', True)
+    result_sent = False
+    def completed(value):
+        nonlocal result_sent
+        if not result_sent:
+            emit('result', value)
+            result_sent = True
     try:
         result = _run_task(data, stop, lambda v: emit('feedback', v), context=context,
-                           unconfirmed=lambda reason: emit('unconfirmed', reason))
+                           unconfirmed=lambda reason: emit('unconfirmed', reason), completed=completed)
         if isinstance(result, str):
             result = {'state': result, 'response': data.get('payload', {}), 'stop_confirmed': True}
-        emit('result', result)
+        completed(result)
     finally:
         rclpy.shutdown(context=context)
 

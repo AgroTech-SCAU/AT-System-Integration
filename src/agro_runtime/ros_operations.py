@@ -35,10 +35,13 @@ class RosOperations:
 
     def snapshot(self, identity):
         record=self.store.get('ros_operation', identity)
+        return self._snapshot_record(record)
+
+    def _snapshot_record(self, record):
         return {**copy.deepcopy(record['snapshot']), 'previous_session':record.get('executor_session') != self.ros_tasks.environments.session_id}
 
     def operations(self, task_id):
-        return [{**self.snapshot(r['id']), 'task_run_id':task_id, 'node_id':r['node_id'],
+        return [{**self._snapshot_record(r), 'task_run_id':task_id, 'node_id':r['node_id'],
                  'capability_id':'ros.'+r['ros_task_id'], 'input':r['input'], 'parameters':{}}
                 for r in self.store.list('ros_operation') if r['task_run_id']==task_id]
 

@@ -27,6 +27,7 @@ class WorkspaceEnvironments:
         self.processes = {}
         self.lock = threading.RLock()
         self.computers = {}
+        self.reapers = {}
 
     def manage(self, robot, action, workspace_id, python='', setup=''):
         from types import SimpleNamespace
@@ -35,6 +36,7 @@ class WorkspaceEnvironments:
         manager = WorkspaceEnvironments(store, SimpleNamespace(selected_id=lambda:robot))
         manager.processes, manager.lock = self.processes, self.lock
         manager.computers = self.computers
+        manager.reapers = self.reapers
         try:
             with self.lock:
                 return getattr(manager, action)(workspace_id, python, setup)
@@ -247,7 +249,7 @@ class WorkspaceEnvironments:
         with self.lock:
             self.processes[process] = (config.get('robot_system_id', config['id']), request['op'])
         threading.Thread(target=reader, daemon=True).start()
-        sent_stop, dispatched, detached = False, False, False
+        sent_stop, dispatched, detached, completed_read = False, False, False, False
         started = time.monotonic()
         try:
             process.stdin.write(json.dumps(request) + '\n'); process.stdin.flush()
@@ -267,7 +269,12 @@ class WorkspaceEnvironments:
                 kind, value = event['kind'], event['value']
                 if kind == 'dispatched': dispatched = True
                 elif kind == 'feedback' and feedback: feedback(value)
-                elif kind == 'result': return value
+                elif kind == 'result':
+                    task = request.get('task', {})
+                    completed_read = (request['op'] == 'run' and task.get('kind') == 'service'
+                                      and task.get('execution_policy', {}).get('readonly') is True
+                                      and value.get('state') == 'SUCCEEDED' and value.get('stop_confirmed') is True)
+                    return value
                 elif kind == 'unconfirmed':
                     detached = True
                     raise EnvironmentFailure(value)
@@ -296,10 +303,35 @@ class WorkspaceEnvironments:
                     with self.lock: self.processes.pop(process, None)
                     process.stdin.close(); process.stdout.close()
                 threading.Thread(target=reap, daemon=True).start()
+            elif completed_read:
+                def reap_read():
+                    try:
+                        self._finish_worker(process)
+                    finally:
+                        with self.lock:
+                            self.reapers.pop(process, None)
+                thread = threading.Thread(target=reap_read, daemon=True)
+                with self.lock:
+                    self.reapers[process] = thread
+                    thread.start()
             else:
-                try: process.wait(timeout=2)
-                except subprocess.TimeoutExpired: process.terminate(); process.wait(timeout=2)
-                with self.lock: self.processes.pop(process, None)
+                self._finish_worker(process)
+
+    def _finish_worker(self, process):
+        try:
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.terminate()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=2)
+        finally:
+            if process.poll() is not None:
+                with self.lock:
+                    self.processes.pop(process, None)
                 process.stdin.close(); process.stdout.close()
 
     def close(self):
@@ -309,6 +341,9 @@ class WorkspaceEnvironments:
                 if process.poll() is None:
                     try: process.stdin.write('STOP\n'); process.stdin.flush()
                     except (OSError, ValueError): pass
+            reapers = list(self.reapers.values())
+        for thread in reapers:
+            thread.join()
 
     def computer(self, config, domain):
         key=(config['workspace_id'],domain,config['signature'])
