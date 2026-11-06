@@ -67,6 +67,7 @@ class DataContext:
         topic=p.get('topic','/joint_states');self.watch_joints(topic)
         names=p.get('joint_names',[])
         if not names:raise ValueError('稳定判定需要明确关节名称')
+        requested_names=set(names)
         age=finite(p.get('max_age_s',.25),'反馈有效期');duration=finite(p.get('duration_s',.4),'稳定时间')
         speed=finite(p.get('velocity_limit',.01),'速度上限')
         if min(age,duration,speed)<=0:raise ValueError('稳定判定阈值必须大于零')
@@ -79,6 +80,7 @@ class DataContext:
             for received,msg in messages:
                 stamp=msg.header.stamp.sec*10**9+msg.header.stamp.nanosec
                 if received<start:continue
+                if requested_names.isdisjoint(msg.name):continue
                 values={name:(msg.position[i] if i<len(msg.position) else math.nan,msg.velocity[i] if i<len(msg.velocity) else math.nan) for i,name in enumerate(msg.name)}
                 valid=all(name in values and all(math.isfinite(v) for v in values[name]) and abs(values[name][1])<=speed for name in names)
                 valid=valid and stamp>0 and (last is None or stamp>last[0] and received-last[1]<=age)
