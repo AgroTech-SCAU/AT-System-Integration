@@ -10,9 +10,9 @@ import Icon from './WorkbenchIcon'
 type Camera={x:number;y:number;zoom:number}
 type Slot={parent:string;before?:string;x:number;y:number;order:number}
 type Drag={kind:'pan';x:number;y:number;camera:Camera}|{kind:'node';id:string;x:number;y:number;px:number;py:number}|{kind:'connect';id:string;x:number;y:number}
-type Props={tree:Json;layout:Json;models?:Json;selected:string;onSelect(id:string):void;onMove?(id:string,x:number,y:number):void;onInsert?:(parentId:string,registration:string,before?:string)=>void;onReparent?:(node:string,parent:string,before?:string)=>void;onAddAt?:(parent:string,before?:string)=>void;onOpen?:(id:string)=>void;onDelete?:(id:string)=>void;onDuplicate?:(id:string)=>void;states?:Record<string,string>;lastStates?:Record<string,string>;bindings?:Json[];portModels?:Json;language?:'zh'|'en';fit?:boolean;viewKey?:string;diagnostics?:Json[];layoutKey?:number}
+type Props={tree:Json;layout:Json;models?:Json;selected:string;onSelect(id:string):void;onMove?(id:string,x:number,y:number):void;onInsert?:(parentId:string,registration:string,before?:string)=>void;onReparent?:(node:string,parent:string,before?:string)=>void;onAddAt?:(parent:string,before?:string)=>void;onOpen?:(id:string)=>void;onDelete?:(id:string)=>void;onDuplicate?:(id:string)=>void;states?:Record<string,string>;lastStates?:Record<string,string>;bindings?:Json[];portModels?:Json;language?:'zh'|'en';fit?:boolean;viewKey?:string;diagnostics?:Json[];layoutKey?:number;browseWheel?:boolean}
 const WIDTH=190,HEIGHT=68
-export default function TreeCanvas({tree,layout,models={},selected,onSelect,onMove,onInsert,onReparent,onAddAt,onOpen,onDelete,onDuplicate,states={},lastStates={},bindings=[],portModels={},language='zh',fit=false,viewKey,diagnostics=[],layoutKey=0}:Props){
+export default function TreeCanvas({tree,layout,models={},selected,onSelect,onMove,onInsert,onReparent,onAddAt,onOpen,onDelete,onDuplicate,states={},lastStates={},bindings=[],portModels={},language='zh',fit=false,viewKey,diagnostics=[],layoutKey=0,browseWheel=false}:Props){
  const {t}=useLocale(),response=useStudioCamera()
  const viewport=useRef<HTMLDivElement>(null),svg=useRef<SVGSVGElement>(null),menuElement=useRef<HTMLDivElement>(null),drag=useRef<Drag|null>(null)
  const [size,setSize]=useState({width:0,height:0}),[camera,setCamera]=useState<Camera>({x:0,y:0,zoom:1}),[preview,setPreview]=useState<Record<string,[number,number]>>({}),[connection,setConnection]=useState<{id:string;x:number;y:number}|null>(null),[dropSlot,setDropSlot]=useState<Slot|null>(null),[panning,setPanning]=useState(false),[moving,setMoving]=useState(''),[paletteDrag,setPaletteDrag]=useState(false),[menu,setMenu]=useState<{x:number;y:number;id?:string}|null>(null)
@@ -48,9 +48,9 @@ export default function TreeCanvas({tree,layout,models={},selected,onSelect,onMo
  useEffect(()=>{if(layoutKey)fitView()},[layoutKey])
  useEffect(()=>{if(fit)fitView();else if(layout.zoom&&layout.zoom!==1)setCamera(current=>({...current,zoom:layout.zoom}))},[fit,layout.zoom])
  useEffect(()=>{const element=viewport.current;if(!element)return
-  function wheel(event:WheelEvent){if((event.target as Element).closest('button,[role=menu]'))return;event.preventDefault();if(!visible.length)return;const rect=element!.getBoundingClientRect(),c=cameraRef.current,unit=event.deltaMode===1?16:event.deltaMode===2?element!.clientHeight:1,zoom=Math.max(.15,Math.min(2.5,c.zoom*Math.exp(-Math.max(-150,Math.min(150,event.deltaY*unit))*.0025))),px=event.clientX-rect.left,py=event.clientY-rect.top;setCamera({x:px-(px-c.x)*zoom/c.zoom,y:py-(py-c.y)*zoom/c.zoom,zoom})}
+  function wheel(event:WheelEvent){if((event.target as Element).closest('button,[role=menu]'))return;if(browseWheel&&!event.ctrlKey&&!event.metaKey)return;if(!visible.length)return;event.preventDefault();const rect=element!.getBoundingClientRect(),c=cameraRef.current,unit=event.deltaMode===1?16:event.deltaMode===2?element!.clientHeight:1,zoom=Math.max(.15,Math.min(2.5,c.zoom*Math.exp(-Math.max(-150,Math.min(150,event.deltaY*unit))*.0025))),px=event.clientX-rect.left,py=event.clientY-rect.top;setCamera({x:px-(px-c.x)*zoom/c.zoom,y:py-(py-c.y)*zoom/c.zoom,zoom})}
   element.addEventListener('wheel',wheel,{passive:false});return()=>element.removeEventListener('wheel',wheel)
- },[visible.length])
+ },[visible.length,browseWheel])
  useEffect(()=>{function release(){space.current=false}window.addEventListener('keyup',release);window.addEventListener('blur',release);return()=>{window.removeEventListener('keyup',release);window.removeEventListener('blur',release)}},[])
  useEffect(()=>{if(!menu)return;function outside(event:PointerEvent){if(event.button===0&&!menuElement.current?.contains(event.target as Node))setMenu(null)}document.addEventListener('pointerdown',outside);menuElement.current?.querySelector<HTMLElement>('button:not(:disabled)')?.focus();return()=>document.removeEventListener('pointerdown',outside)},[menu])
  function point(clientX:number,clientY:number){const rect=viewport.current!.getBoundingClientRect(),c=cameraRef.current;return {x:(clientX-rect.left-c.x)/c.zoom,y:(clientY-rect.top-c.y)/c.zoom}}
@@ -97,7 +97,7 @@ export default function TreeCanvas({tree,layout,models={},selected,onSelect,onMo
    {menu.id&&onDelete&&<button role="menuitem" className="bw-danger" disabled={menu.id===tree.root_id} onClick={()=>{onDelete(menu.id!);setMenu(null)}}><Icon name="trash"/>{t('删除节点')}</button>}
    <button role="menuitem" onClick={()=>{fitView();setMenu(null)}}><Icon name="fit"/>{t('适配视图')}</button>
   </div>}
-  <div className="bw-canvas-hint">{dropSlot?t('松开后调整到「{0}」的第 {1} 项',{0:label(dropSlot.parent),1:dropSlot.order}):connection?t('连接到子节点或松开添加'):t('左键拖动 · 滚轮缩放 · 右键菜单')}</div>
+  <div className="bw-canvas-hint">{dropSlot?t('松开后调整到「{0}」的第 {1} 项',{0:label(dropSlot.parent),1:dropSlot.order}):connection?t('连接到子节点或松开添加'):t(browseWheel?'滚轮浏览 · Ctrl/⌘+滚轮缩放 · 拖动平移':'左键拖动 · 滚轮缩放 · 右键菜单')}</div>
   <div className="bw-zoom"><button aria-label={t('缩小')} onClick={()=>zoomBy(1/1.2)}><Icon name="minus"/></button><button title={t('恢复原始比例')} onClick={()=>{const c=cameraRef.current,px=size.width/2,py=size.height/2;setCamera({x:px-(px-c.x)/c.zoom,y:py-(py-c.y)/c.zoom,zoom:1})}}>{Math.round(camera.zoom*100)}%</button><button aria-label={t('放大')} onClick={()=>zoomBy(1.2)}><Icon name="plus"/></button><span/><button title={t('适配视图 F')} aria-label={t('适配视图')} onClick={fitView}><Icon name="fit"/></button></div>
  </div>
 }

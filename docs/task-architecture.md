@@ -75,9 +75,13 @@ HSM 使用流程变量连接阶段之间的数据，ROS 2 任务的输入输出�
 
 HSM 离线检查所有可达路径，必需输入需要初值或可靠的上游来源，实际使用时还需满足值范围与有效期要求
 
-配置了 `stop_observation` 的 Action 可通过 `$stop_observation.after_ns`（`integer`）和 `$stop_observation.pose`（`json`）导出实测静止时刻与 TCP 位姿；位姿输出还需要配置 `base_frame`、`tcp_frame`。这些证据来自任务结束时已有的关节稳定观测，可用于后续观测的时间下限和位置输入，无需再运行相同的稳定等待。证据仅在任务成功且停止确认成功时输出；原生 ROS 响应字段与 `$` 根响应映射保持原义
+配置了 `stop_observation` 的 Action 可通过 `$stop_observation.after_ns`（`integer`）和 `$stop_observation.pose`（`json`）导出实测静止时刻与 TCP 位姿；位姿输出还需配置 `base_frame`、`tcp_frame`
 
-机器人业务计算通过工作区 `extension` 提供，入口为 `module:function`；函数接收 `(payload, stop_event)`，需要当前 ROS 时钟与 TF 查询时可额外声明关键字参数 `context`，使用 `context.now()` 和 `context.transform(parent, child, stamp=None)`。扩展在所选子系统环境中执行并返回 JSON 对象，配置文件路径通过任务的 `path_fields` 显式声明
+输出取自任务结束时的关节稳定观测，后续任务可直接复用观测时间与位姿；仅在任务成功且停止确认成功时输出，原生 ROS 响应字段与 `$` 根响应映射保持原义
+
+机器人业务计算通过工作区 `extension` 提供，入口为 `module:function`；函数接收 `(payload, stop_event)`，需要当前 ROS 时钟与 TF 查询时可额外声明关键字参数 `context`，使用 `context.now()` 和 `context.transform(parent, child, stamp=None)`
+
+扩展在所选子系统环境中执行并返回 JSON 对象，配置文件路径通过任务的 `path_fields` 显式声明
 
 ### 行为树对外输出
 

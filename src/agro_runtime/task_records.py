@@ -3,6 +3,7 @@ import json
 import sqlite3
 
 from .errors import fail
+from .management import timestamp
 
 
 class TaskStore:
@@ -35,19 +36,24 @@ class TaskStore:
         return json.loads(row['snapshot'])
 
     def reserve(self, request_id, identity, fingerprint, snapshot, status):
+        now = timestamp()
+        status.update(started_at=now, updated_at=now, finished_at=None)
         with self.db:
             self.db.execute('INSERT INTO tasks VALUES (?,?,?,?,?)',
                             (request_id, identity, fingerprint, json.dumps(snapshot), json.dumps(status)))
             self.event(identity, {'type': 'task_accepted', 'state': status['state']})
 
     def save(self, identity, status):
+        status['updated_at'] = timestamp()
+        if status['state'] in {'SUCCEEDED', 'FAILED', 'CANCELED', 'STOPPED'} and status.get('stop_confirmed') and not status.get('finished_at'):
+            status['finished_at'] = status['updated_at']
         with self.db:
             self.db.execute('UPDATE tasks SET status=? WHERE task_run_id=?', (json.dumps(status), identity))
 
     def event(self, identity, payload):
         with self.db:
             self.db.execute('INSERT INTO task_events(task_run_id,payload) VALUES (?,?)',
-                            (identity, json.dumps(payload)))
+                            (identity, json.dumps({'timestamp': timestamp(), **payload})))
 
     def events(self, identity):
         return [dict(seq=row['seq'], **json.loads(row['payload'])) for row in self.db.execute(

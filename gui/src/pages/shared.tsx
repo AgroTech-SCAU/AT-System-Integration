@@ -53,11 +53,12 @@ export function useOperation(language: Language) {
   const dialog=(actions?:ReactNode)=><PendingDialog open={open} text={{...messages(language),pendingDescription:phase}} onClose={()=>{observer.current?.abort();setOpen(false)}} actions={actions}/>
   return {busy,error,run,dialog,setError}
 }
-export async function waitJob(client:ApiClient,key:string,phase:(v:string)=>void,signal?:AbortSignal,timeoutMs=30000) {
+export async function waitJob(client:ApiClient,key:string,phase:(v:string)=>void,signal?:AbortSignal,timeoutMs=30000,onJob?:(job:Json)=>void) {
   const deadline=Date.now()+timeoutMs
   while(Date.now()<deadline) {
     signal?.throwIfAborted()
     const job=await client.request<Json>(`/management/jobs/${encodeURIComponent(key)}`,'GET',undefined,signal)
+    onJob?.(job)
     phase(`${job.action} · ${job.phase}`)
     if(job.phase==='completed') return job.result
     if(['failed','rolled_back','blocked'].includes(job.phase)) throw new ApiError('response',job.error?.errors || [{path:'$.management',code:job.phase,reason:job.error?.reason||'操作未完成'}])

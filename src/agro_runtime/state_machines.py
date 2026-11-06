@@ -12,9 +12,39 @@ import time
 from uuid import uuid4
 
 from .errors import fail
+from .management import timestamp
 
 IDENT = re.compile(r'^[a-z][a-z0-9_]{0,63}$')
 ACTIVE = {'ACCEPTED', 'RUNNING', 'CANCELING'}
+
+
+def runtime_view(value, states):
+    """Validate project-owned captions and scalar field formatting for runtime display."""
+    from .configuration import encoded
+    if not isinstance(value,dict) or set(value)-{'badges','metrics','states','outcomes'}:
+        fail('$.layout.runtime_view','invalid_runtime_view','运行视图需要指标、标记及状态说明对象')
+    if len(encoded(value).encode())>65536:
+        fail('$.layout.runtime_view','invalid_runtime_view','运行视图声明不能超过 64 KiB')
+    for group in ('badges','metrics'):
+        items=value.get(group,[])
+        if not isinstance(items,list) or len(items)>32:
+            fail('$.layout.runtime_view.'+group,'invalid_runtime_view','运行视图最多声明 32 个显示字段')
+        for item in items:
+            if (not isinstance(item,dict) or set(item)-{'label','path','values','scale','precision','unit'} or
+                not isinstance(item.get('label'),str) or not isinstance(item.get('path'),str) or
+                not re.fullmatch(r'[A-Za-z_]\w*(?:\.(?:[A-Za-z_]\w*|[0-9]+))*',item['path']) or
+                'unit' in item and not isinstance(item['unit'],str) or
+                'scale' in item and type(item['scale']) not in (int,float) or
+                'precision' in item and (type(item['precision']) is not int or not 0<=item['precision']<=10) or
+                'values' in item and (not isinstance(item['values'],dict) or any(not isinstance(k,str) or not isinstance(v,str) for k,v in item['values'].items()))):
+                fail('$.layout.runtime_view.'+group,'invalid_runtime_view','显示字段需要名称、变量路径及有效的格式声明')
+    for group in ('states','outcomes'):
+        items=value.get(group,{})
+        if (not isinstance(items,dict) or set(items)-set(states) or any(
+            not isinstance(item,dict) or set(item)-{'description','title'} or
+            any(not isinstance(text,str) for text in item.values()) for item in items.values())):
+            fail('$.layout.runtime_view.'+group,'invalid_runtime_view','状态说明需要对应工程中的状态，内容应为文本')
+    return copy.deepcopy(value)
 
 
 def validate(spec, definitions=(), ros_tasks=(), *, ready=True):
@@ -137,9 +167,10 @@ class StateMachines:
         self._behaviors = {}
         self._do_watchers = {}
         self._control_token = None
+        self._event_values = {}
         for item in store.list('hsm_session'):
             if item.get('status') in ('RUNNING', 'ENTERING', 'TRANSITIONING', 'STOPPING'):
-                store.put('hsm_session', item['id'], {**item,'status':'UNKNOWN', 'error':'后台重新启动，不能自动恢复动作，请人工核对设备停止状态'})
+                store.put('hsm_session', item['id'], {**item,'status':'UNKNOWN', 'updated_at':timestamp(), 'error':'后台重新启动，不能自动恢复动作，请人工核对设备停止状态'})
 
     def _robot(self):
         key = self.robots.selected_id()
@@ -176,7 +207,10 @@ class StateMachines:
             for key, point in positions.items()
         ):
             fail('$.layout.positions', 'invalid_layout', '状态画布坐标无效')
-        return self.store.put('state_machine',identity,{'id':identity,'robot_system_id':key,'name':(str(value.get('name') or '未命名状态机'))[:80], 'revision':(previous['revision']+1 if previous else 1),'document':spec, 'layout':{'positions':copy.deepcopy(positions)}})
+        saved_layout={'positions':copy.deepcopy(positions)}
+        if 'runtime_view' in layout:
+            saved_layout['runtime_view']=runtime_view(layout['runtime_view'],valid_ids)
+        return self.store.put('state_machine',identity,{'id':identity,'robot_system_id':key,'name':(str(value.get('name') or '未命名状态机'))[:80], 'revision':(previous['revision']+1 if previous else 1),'document':spec, 'layout':saved_layout})
 
     def delete(self, identity):
         machine = self.get(identity)
@@ -284,8 +318,25 @@ class StateMachines:
     def _persist(self, **changes):
         if not self._session:
             return
+        now = timestamp()
+        if 'active' in changes and changes['active'] != self._session.get('active'):
+            changes['state_entered_at'] = now
+        if changes.get('status') in {'SUCCEEDED','FAILED','STOPPED','CANCELED'} and not self._session.get('finished_at'):
+            changes['finished_at'] = now
+        changes['updated_at'] = now
         self._session.update(changes)
         self.store.put('hsm_session',self._session['id'],self._session)
+
+    def _transition_event(self, **event):
+        """Persist each transition so fast states remain visible between UI polls."""
+        values = {name:value for name,value in self._session['variables'].items()
+                  if value is None or type(value) in (str,int,float,bool)}
+        changes = {name:value for name,value in values.items()
+                   if name not in self._event_values or self._event_values[name] != value}
+        self._event_values = copy.deepcopy(values)
+        events = self._session.get('events', [])
+        sequence = events[-1].get('sequence',len(events)) + 1 if events else 1
+        return events + [{**event, 'sequence':sequence, 'timestamp':timestamp(), 'changes':changes}]
 
     @staticmethod
     def _path(leaf, by_id):
@@ -383,9 +434,15 @@ class StateMachines:
         self._persist(variables=values)
 
     def _behavior_status(self):
-        fields = ('id', 'state_id', 'phase', 'reference', 'status', 'task_run_id', 'operation_id', 'feedback', 'error')
+        fields = ('id', 'state_id', 'phase', 'reference', 'status', 'task_run_id', 'operation_id', 'feedback', 'error',
+                  'started_at', 'updated_at', 'finished_at')
         records = {item['id']: item for item in self._session.get('behaviors', [])}
         for instance in self._behaviors.values():
+            previous=records.get(instance['id'], {})
+            if any(instance.get(name) != previous.get(name) for name in fields if name not in {'updated_at','finished_at'}):
+                instance['updated_at']=timestamp()
+            if instance['status'] not in ACTIVE | {'UNKNOWN'} and not instance.get('finished_at'):
+                instance['finished_at']=timestamp()
             records[instance['id']] = {name: value for name, value in instance.items() if name in fields}
         active = [item for item in records.values() if item['status'] in ACTIVE]
         completed = [item for item in records.values() if item['status'] not in ACTIVE]
@@ -425,7 +482,8 @@ class StateMachines:
         instance = {'id': 'behavior_' + uuid4().hex, 'session_id': self._session['id'],
                     'state_id': state_id, 'phase': stage, 'reference': definition_id,
                     'status': 'RUNNING', 'stop': threading.Event(), 'worker': asyncio.current_task(),
-                    'task_run_id': None, 'operation_id': None, 'feedback': None}
+                    'task_run_id': None, 'operation_id': None, 'feedback': None,
+                    'started_at':timestamp(), 'updated_at':timestamp(), 'finished_at':None}
         self._behaviors[(state_id, stage)] = instance
         self._behavior_status()
         try:
@@ -496,6 +554,8 @@ class StateMachines:
                 self._behavior_status()
             if operation['state'] in ACTIVE:
                 await asyncio.sleep(.05)
+        if operation.get('feedback') is not None:
+            instance['feedback'] = operation['feedback']
         if operation['stop_state'] == 'UNCONFIRMED' or operation['state'] == 'UNKNOWN':
             fail('$.task', 'stop_unconfirmed', 'ROS 行为停止状态未确认')
         if operation.get('error'):
@@ -549,7 +609,9 @@ class StateMachines:
                 if self._stop_requested or self._session['status']!='ENTERING':return
                 if result!='SUCCEEDED': raise RuntimeError('进入动作未成功')
             if self._stop_requested or self._session['status']!='ENTERING':return
-            self._persist(status='RUNNING',active=path[-1],path=path,action=None)
+            self._persist(status='RUNNING',active=path[-1],path=path,action=None,
+                          events=self._transition_event(event='started',source=None,target=path[-1],origin=None,
+                                                        exited=[],retained=[],entered=path))
             await self._launch_do(by_id)
         except Exception as exc:
             await self._abort(exc)
@@ -659,7 +721,11 @@ class StateMachines:
             self._activation+=1
             sid='session_'+uuid4().hex
             self._stop_requested=False
-            self._session={'id':sid,'machine_id':identity,'robot_system_id':self._robot(),'execution_mode':'ROS_ONLY' if mode=='ros_only' else 'MANAGED','status':'ENTERING', 'active':None,'path':[], 'events':[], 'variables':spec.get('variables',{}),'task_run_id':None, 'ros_task_id':None,'ros_feedback':None, 'action':None, 'error':None,'sequence':len(self.store.list('hsm_session'))+1,'pending_events':0,'definition':copy.deepcopy(machine),'dependencies':dependencies,'do_policy':'active_path','behaviors':[]}
+            now=timestamp()
+            self._event_values={name:value for name,value in spec.get('variables',{}).items()
+                                if value is None or type(value) in (str,int,float,bool)}
+            self._session={'id':sid,'machine_id':identity,'robot_system_id':self._robot(),'execution_mode':'ROS_ONLY' if mode=='ros_only' else 'MANAGED','status':'ENTERING', 'active':None,'path':[], 'events':[], 'variables':spec.get('variables',{}),'task_run_id':None, 'ros_task_id':None,'ros_feedback':None, 'action':None, 'error':None,'sequence':len(self.store.list('hsm_session'))+1,'pending_events':0,'definition':copy.deepcopy(machine),'dependencies':dependencies,'do_policy':'active_path','behaviors':[],
+                           'started_at':now,'updated_at':now,'finished_at':None,'state_entered_at':None}
             self._persist(attention=[])
             self._runner=asyncio.create_task(self._enter(spec))
             return self.status()
@@ -724,7 +790,10 @@ class StateMachines:
                 fail('$.event','no_transition','当前状态无满足 Guard 的事件转换')
             current=self._session['active']
             if matching['source'] == matching['target']:
-                self._persist(variables=updated, attention=[item for item in self._session.get('attention', []) if item['state_id'] != source], events=self._session['events'][-49:] + [{'event':name,'source':current,'target':current,'origin':source}])
+                self._persist(variables=updated)
+                self._persist(attention=[item for item in self._session.get('attention', []) if item['state_id'] != source],
+                              events=self._transition_event(event=name,source=current,target=current,origin=source,
+                                  handled_by=matching['source'],exited=[],retained=path,entered=[]))
                 return self.status()
             destination=self._leaf(matching['target'],by_id)
             target_path=self._path(destination,by_id)
@@ -746,9 +815,9 @@ class StateMachines:
                     result=await self._tree(by_id[state].get('entry'),'entry',state)
                     if self._stop_requested:return self.status()
                     if result!='SUCCEEDED':raise RuntimeError('进入动作未成功')
-                events=self._session['events'][-49:]+[{'event':name,'source':current,'target':destination,
-                    'origin':source,'handled_by':matching['source'],'exited':list(reversed(path[common:])),
-                    'retained':path[:common],'entered':target_path[common:]}]
+                events=self._transition_event(event=name,source=current,target=destination,
+                    origin=source,handled_by=matching['source'],exited=list(reversed(path[common:])),
+                    retained=path[:common],entered=target_path[common:])
                 self._persist(status='RUNNING',active=destination,path=target_path,events=events,action=None,
                               attention=[item for item in self._session.get('attention', []) if item['state_id'] in path[:common] and item['state_id'] != source])
                 await self._launch_do(by_id)

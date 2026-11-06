@@ -683,7 +683,8 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
             phase('preparing_subsystems')
             return await deployment.prepare(plan['kind'],plan['reference'],True,inputs=inputs)
         job=management.accept('prepare_subsystems',body.get('request_id') or 'request_'+uuid4().hex,{**plan,'inputs':inputs},work,
-                              on_accept=lambda:setattr(deployment,'stopping',False))
+                              on_accept=lambda:setattr(deployment,'stopping',False),
+                              context={'kind':plan['kind'],'reference':plan['reference'],'robot_system_id':robot_systems.selected_id()})
         return {'management_job_id':job['id'],'accepted':True}
 
     @api.post('/deployment/stop',status_code=202)
@@ -692,7 +693,8 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
         async def work(phase):
             phase('stopping_subsystems')
             return await deployment.stop()
-        job=management.accept('stop_subsystems',body.get('request_id') or 'request_'+uuid4().hex,{},work)
+        job=management.accept('stop_subsystems',body.get('request_id') or 'request_'+uuid4().hex,{},work,
+                              context={'robot_system_id':robot_systems.selected_id()})
         return {'management_job_id':job['id'],'accepted':True}
 
     @api.get('/ros/interface-workspaces/{workspace_id}/environment')
