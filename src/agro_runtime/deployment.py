@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 from uuid import uuid4
 
 from .configuration import encoded
@@ -20,7 +21,8 @@ class Deployment:
         self.store, self.robots, self.ros, self.documents, self.hsm = store, robots, ros_tasks, documents, hsm
         self.root = store.root / 'deployment'
         self.root.mkdir(exist_ok=True)
-        self.manager = LocalProcessManager(state_directory=self.root / 'processes', config_identity='robot-profile')
+        self.manager = LocalProcessManager(state_directory=self.root / 'processes', config_identity='robot-profile',
+                                           stop_signal=signal.SIGINT)
         self.lock = asyncio.Lock()
         self.stopping = False
         self.monitor = None

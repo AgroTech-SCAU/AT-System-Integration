@@ -85,11 +85,12 @@ class SnapshotStore:
 
 class LocalProcessManager:
     """管理根进程组，持久身份避免 Agent 重启后重复启动"""
-    def __init__(self, *, state_directory=None, config_identity=None):
+    def __init__(self, *, state_directory=None, config_identity=None, stop_signal=signal.SIGTERM):
         self.processes = {}
         self.identities = {}
         self.locks = {}
         self.config_identity = config_identity
+        self.stop_signal = stop_signal
         self.directory = Path(state_directory) if state_directory else None
         if self.directory:
             self.directory.mkdir(parents=True, exist_ok=True)
@@ -208,7 +209,7 @@ class LocalProcessManager:
             self._forget(name)
             return
         try:
-            os.killpg(record['pid'], signal.SIGTERM)
+            os.killpg(record['pid'], self.stop_signal)
         except ProcessLookupError:
             pass
         deadline = asyncio.get_running_loop().time() + descriptor.stop_timeout_s
