@@ -114,7 +114,7 @@ export default function RuntimeConsole({client,observation,language,onNavigate,i
    }else{
     const request='request_'+crypto.randomUUID().replaceAll('-','')
     let next:Json
-    try{next=await client.request<Json>(`/trees/definitions/${selectedReference}/start`,'POST',{request_id:request,confirm_safety:confirmed})}
+    try{next=await client.request<Json>(`/trees/definitions/${selectedReference}/start`,'POST',{request_id:request,confirm_safety:confirmed},undefined,120000)}
     catch(cause){if(!(cause instanceof ApiError)||cause.kind!=='offline')throw cause;const found=await client.request<Json>('/tasks/by-request/'+request);if(!found.found)throw cause;next=found.task}
     updateTaskRun(next);setTask(next)
    }

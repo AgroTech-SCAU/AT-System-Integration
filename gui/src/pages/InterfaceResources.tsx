@@ -81,7 +81,7 @@ export default function InterfaceResources({client,robotId,location}: {client:Ap
     setBusy(true);setError(null);setNotice('')
     try{await action()}catch(cause){if(alive.current)setError(cause)}finally{if(alive.current)setBusy(false)}
   }
-  function create(mode:typeof editor){setEditor(mode);setName('');setIcon('generic');setPath('');setDetected(null);setFiles([]);setPackageName('');setNotice('');setError(null)}
+  async function create(mode:typeof editor){if(!await requestNavigation('agro:workspace:leave'))return;setEditor(mode);setName('');setIcon('generic');setPath('');setDetected(null);setFiles([]);setPackageName('');setNotice('');setError(null)}
   async function register(){
     let mode=editor,sourcePath=path.trim()
     if(mode==='auto'){

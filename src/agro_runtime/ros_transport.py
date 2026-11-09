@@ -47,16 +47,42 @@ def _matches_value(value, cond):
     return value > right if op == 'greater' else value < right
 
 
-def _run_task(data, stop, feedback=None, *, context=None, unconfirmed=None, completed=None):
+class RosSession:
+    """One workspace worker owns a ROS participant and its reusable endpoints."""
+    def __init__(self, domain_id, use_sim_time=False):
+        rclpy, _, _, _ = _ros_modules()
+        from rclpy.executors import SingleThreadedExecutor
+        from rclpy.parameter import Parameter
+        self.context=rclpy.context.Context()
+        rclpy.init(context=self.context, **({'domain_id':domain_id} if domain_id is not None else {}))
+        self.node=rclpy.create_node('atil_workspace_'+uuid4().hex[:8],context=self.context,
+                                   parameter_overrides=[Parameter('use_sim_time',value=use_sim_time)])
+        self.executor=SingleThreadedExecutor(context=self.context);self.executor.add_node(self.node)
+        self.entities={}
+
+    def entity(self, kind, key, create):
+        identity=(kind,*key)
+        if identity not in self.entities:self.entities[identity]=create()
+        return self.entities[identity]
+
+    def close(self):
+        import rclpy
+        for identity,entity in self.entities.items():
+            if identity[0]=='action':entity.destroy()
+        self.executor.shutdown();self.node.destroy_node();rclpy.shutdown(context=self.context)
+
+
+def _run_task(data, stop, feedback=None, *, context=None, unconfirmed=None, completed=None, session=None):
     rclpy, (get_message, get_service, get_action), fill, _ = _ros_modules()
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.action import ActionClient
-    owns_context=context is None
+    owns_context=context is None and session is None
     if owns_context:
         context = rclpy.context.Context()
         rclpy.init(context=context)
     node = None
     executor = None
+    subscription = None
     action_goal = None
     kind = data['kind']
     deadline = time.monotonic() + data.get('timeout_s', 15)
@@ -76,11 +102,15 @@ def _run_task(data, stop, feedback=None, *, context=None, unconfirmed=None, comp
             fail('$.payload', 'invalid_fields', '消息字段与 ROS 2 接口定义不匹配: ' + str(exc))
         return msg
     try:
-        from rclpy.parameter import Parameter
-        node = rclpy.create_node('atil_task_' + uuid4().hex[:8], context=context,
-                                 parameter_overrides=[Parameter('use_sim_time', value=data.get('_use_sim_time',False))])
-        executor = SingleThreadedExecutor(context=context)
-        executor.add_node(node)
+        if session:
+            node,executor=session.node,session.executor
+            executor.spin_once(timeout_sec=0)
+        else:
+            from rclpy.parameter import Parameter
+            node = rclpy.create_node('atil_task_' + uuid4().hex[:8], context=context,
+                                     parameter_overrides=[Parameter('use_sim_time', value=data.get('_use_sim_time',False))])
+            executor = SingleThreadedExecutor(context=context)
+            executor.add_node(node)
         try:
             from .data_contracts import field_at_path, semantic_reason
         except ImportError:
@@ -113,7 +143,9 @@ def _run_task(data, stop, feedback=None, *, context=None, unconfirmed=None, comp
             cls = get_message(ros_type)
             from rclpy.qos import QoSProfile, ReliabilityPolicy
             qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT if data.get('qos_reliability') == 'best_effort' else ReliabilityPolicy.RELIABLE)
-            pub = node.create_publisher(cls, interface, qos)
+            pub = (session.entity('publisher',(ros_type,interface,data.get('qos_reliability')),
+                                  lambda:node.create_publisher(cls,interface,qos)) if session else
+                   node.create_publisher(cls, interface, qos))
             msg = message(cls, data.get('payload', {}))
             if kind == 'publish_once':
                 if stop.is_set(): return 'CANCELED'
@@ -143,13 +175,15 @@ def _run_task(data, stop, feedback=None, *, context=None, unconfirmed=None, comp
                 if _matches(msg, data.get('condition', {})):
                     response = _message_as_dict(msg)
                     matched.set()
-            sub = node.create_subscription(cls, interface, observe, qos)
+            # A new reader cannot consume a previous task's queued volatile samples
+            subscription=node.create_subscription(cls, interface, observe, qos)
             while not matched.is_set() and not stop.is_set() and remaining() > 0:
                 executor.spin_once(timeout_sec=min(.05, remaining()))
             return outcome({'state': 'CANCELED' if stop.is_set() else 'SUCCEEDED' if matched.is_set() else 'FAILED', 'response': response})
         if kind == 'service':
             cls = get_service(ros_type)
-            client = node.create_client(cls, interface)
+            client = (session.entity('service',(ros_type,interface),lambda:node.create_client(cls,interface))
+                      if session else node.create_client(cls, interface))
             readonly = data.get('execution_policy', {}).get('readonly') is True
 
             def ended_wait():
@@ -190,7 +224,8 @@ def _run_task(data, stop, feedback=None, *, context=None, unconfirmed=None, comp
             return value
         if kind == 'action':
             cls = get_action(ros_type)
-            client = ActionClient(node, cls, interface)
+            client = (session.entity('action',(ros_type,interface),lambda:ActionClient(node,cls,interface))
+                      if session else ActionClient(node, cls, interface))
             while not client.wait_for_server(timeout_sec=.1):
                 if stop.is_set(): return 'CANCELED'
                 if remaining() <= 0: return 'FAILED'
@@ -262,8 +297,10 @@ def _run_task(data, stop, feedback=None, *, context=None, unconfirmed=None, comp
             return outcome(result_value)
         raise ValueError('unsupported ROS task')
     finally:
-        if executor:
+        if subscription is not None and session:
+            node.destroy_subscription(subscription)
+        if executor and not session:
             executor.shutdown()
-        if node:
+        if node and not session:
             node.destroy_node()
         if owns_context:rclpy.shutdown(context=context)

@@ -6,9 +6,33 @@
 
 你可以离线读取接口、填写任务参数和编排流程；运行时由工作台准备所需环境、启动模块并执行工作流，重试、并行和多步骤子流程可用行为树组合
 
+## 版本与授权
+
+当前版本为 `v0.1.0`，项目采用 [GNU General Public License Version 3](LICENSE)，原文日期为 29 June 2007；GUI 引用来源与第三方授权保留在 [THIRD_PARTY_NOTICES.md](gui/THIRD_PARTY_NOTICES.md)
+
 ## 安装与启动
 
-在 Ubuntu 桌面准备 Python、Node.js、npm、CMake、C++ 编译环境、libcurl 开发包和 Electron 图形依赖
+当前验证环境为 Ubuntu 22.04 图形桌面；安装需要 Python 3.10 或以上、Node.js 22.x（至少 22.12）或 24 及以上版本、npm、CMake 3.16.3 或以上和 C++17 编译环境
+
+先安装 Ubuntu 22.04 的系统依赖
+
+```bash
+sudo apt update
+sudo apt install python3 python3-venv build-essential cmake pkg-config \
+  libcurl4-openssl-dev ca-certificates \
+  libgtk-3-0 libnss3 libgbm1 libasound2 libxss1 libxtst6
+```
+
+Node.js 与 npm 按 [Node.js 官方下载页](https://nodejs.org/en/download) 的 Linux 安装步骤准备，可选择 22.x（至少 22.12）或 24.x；Ubuntu 22.04 默认软件源中的 Node.js 版本不满足本项目要求，安装后在新终端核对版本
+
+```bash
+python3 --version
+node --version
+npm --version
+cmake --version
+```
+
+桌面窗口需要可用的图形会话；在其他 Ubuntu 版本上准备依赖时，使用该版本对应的包名，例如 Ubuntu 24.04 的 GTK 与音频库为 `libgtk-3-0t64`、`libasound2t64`
 
 进入本仓库目录，依次执行
 
@@ -26,6 +50,17 @@
 打开工程用于恢复已保存的配置；准备好配置后，在运行台确认设备环境并开始运行，工作台才会准备子系统和工作流
 
 若移动了软件仓库，启动时提示安装目录不匹配，在新位置重新执行 `./install.sh`
+
+安装脚本会重新创建路径不匹配的 task-engine 构建目录；安装目录下保存运行记录与配置的 `state/` 保留，机器人工程仍保存在原工程目录
+
+默认安装位置为仓库内 `.install/`；需要自定义位置时，安装、启动和以后重装均传入相同的 `AGRO_INSTALL_DIR`，该变量不会自动保存，也不会迁移已有运行记录或配置
+
+```bash
+AGRO_INSTALL_DIR=/absolute/path/to/atil-install ./install.sh
+AGRO_INSTALL_DIR=/absolute/path/to/atil-install ./launch.sh
+```
+
+首次安装需要下载 Python 与 npm 依赖、Electron 运行时和 BehaviorTree.CPP 源码；已准备 BehaviorTree.CPP 4.7.0 源码时，可通过 `./install.sh --bt-source /absolute/path/to/BehaviorTree.CPP` 使用本地源码，其余依赖仍需可访问的下载源或缓存
 
 ## 先认识四个对象
 

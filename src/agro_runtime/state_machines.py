@@ -153,6 +153,8 @@ def validate(spec, definitions=(), ros_tasks=(), *, ready=True):
 class StateMachines:
     def __init__(self, context, store, robot_systems, documents, tasks, ros_tasks=None):
         self.context, self.store = context, store
+        from .session_records import SessionRecords
+        self.sessions = SessionRecords(store)
         self.robots, self.documents, self.tasks = robot_systems, documents, tasks
         self.ros_tasks = ros_tasks
         self._lock = asyncio.Lock()
@@ -169,9 +171,9 @@ class StateMachines:
         self._do_watchers = {}
         self._control_token = None
         self._event_values = {}
-        for item in store.list('hsm_session'):
+        for item in self.sessions.list():
             if item.get('status') in ('RUNNING', 'ENTERING', 'TRANSITIONING', 'STOPPING'):
-                store.put('hsm_session', item['id'], {**item,'status':'UNKNOWN', 'updated_at':timestamp(), 'error':'后台重新启动，不能自动恢复动作，请人工核对设备停止状态'})
+                self.sessions.save({**item,'status':'UNKNOWN', 'updated_at':timestamp(), 'error':'后台重新启动，不能自动恢复动作，请人工核对设备停止状态'})
 
     def _robot(self):
         key = self.robots.selected_id()
@@ -309,15 +311,24 @@ class StateMachines:
     def running(self):
         return self._starting or self._session is not None and self._session.get('status') in ('RUNNING','ENTERING','TRANSITIONING','STOPPING')
 
-    def status(self):
+    def _status_record(self):
         key = self.robots.selected_id()
         if self._session and self._session['robot_system_id'] == key:
-            return copy.deepcopy(self._session)
-        previous = [s for s in self.store.list('hsm_session') if s.get('robot_system_id') == key]
+            return self._session
+        previous = [s for s in self.sessions.list() if s.get('robot_system_id') == key]
         return sorted(previous,key=lambda s:s.get('sequence',0))[-1] if previous else None
+
+    def status(self):
+        return json.loads(self.status_json())
+
+    def status_json(self, operations=None):
+        return self.sessions.json(self._status_record(), operations)
 
     def _persist(self, **changes):
         if not self._session:
+            return
+        from .configuration import encoded
+        if changes and encoded(changes)==encoded({name:self._session[name] for name in changes if name in self._session}):
             return
         now = timestamp()
         if 'active' in changes and changes['active'] != self._session.get('active'):
@@ -326,7 +337,7 @@ class StateMachines:
             changes['finished_at'] = now
         changes['updated_at'] = now
         self._session.update(changes)
-        self.store.put('hsm_session',self._session['id'],self._session)
+        self.sessions.save(self._session)
 
     def _transition_event(self, **event):
         """Persist each transition so fast states remain visible between UI polls."""
@@ -497,7 +508,10 @@ class StateMachines:
             else:
                 parameters = self._inputs(frozen.get('manifest', {}).get('parameters', {}), state_id, stage, frozen.get('parameters', {}))
                 self._clear_outputs(state_id, stage)
-                request = self.documents.definition_request(frozen['id'], 'hsm_' + uuid4().hex, parameters=parameters)
+                request = await self.documents.definition_request(frozen['id'], 'hsm_' + uuid4().hex, parameters=parameters)
+                if instance['stop'].is_set() or self._stop_requested:
+                    instance['status']='CANCELED'
+                    return 'CANCELED'
                 token = self._acquire_control(frozen.get('manifest', {}).get('timeout_ms', 30000) / 1000)
                 async with self.context.transition:
                     task = await self.tasks.start_task(request, self._session['id'], standalone=standalone, control_token=token)
@@ -548,13 +562,11 @@ class StateMachines:
         while operation['state'] in ACTIVE:
             if instance['stop'].is_set() or self._stop_requested:
                 self.documents.ros_operations.cancel(operation['operation_id'])
-            operation = self.documents.ros_operations.snapshot(operation['operation_id'])
+            operation = await self.documents.ros_operations.wait(operation['operation_id'])
             if operation.get('feedback') and time.monotonic() - last_feedback > .35:
                 last_feedback = time.monotonic()
                 instance['feedback'] = operation['feedback']
                 self._behavior_status()
-            if operation['state'] in ACTIVE:
-                await asyncio.sleep(.05)
         if operation.get('feedback') is not None:
             instance['feedback'] = operation['feedback']
         if operation['stop_state'] == 'UNCONFIRMED' or operation['state'] == 'UNKNOWN':
@@ -651,7 +663,7 @@ class StateMachines:
                     self._behavior_status()
                 route = self._path(owner, by_id)
                 if any(edge['event'] == name and edge['source'] in route for edge in self._spec['transitions']):
-                    await self.event(name, {}, source=owner, instance_id=instance['id'])
+                    await self.event(name, {}, source=owner, instance_id=instance['id'],include_session=False)
                 elif name == 'failed':
                     self._unhandled_failure(owner)
             except asyncio.CancelledError:
@@ -695,26 +707,27 @@ class StateMachines:
                 fail('$.task','task_busy','仍有任务在执行或停止结果未确认，不能开始新的状态机')
             if any(r['snapshot']['state']=='UNKNOWN' or r['snapshot']['stop_state']=='UNCONFIRMED' for r in self.store.list('ros_operation')):
                 fail('$.task','task_busy','ROS 能力仍在执行或停止结果未确认')
-            by_id={s['id']:s for s in spec['states']}
             dependencies={}
-            for state in spec['states']:
-                for phase in ('entry','do','exit'):
-                    ref=state.get(phase)
-                    if not ref or ref in dependencies:continue
-                    if ref.startswith('ros:'):
-                        dependencies[ref]=self.ros_tasks.freeze(ref[4:])
-                    else:
-                        dependencies[ref]=self.documents.prepare_behavior(ref)
-                        if mode=='ros_only' and self.documents.requires_system(dependencies[ref]['document']):
-                            fail('$.tree','system_required','此行为树包含需要已就绪系统的能力，请先应用机器人配置')
-            if self.ros_tasks:
-                task_set = []
-                for ref, dependency in dependencies.items():
-                    task_set.extend([dependency] if ref.startswith('ros:') else dependency.get('ros_tasks', []))
-                self.ros_tasks.validate_task_workspaces(task_set)
             self._starting=True
             self._stop_requested=False
             try:
+                for state in spec['states']:
+                    for phase in ('entry','do','exit'):
+                        ref=state.get(phase)
+                        if not ref or ref in dependencies:continue
+                        if ref.startswith('ros:'):
+                            dependencies[ref]=self.ros_tasks.freeze(ref[4:])
+                        else:
+                            dependencies[ref]=await self.documents.prepare_behavior(ref)
+                            if self._stop_requested:
+                                fail('$.machine','start_canceled','启动已取消，未派发流程行为')
+                            if mode=='ros_only' and self.documents.requires_system(dependencies[ref]['document']):
+                                fail('$.tree','system_required','此行为树包含需要已就绪系统的能力，请先应用机器人配置')
+                if self.ros_tasks:
+                    task_set = []
+                    for ref, dependency in dependencies.items():
+                        task_set.extend([dependency] if ref.startswith('ros:') else dependency.get('ros_tasks', []))
+                    self.ros_tasks.validate_task_workspaces(task_set)
                 for ref, dependency in dependencies.items():
                     if ref.startswith('ros:'):
                         await self.ros_tasks.verify_support_async(dependency)
@@ -733,13 +746,13 @@ class StateMachines:
             now=timestamp()
             self._event_values={name:value for name,value in spec.get('variables',{}).items()
                                 if value is None or type(value) in (str,int,float,bool)}
-            self._session={'id':sid,'machine_id':identity,'robot_system_id':self._robot(),'execution_mode':'ROS_ONLY' if mode=='ros_only' else 'MANAGED','status':'ENTERING', 'active':None,'path':[], 'events':[], 'variables':spec.get('variables',{}),'task_run_id':None, 'ros_task_id':None,'ros_feedback':None, 'action':None, 'error':None,'sequence':len(self.store.list('hsm_session'))+1,'pending_events':0,'definition':copy.deepcopy(machine),'dependencies':dependencies,'do_policy':'active_path','behaviors':[],
+            self._session={'id':sid,'machine_id':identity,'robot_system_id':self._robot(),'execution_mode':'ROS_ONLY' if mode=='ros_only' else 'MANAGED','status':'ENTERING', 'active':None,'path':[], 'events':[], 'variables':spec.get('variables',{}),'task_run_id':None, 'ros_task_id':None,'ros_feedback':None, 'action':None, 'error':None,'sequence':len(self.sessions.list())+1,'pending_events':0,'definition':copy.deepcopy(machine),'dependencies':dependencies,'do_policy':'active_path','behaviors':[],
                            'started_at':now,'updated_at':now,'finished_at':None,'state_entered_at':None}
             self._persist(attention=[])
             self._runner=asyncio.create_task(self._enter(spec))
             return self.status()
 
-    async def event(self,name,values,*,activation=None,source=None,instance_id=None):
+    async def event(self,name,values,*,activation=None,source=None,instance_id=None,include_session=True):
         if not isinstance(name,str) or not IDENT.fullmatch(name):
             fail('$.event','invalid_event','事件名称无效')
         if self._starting or not self.running() or self._stop_requested:
@@ -756,7 +769,7 @@ class StateMachines:
         self._persist(pending_events=len(self._events))
         if not self._pending_event or self._pending_event.done():
             self._pending_event=asyncio.create_task(self._drain_events())
-        return {'accepted':True,'queued':len(self._events),'session':self.status()}
+        return {'accepted':True,'queued':len(self._events),**({'session':self.status()} if include_session else {})}
 
     async def _drain_events(self):
         while self._events and self.running() and not self._stop_requested:
@@ -795,7 +808,7 @@ class StateMachines:
             if not matching:
                 if source and name == 'failed':
                     self._unhandled_failure(source)
-                    return self.status()
+                    return
                 fail('$.event','no_transition','当前状态无满足 Guard 的事件转换')
             current=self._session['active']
             if matching['source'] == matching['target']:
@@ -803,7 +816,7 @@ class StateMachines:
                 self._persist(attention=[item for item in self._session.get('attention', []) if item['state_id'] != source],
                               events=self._transition_event(event=name,source=current,target=current,origin=source,
                                   handled_by=matching['source'],exited=[],retained=path,entered=[]))
-                return self.status()
+                return
             destination=self._leaf(matching['target'],by_id)
             target_path=self._path(destination,by_id)
             common=0
@@ -815,14 +828,14 @@ class StateMachines:
                 for state_id in path[common:]:
                     self._behaviors.pop((state_id, 'do'), None)
                     self._do_watchers.pop(state_id, None)
-                if self._stop_requested:return self.status()
+                if self._stop_requested:return
                 for state in reversed(path[common:]):
                     result=await self._tree(by_id[state].get('exit'),'exit',state)
-                    if self._stop_requested:return self.status()
+                    if self._stop_requested:return
                     if result!='SUCCEEDED':raise RuntimeError('退出动作未成功')
                 for state in target_path[common:]:
                     result=await self._tree(by_id[state].get('entry'),'entry',state)
-                    if self._stop_requested:return self.status()
+                    if self._stop_requested:return
                     if result!='SUCCEEDED':raise RuntimeError('进入动作未成功')
                 events=self._transition_event(event=name,source=current,target=destination,
                     origin=source,handled_by=matching['source'],exited=list(reversed(path[common:])),
@@ -830,7 +843,7 @@ class StateMachines:
                 self._persist(status='RUNNING',active=destination,path=target_path,events=events,action=None,
                               attention=[item for item in self._session.get('attention', []) if item['state_id'] in path[:common] and item['state_id'] != source])
                 await self._launch_do(by_id)
-                return self.status()
+                return
             except Exception as exc:
                 await self._abort(exc)
                 raise

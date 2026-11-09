@@ -6,7 +6,7 @@ bt_source=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --help|-h)
-            printf '%s\n' '用法: ./install.sh [--bt-source 已下载的BehaviorTree.CPP源码目录]' '默认安装到仓库内 .install/，AGRO_INSTALL_DIR 可指定其他位置' '完成后直接执行 ./launch.sh，无需激活环境或填写路径'
+            printf '%s\n' '用法: ./install.sh [--bt-source 已下载的BehaviorTree.CPP源码目录]' '默认安装到仓库内 .install/，完成后执行 ./launch.sh，无需激活环境' 'AGRO_INSTALL_DIR 可指定其他位置；以后启动和重装时仍需传入相同的 AGRO_INSTALL_DIR'
             exit 0 ;;
         --bt-source)
             [[ $# -ge 2 ]] || { printf '%s\n' '--bt-source 缺少目录' >&2; exit 2; }
@@ -40,6 +40,21 @@ if [[ -n "$bt_source" ]]; then
     bt_source="$(cd -- "$bt_source" && pwd)"
     cmake_options+=("-DFETCHCONTENT_SOURCE_DIR_BEHAVIORTREE_CPP=$bt_source")
 fi
+python3 - "$installation_directory/task-engine" "$project_directory/task_engine" <<'PY'
+import shutil
+import sys
+from pathlib import Path
+
+build, source = (Path(value).resolve() for value in sys.argv[1:])
+cache_file = build / 'CMakeCache.txt'
+if cache_file.is_file():
+    cache = dict(line.split('=', 1) for line in cache_file.read_text().splitlines()
+                 if line.startswith(('CMAKE_CACHEFILE_DIR:INTERNAL=', 'CMAKE_HOME_DIRECTORY:INTERNAL=')))
+    if (cache.get('CMAKE_CACHEFILE_DIR:INTERNAL') != str(build)
+            or cache.get('CMAKE_HOME_DIRECTORY:INTERNAL') != str(source)):
+        print('检测到软件位置变化，重建 task-engine 构建目录；运行状态目录保持不变', flush=True)
+        shutil.rmtree(build)
+PY
 cmake -S "$project_directory/task_engine" -B "$installation_directory/task-engine" "${cmake_options[@]}"
 cmake --build "$installation_directory/task-engine" --parallel "${AGRO_BUILD_JOBS:-2}"
 "$installation_directory/venv/bin/python" - "$installation_directory" "$project_directory" "$gui_directory" <<'PY'
@@ -57,4 +72,9 @@ temporary = path.with_suffix('.tmp')
 temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
 temporary.replace(path)
 PY
-printf '%s\n' "安装完成: $installation_directory" '现在执行 ./launch.sh 即可打开 GUI'
+printf '%s\n' "安装完成: $installation_directory"
+if [[ "$installation_directory" == "$project_directory/.install" ]]; then
+    printf '%s\n' '现在执行 ./launch.sh 即可打开 GUI'
+else
+    printf '启动时使用相同安装目录: AGRO_INSTALL_DIR=%q ./launch.sh\n' "$installation_directory"
+fi

@@ -32,6 +32,7 @@ class Deployment:
         self.reason = ''
         self.robot_system_id = None
         self.progress = None
+        self._health_checked_at = {}
 
     def _progress(self, phase, *, reset=False, **changes):
         now = timestamp()
@@ -463,7 +464,7 @@ class Deployment:
                     if not identity.startswith('draft_'):
                         self._progress('checking',current={'id':identity,'name':identity,'kind':'tree'},
                                        completed=index,total=len(references),deadline_at=None,health=None)
-                        self.documents.definition_request(identity, 'deployment_preflight')
+                        await self.documents.definition_request(identity, 'deployment_preflight')
                         self._progress('checking',completed=index+1)
                 for task in task_values:
                     if self.stopping:raise RuntimeError('启动已取消')
@@ -541,9 +542,11 @@ class Deployment:
         if not module.get('provides') and not module.get('health_checks'):
             return {'ready':not module.get('oneshot'), 'missing':[], 'level':'process'}
         config = config or self.ros.environments.snapshot(workspace_id=module['workspace_id'])
-        return await asyncio.to_thread(self.ros.environments.call, config, {'op':'ready',
+        health = await asyncio.to_thread(self.ros.environments.call, config, {'op':'ready',
             'endpoints':module.get('provides',[]), 'health_checks':module.get('health_checks',[]),
             'domain_id':self.ros.connection()['domain_id']})
+        self._health_checked_at[module['id']]=asyncio.get_running_loop().time()
+        return {**health,'checked_at':timestamp()}
 
     async def watch(self):
         deadlines = {}
@@ -552,22 +555,34 @@ class Deployment:
             for record in self.store.list('deployment_module'):
                 identity = record['id']
                 if identity not in self.manager.identities or identity not in modules:continue
+                health = None
                 try:
                     if not (await self.manager.status(identity,RuntimeDescriptor(**record['descriptor'])))['running']:
                         raise RuntimeError('模块进程已退出')
                     now=asyncio.get_running_loop().time()
-                    if now < deadlines.get(identity,0):continue
                     module=modules[identity]
+                    if identity not in deadlines:
+                        deadlines[identity]=self._health_checked_at.get(identity,now)+module.get('health_interval_s',5)
+                    if now < deadlines.get(identity,0):continue
                     health=await self.probe(module)
                     if self.stopping or self.state!='READY':return
                     deadlines[identity]=now+module.get('health_interval_s',5)
                     self.store.put('deployment_module',identity,{**record,'health':health,'updated_at':timestamp()})
-                    if not health['ready']:raise RuntimeError('健康条件失效：'+'、'.join(health['missing']))
+                    if not health['ready']:
+                        notes=[]
+                        for sample in health.get('details',[]):
+                            if 'topic '+sample['name'] not in health['missing']:continue
+                            age=sample.get('sample_age_s')
+                            if age is None:notes.append(sample['name']+' 尚未收到首帧')
+                            elif age>sample['max_age_s']:notes.append(f"{sample['name']} 最近消息 {age:.3f} 秒，有效期 {sample['max_age_s']:.3f} 秒")
+                            elif not sample.get('condition_met'):notes.append(sample['name']+' 最新消息不满足条件')
+                        raise RuntimeError('健康条件失效：'+'、'.join(health['missing'])+('（'+'；'.join(notes)+'）' if notes else ''))
                 except Exception as error:
                     self.state='FAILED';self.reason=record['name']+' · '+str(error)
+                    failure={**(health or {}),'ready':False,'reason':str(error)}
                     self._progress('failed',current={'id':identity,'name':record['name'],'kind':'module'},
-                                   deadline_at=None,health={'ready':False,'reason':str(error)})
-                    self.store.put('deployment_module',identity,{**record,'state':'FAILED','updated_at':timestamp(),'health':{'ready':False,'reason':str(error)}})
+                                   deadline_at=None,health=failure)
+                    self.store.put('deployment_module',identity,{**record,'state':'FAILED','updated_at':timestamp(),'health':failure})
                     if self.hsm.running():self.hsm.request_stop()
                     await self.robots.context.tasks.stop_all()
                     return
@@ -597,9 +612,17 @@ class Deployment:
                 self._progress('confirm_stop',deadline_at=None,health={'ready':False,'reason':str(error)})
                 raise
             errors=[]
-            records=[record for record in reversed(self.store.list('deployment_module'))
+            records=[record for record in self.store.list('deployment_module')
                      if record.get('robot_system_id')==self.robot_system_id and
                      (record['id'] in self.manager.identities or record.get('state')!='STOPPED')]
+            controlled={record['id']:record for record in records}
+            catalog={module['id']:module for module in self.store.list('subsystem_module')
+                     if module.get('robot_system_id')==self.robot_system_id}
+            modules={identity:{'dependencies':[dependency for dependency in
+                        record['descriptor'].get('dependencies',catalog.get(identity,{}).get('dependencies',[]))
+                        if dependency in controlled]}
+                     for identity,record in controlled.items()}
+            records=[controlled[identity] for identity in reversed(self.order(controlled,modules))]
             completed=0
             for record in records:
                 deadline_at=self._deadline(record['descriptor'].get('stop_timeout_s',15))

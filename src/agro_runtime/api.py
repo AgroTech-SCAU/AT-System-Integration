@@ -11,7 +11,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel, ConfigDict, Field
@@ -544,7 +544,8 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
                 finally:
                     store.delete('tree_draft',draft['id'])
             standalone=runtime.state=='STOPPED' and not robot_systems.selected().get('configured')
-            result=await tasks.start_task(documents.definition_request(definition['id'],body.request_id),owner,standalone=standalone)
+            request=await documents.definition_request(definition['id'],body.request_id)
+            result=await tasks.start_task(request,owner,standalone=standalone)
             return result
 
     @api.get('/ros/tasks')
@@ -829,11 +830,11 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     @api.get('/studio/flow-runs')
     async def studio_flow_runs():
         key=robot_systems.selected_id()
-        return {'runs':[{k:item.get(k) for k in ('id','machine_id','status','sequence','active','error')} | {'name':item.get('definition',{}).get('name','状态流程')} for item in store.list('hsm_session') if key and item.get('robot_system_id')==key]}
+        return {'runs':[{k:item.get(k) for k in ('id','machine_id','status','sequence','active','error')} | {'name':item.get('definition',{}).get('name','状态流程')} for item in hsm.sessions.list() if key and item.get('robot_system_id')==key]}
 
     @api.get('/studio/flow-runs/{run_id}')
     async def studio_flow_run(run_id: str):
-        result=store.get('hsm_session',run_id)
+        result=hsm.sessions.get(run_id)
         if not robot_systems.selected_id() or result.get('robot_system_id')!=robot_systems.selected_id():
             fail('$.run','ownership','运行记录不属于当前机器人')
         return {**result,'operations':ros_operations.operations(run_id)}
@@ -854,9 +855,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     @api.get('/state-machines/status')
     async def hsm_status():
-        session=hsm.status()
-        if session:session={**session,'operations':ros_operations.operations(session['id'])}
-        return JSONResponse({'session':session})
+        return Response('{"session":'+hsm.status_json(ros_operations.operations_json)+'}',media_type='application/json')
 
     @api.post('/state-machines/{machine_id}/start',status_code=202)
     async def hsm_start(machine_id: str,body: StateMachineStart):
@@ -1040,7 +1039,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     async def definition_preflight(key: str):
         # Validate the immutable definition, matching its eventual start path,
         # but never dispatch any operation or change the runtime mode.
-        documents.definition_request(key,'preflight_check')
+        await documents.definition_request(key,'preflight_check')
         return {'valid':True,'definition_id':key}
 
     class TreeRunIntent(TaskIntent):
@@ -1055,7 +1054,8 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
         if standalone and not body.confirm_safety:
             fail('$.safety','confirmation_required','启动 ROS 行为前需确认实体急停与通信失联保护')
         async with runtime.transition:
-            return await tasks.start_task(documents.definition_request(key,body.request_id),owner,standalone=standalone)
+            request=await documents.definition_request(key,body.request_id)
+            return await tasks.start_task(request,owner,standalone=standalone)
 
     app.include_router(api)
     directory = gui_directory(ui_directory)

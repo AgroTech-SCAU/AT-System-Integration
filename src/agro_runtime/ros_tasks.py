@@ -662,12 +662,13 @@ class RosTasks:
         original = definition if definition is not None else self.get(task_id)
         if getattr(self.robots, 'deployment', None):
             await self.robots.deployment.require_tasks_ready([original])
-        data = prepared_task(original, inputs, self.validate_structure(original))
+        schema = self.validate_structure(original)
+        data = prepared_task(original, inputs, schema)
         data.setdefault('_ros_domain', self.connection()['domain_id'])
         data.setdefault('_use_sim_time', self.connection().get('use_sim_time',False))
         if self.environments:
             data.setdefault('_execution_environment', self.environments.snapshot(data))
-            data['_expected_schemas'] = {data['ros_type']: self.validate_structure(original)} if data['kind']!='compute' else {}
+            data['_expected_schemas'] = {data['ros_type']: schema} if data['kind']!='compute' else {}
             if data.get('schema_id'):
                 from .ros_interfaces import InterfaceLibrary
                 record = self.store.get('ros_schema', data['schema_id'])
@@ -692,7 +693,8 @@ class RosTasks:
                 if result['state'] == 'SUCCEEDED':
                     stop_evidence = measured.get('response', {})
                 if result.get('error',{}).get('code')=='stop_unconfirmed':
-                    result['error']={'code':'action_failed','reason':'动作未成功完成，已确认关节停止','retryable':False} if result['state']=='FAILED' else None
+                    reason=result['error'].get('reason') or result.get('response',{}).get('message') or '动作未成功完成'
+                    result['error']={'code':'action_failed','reason':str(reason)+'；已确认关节停止','retryable':False} if result['state']=='FAILED' else None
         if result['state']=='SUCCEEDED' and not _matches_value(result.get('response',{}),data.get('success_condition',{})):
             result['state']='FAILED'
             result['error']={'code':'completion_condition_failed','reason':'返回结果未满足完成条件','retryable':False}

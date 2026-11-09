@@ -45,7 +45,7 @@ if (url && dataDirectory) {
     app.whenReady().then(async () => {
       Menu.setApplicationMenu(null)
       win = new BrowserWindow({
-        icon: path.join(__dirname, '../public/brand/association.png'),
+        icon: path.join(__dirname, 'brand/association.png'),
         width: 1300, height: 900, minWidth: 640, minHeight: 480,
         frame: false, show: false, backgroundColor: '#0a0a10',
         webPreferences: { preload: path.join(__dirname, 'preload.cjs'),

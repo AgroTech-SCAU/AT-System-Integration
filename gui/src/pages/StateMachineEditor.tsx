@@ -12,7 +12,7 @@ import {useCallback,useEffect,useMemo,useRef,useState,type CSSProperties,type Dr
 import HsmCanvas,{automaticHsmLayout} from './HsmCanvas'
 import type {RosTask} from './RosTaskLibrary'
 import {ApiError} from '../api'
-import {prepareRobot} from './prepareRobot'
+import WorkflowPreparation,{useWorkflowPreparation} from './WorkflowPreparation'
 import type {Json,PageProps} from './shared'
 import type {Workspace} from '../types'
 import DataContractEditor from './DataContractEditor'
@@ -75,6 +75,7 @@ export default function StateMachineEditor({client,onNavigate,onOpenRos,onOpenTa
  const [saveFailedAt,setSaveFailedAt]=useState(''),[historyCount,setHistoryCount]=useState({past:0,future:0})
  const history=useRef<{past:MachineSnapshot[];future:MachineSnapshot[];key:string;at:number}>({past:[],future:[],key:'',at:0})
  const editor=useRef<HTMLDivElement>(null),nameInput=useRef<HTMLInputElement>(null),alive=useRef(true),epoch=useRef(0)
+ const preparation=useWorkflowPreparation(client,current?.id||draftId)
  const {document,layout,title}=snapshot,currentFingerprint=fingerprint(snapshot),dirty=currentFingerprint!==savedFingerprint
  const checkKey=(current?.id||draftId)+'|'+currentFingerprint+'|'+JSON.stringify([rosTasks,definitions])
  const state=document.states.find(s=>s.id===selected),transition=edgeIndex===null?undefined:document.transitions[edgeIndex]
@@ -235,13 +236,13 @@ export default function StateMachineEditor({client,onNavigate,onOpenRos,onOpenTa
   if(action==='start'&&(!current||dirty)){setNotice(t('先保存状态机，再运行'));return}
   busyRef.current=true;setBusy('run');setError('');setBottom('runtime')
   try{
-   let body:Json={mode:'auto'}
    if(action==='start'){
     if(!await confirmDialog(t('运行将准备所需子系统并向设备发送命令，请确认设备环境安全'),'准备并运行'))return
-    body={mode:'auto',confirm_safety:true}
-    await prepareRobot(client,{kind:'flow',reference:current!.id,confirm_safety:true})
+    const completed=await preparation.run({kind:'flow',reference:current!.id,confirm_safety:true},workflow=>client.request(`/state-machines/${workflow.reference}/start`,'POST',{mode:'auto',confirm_safety:workflow.confirm_safety},undefined,120000))
+    if(!completed)return
+   }else{
+    await client.request('/state-machines/stop','POST',{})
    }
-   await client.request(action==='start'?`/state-machines/${current!.id}/start`:'/state-machines/stop','POST',body,undefined,action==='start'?120000:undefined)
    const status=await client.request<Json>('/state-machines/status');setSession(status.session);setNotice(action==='start'?t("启动请求已提交"):t("取消请求已提交，正在等待停止确认"))
   }catch(cause){setError(errorMessage(cause,t))}finally{busyRef.current=false;setBusy(null)}
  }
@@ -540,8 +541,9 @@ export default function StateMachineEditor({client,onNavigate,onOpenRos,onOpenTa
   <header className="wb-toolbar">
    <div className="wb-toolbar-group"><button className="wb-icon-button" title={t("显示状态目录")} aria-label={t("显示状态目录")} aria-pressed={hasOutline} onClick={()=>{setOutlineOpen(!outlineOpen)}}>{tinyIcon('outline')}</button><div className="wb-document-picker"><StudioSelect label={t('选择状态机')} value={current?.id||draftId} disabled={!!busy} options={[...(!current?[{value:draftId,label:title||t('未命名状态机'),hint:t('尚未保存')}]:[]),...machines.map(machine=>({value:machine.id,label:machine.id===current?.id?title||t('未命名状态机'):machine.name}))]} onChange={id=>{if(id===current?.id||id===draftId)return;const item=machines.find(machine=>machine.id===id);if(item)void loadMachine(item)}}/></div><button className="wb-icon-button" title={t("新建状态机")} aria-label={t("新建状态机")} disabled={!!busy} onClick={create}>{tinyIcon('plus')}</button></div>
    <div className="wb-toolbar-middle"><button title={t("撤销 ⌘Z / Ctrl+Z")} aria-label={t("撤销")} disabled={!historyCount.past} onClick={()=>undo()}>{tinyIcon('undo')}</button><button title={t("重做 ⇧⌘Z / Ctrl+Shift+Z")} aria-label={t("重做")} disabled={!historyCount.future} onClick={()=>undo(true)}>{tinyIcon('redo')}</button><span className="wb-toolbar-rule"/></div>
-   <div className="wb-toolbar-group wb-toolbar-end"><span className={'wb-save-state'+(saveFailedAt?' is-error':'')} aria-live="polite">{busy==='save'?t("保存中"):saveFailedAt?t("尚未保存"):dirty?(currentRunning?t("草稿待保存"):t("有未保存修改")):current?t("已保存"):t('尚未保存')}</span><button className="wb-save-button" disabled={!!busy||!loaded||!dirty&&!!current} onClick={()=>void save()}>{t("保存")}</button><button className="wb-save-button" disabled={!!busy||!loaded} onClick={()=>void check()}>{t("校验")}</button><button className="wb-run-button" title={currentRunning?t("取消活动行为并等待停止确认，不执行状态退出任务"):t('启动路径：{0}',{0:startupLabel})} aria-label={currentRunning?t("取消运行"):t("运行状态机")} disabled={!!busy||!loaded||(!currentRunning&&(!current||dirty||diagnostics.length>0||activeStatus(session?.status)))} onClick={()=>void execute(currentRunning?'stop':'start')}>{tinyIcon(currentRunning?'stop':'play')}<span>{currentRunning?t("取消运行"):t("运行")}</span></button><button className="wb-icon-button" title={t("显示检查器")} aria-label={t("显示检查器")} aria-pressed={inspectorOpen} onClick={()=>setInspectorOpen(!inspectorOpen)}>{tinyIcon('inspect')}</button></div>
+   <div className="wb-toolbar-group wb-toolbar-end"><span className={'wb-save-state'+(saveFailedAt?' is-error':'')} aria-live="polite">{busy==='save'?t("保存中"):saveFailedAt?t("尚未保存"):dirty?(currentRunning?t("草稿待保存"):t("有未保存修改")):current?t("已保存"):t('尚未保存')}</span><button className="wb-save-button" disabled={!!busy||!loaded||!dirty&&!!current} onClick={()=>void save()}>{t("保存")}</button><button className="wb-save-button" disabled={!!busy||!loaded} onClick={()=>void check()}>{t("校验")}</button><button className="wb-run-button" title={currentRunning?t("取消活动行为并等待停止确认，不执行状态退出任务"):t('启动路径：{0}',{0:startupLabel})} aria-label={currentRunning?t("取消运行"):t("运行状态机")} disabled={!!busy||preparation.canCancel||!loaded||(!currentRunning&&(!current||dirty||diagnostics.length>0||activeStatus(session?.status)))} onClick={()=>void execute(currentRunning?'stop':'start')}>{tinyIcon(currentRunning?'stop':'play')}<span>{currentRunning?t("取消运行"):t("运行")}</span></button><button className="wb-icon-button" title={t("显示检查器")} aria-label={t("显示检查器")} aria-pressed={inspectorOpen} onClick={()=>setInspectorOpen(!inspectorOpen)}>{tinyIcon('inspect')}</button></div>
   </header>
+  <WorkflowPreparation preparation={preparation}/>
   <div className="wb-body">
    <AnimatePresence initial={false}>{hasOutline&&<SpatialPanel width="var(--state-outline-width)" className="wb-navigator" aria-label={t("状态目录")}><div className="wb-pane-title"><span>{t("状态目录")}</span><span>{document.states.filter(item=>item.parent).length}</span></div><div className="wb-project-name"><input aria-label={t("状态机名称")} value={title} maxLength={80} onChange={event=>edit(draft=>{draft.title=event.target.value},'title')}/></div><input className="wb-outline-search" type="search" aria-label={t("筛选状态")} placeholder={t("查找状态")} value={filter} onChange={event=>setFilter(event.target.value)}/><p className="wb-outline-hint">{t('拖动边缘排序，中间设为子状态')}</p><div className="wb-state-tree" onDragEnd={endStateDrag}>{lineage(document.initial)}</div><div className="wb-outline-footer"><button onClick={()=>addState()}>{tinyIcon('plus')}{t("添加状态")}</button><div className="wb-outline-order"><button className="wb-icon-button wb-order-up" aria-label={t('上移状态「{0}」',{0:state?.label||''})} title={t('上移')+' · Alt ↑'} disabled={!!busy||edgeIndex!==null||selectedOrder<=0} onClick={()=>moveState(selected,-1)}>{tinyIcon('chevron')}</button><button className="wb-icon-button wb-order-down" aria-label={t('下移状态「{0}」',{0:state?.label||''})} title={t('下移')+' · Alt ↓'} disabled={!!busy||edgeIndex!==null||selectedOrder<0||selectedOrder>=selectedSiblings.length-1} onClick={()=>moveState(selected,1)}>{tinyIcon('chevron')}</button></div><button className="wb-icon-button" aria-label={t("更多工程操作")} onClick={()=>setAddMenu(!addMenu)}>•••</button>{addMenu&&<div className="wb-outline-menu"><button onClick={()=>{addState(selected);setAddMenu(false)}}>{t("在选中状态内添加")}</button><button onClick={()=>{setBottom('variables');setAddMenu(false)}}>{t("编辑状态变量")}</button><button className="wb-danger" disabled={!current||currentRunning||!!busy} onClick={()=>{setAddMenu(false);void deleteMachine()}}>{t("删除状态机")}</button></div>}</div></SpatialPanel>}</AnimatePresence>
    <main className={"wb-main"+(historyEvent?" is-history":"")}><div className="wb-document-bar"><nav aria-label={t("画布层级")} className="wb-breadcrumb">{ancestors.map((item,index)=><span key={item.id}>{index>0&&tinyIcon('chevron')}<button aria-current={index===ancestors.length-1?'location':undefined} onClick={()=>openScope(item.id)}>{item.label}</button></span>)}</nav><button className="wb-icon-button" title={t("添加状态")} aria-label={t("添加状态")} onClick={()=>addState()}>{tinyIcon('plus')}</button></div>

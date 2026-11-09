@@ -133,7 +133,7 @@ class TaskManager:
             expected_backend=node['attributes'].get('backend_instance') or (role.backend_instance if role else None) if node else None
             if not node or node['registration_id']!=registration or request.backend_instance!=expected_backend:
                 fail('$.node_id','published_node_mismatch','操作能力与冻结节点绑定不符')
-    def _freeze(self, request):
+    async def _freeze(self, request):
         path = Path(request.task_ref).resolve()
         try:
             xml = path.read_text(encoding='utf-8')
@@ -148,7 +148,7 @@ class TaskManager:
             role=node.get('role')
             if role and role not in self.runtime.bound.roles:
                 fail('$.roles.'+role,'missing_task_role','任务所需角色未绑定')
-        definition=self.documents.frozen_definition(path) if self.documents else None
+        definition=await self.documents.frozen_definition(path) if self.documents else None
         if not definition:
             fail('$.task_ref','published_definition_required','任务必须通过统一服务校验并发布')
         if request.config_ref:
@@ -177,8 +177,8 @@ class TaskManager:
                 'system': {**self.runtime.snapshot(), **({'ros_tasks':definition.get('ros_tasks', [])} if definition else {})}, 'software': _source_identity(self.executable),
                 'definition':definition}
 
-    def preflight(self, request):
-        return self._freeze(parse(TaskStart, request))
+    async def preflight(self, request):
+        return await self._freeze(parse(TaskStart, request))
 
     async def start_task(self, request, owner, *, standalone=False, control_token=None):
         request = parse(TaskStart, request)
@@ -201,7 +201,7 @@ class TaskManager:
                    status['state'] in ACTIVE and (not control_token or status.get('control_group') != control_token.owner)
                    for status in self.store.list()):
                 fail('$.task', 'task_busy', '已有任务执行中、停止未确认或未知结果待核对')
-            snapshot = self.preflight(request)
+            snapshot = await self.preflight(request)
             if standalone and any(node.tag.startswith('Capability_') for node in ET.fromstring(snapshot['xml']).iter()):
                 fail('$.tree','system_required','此行为树包含需要已就绪系统的能力')
             snapshot['standalone_ros']=standalone
@@ -229,6 +229,9 @@ class TaskManager:
                 fail('$.task_ref', 'tree_validation_timeout', '行为树静态校验超时')
             if validation.returncode:
                 fail('$.task_ref', 'tree_validation_failed', stdout.decode(errors='replace')[:4000])
+            deployment = getattr(getattr(self.documents, 'robot_systems', None), 'deployment', None)
+            if deployment and deployment.stopping:
+                fail('$.modules', 'deployment_stopping', '子系统正在停止，请重新准备后再运行')
             ready=self.runtime.state=='STOPPED' if standalone else self.runtime.accepting
             if control_token:
                 self.runtime.engine.control.validate_control(control_token, [])

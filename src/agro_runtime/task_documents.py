@@ -1,6 +1,7 @@
 """实际节点注册驱动的 XML、类型流、子树与持久发布服务"""
 import copy
 from contextlib import contextmanager
+from contextvars import ContextVar
 import hashlib
 import json
 import os
@@ -58,7 +59,8 @@ def literal(port,spec):
 
 class TaskDocuments:
     def __init__(self,context,store,robot_systems=None):
-        self.context=context;self.store=store;self.robot_systems=robot_systems;self._models=None;self._model_key=None;self.ros_tasks=None;self._ros_override=None
+        self.context=context;self.store=store;self.robot_systems=robot_systems;self._models=None;self._model_key=None;self.ros_tasks=None
+        self._ros_override=ContextVar('task_documents_ros_override',default=None)
 
     @staticmethod
     def requires_system(document):
@@ -66,8 +68,9 @@ class TaskDocuments:
                    for tree in document['trees'].values() for node in tree['nodes'].values())
 
     def ros_definitions(self):
-        if self._ros_override is not None:
-            return copy.deepcopy(self._ros_override)
+        frozen=self._ros_override.get()
+        if frozen is not None:
+            return copy.deepcopy(frozen)
         return self.ros_tasks.list() if self.ros_tasks and self.ros_tasks.robots.selected_id() else []
 
     def registry_snapshot(self):
@@ -75,12 +78,11 @@ class TaskDocuments:
 
     @contextmanager
     def frozen_ros(self, definitions):
-        previous = self._ros_override
-        self._ros_override = definitions
+        token = self._ros_override.set(definitions)
         try:
             yield
         finally:
-            self._ros_override = previous
+            self._ros_override.reset(token)
 
     def _ros_models(self, nodes):
         for task in self.ros_definitions():
@@ -374,7 +376,8 @@ class TaskDocuments:
                     if node['registration_id'].startswith('RosTask_')}
         if self.ros_tasks and task_ids:
             try:
-                tasks = [task for task in self._ros_override if task['id'] in task_ids] if self._ros_override is not None else sorted(task_ids)
+                frozen=self._ros_override.get()
+                tasks = [task for task in frozen if task['id'] in task_ids] if frozen is not None else sorted(task_ids)
                 self.ros_tasks.validate_task_workspaces(tasks)
             except ContractValidationError as exc:
                 for issue in exc.issues:error(issue.code,issue.reason)
@@ -766,24 +769,25 @@ class TaskDocuments:
         self.store.put('tree_definition',key_definition,definition);draft['published']=key_definition;self.store.put('tree_draft',key,draft)
         return definition
 
-    def prepare_behavior(self, reference):
+    async def prepare_behavior(self, reference):
         if reference.startswith('draft_'):
             draft = self.store.get('tree_draft', reference)
-            return self.publish(reference, draft['revision'], self.context.snapshot_id)
-        self.definition_request(reference, 'behavior_preflight')
+            reference = self.publish(reference, draft['revision'], self.context.snapshot_id)['id']
+        await self.definition_request(reference, 'behavior_preflight')
         return copy.deepcopy(self.store.get('tree_definition', reference))
 
-    def definition_request(self,key,request_id,parameters=None):
+    async def definition_request(self,key,request_id,parameters=None):
         definition=self.store.get('tree_definition',key)
+        self._check_ownership(definition)
         with self.frozen_ros(definition.get('ros_tasks', [])):
+            for task in definition.get('ros_tasks', []):
+                await self.ros_tasks.verify_support_async(task)
             return self._definition_request(definition, request_id, parameters)
 
     def _definition_request(self,definition,request_id,parameters=None):
         from .tasks import TaskStart
         key=definition['id']
         self._check_ownership(definition)
-        for task in definition.get('ros_tasks', []):
-            self.ros_tasks.verify_support(task)
         if self.requires_system(definition['document']) and definition['system_snapshot_id']!=self.context.snapshot_id:fail('$.definition','snapshot_conflict','系统配置已改变，请重新检查行为中的能力绑定')
         path=Path(definition['task_ref']).resolve()
         if not path.is_relative_to((self.store.root/'plans'/key).resolve()):fail('$.definition','invalid_definition_path','定义路径不在受控目录')
@@ -792,10 +796,10 @@ class TaskDocuments:
         if not checked['valid']:fail('$.definition','definition_invalid',encoded(checked['diagnostics']))
         return TaskStart(task_ref=str(path),parameters=definition['parameters'] if parameters is None else parameters,request_id=request_id)
 
-    def frozen_definition(self,path):
+    async def frozen_definition(self,path):
         for definition in self.store.list('tree_definition'):
             if Path(definition['task_ref']).resolve()==Path(path).resolve():
-                self.definition_request(definition['id'],'freeze_validation')
+                await self.definition_request(definition['id'],'freeze_validation')
                 if json.loads(Path(path).with_suffix('.task.json').read_text())!=definition['manifest']:
                     fail('$.definition','definition_checksum_mismatch','不可变任务清单已改变')
                 return definition
