@@ -9,6 +9,7 @@ import os
 import re
 import threading
 import time
+from functools import lru_cache
 from uuid import uuid4
 
 from .errors import ContractValidationError, fail, parse
@@ -19,6 +20,19 @@ IDENT = re.compile(r'^[a-z][a-z0-9_]{0,63}$')
 KINDS = {'service', 'action', 'publish_once', 'publish_periodic', 'subscribe_wait', 'compute'}
 WAIT_MODES = {'response', 'result', 'message', 'sent', 'until_stopped'}
 STOP_OBSERVATION_OUTPUTS = {'$stop_observation.after_ns': 'integer', '$stop_observation.pose': 'json'}
+SUPPORT_FIELDS = ('field_types', 'output_field_types', 'feedback_field_types')
+
+
+def support_schema(schema):
+    return {name: schema.get(name, {}) for name in SUPPORT_FIELDS}
+
+
+@lru_cache(maxsize=128)
+def compiled_support(project_id, definitions_json):
+    """Cache exact definition contents, retaining every transitive wire type."""
+    from .ros_interfaces import InterfaceLibrary
+    schemas = InterfaceLibrary(None, project_id).compile(json.loads(definitions_json), saved_definitions=False)
+    return {name: support_schema(schema) for name, schema in schemas.items()}
 
 
 def stop_observation_output(data, port, path):
@@ -317,14 +331,19 @@ class RosTasks:
         return [self._bound(task) for task in self.store.list('ros_task') if task.get('robot_system_id') == key]
 
     def _bound(self, task):
-        binding = next((item for item in self.store.list('ros_binding')
-                        if item['task_id'] == task['id'] and item['robot_system_id'] == self._robot()), None)
-        result = {**task, 'interface': binding['interface'] if binding else task.get('interface', '')}
+        key = self._robot()
+        binding = self.store.db.execute(
+            "SELECT json_extract(body,'$.interface') FROM documents WHERE kind='ros_binding' "
+            "AND json_extract(body,'$.task_id')=? AND json_extract(body,'$.robot_system_id')=? "
+            "ORDER BY rowid LIMIT 1", (task['id'], key)).fetchone()
+        result = {**task, 'interface': binding[0] if binding else task.get('interface', '')}
         if task.get('icon_mode') == 'workspace':
             first = next(iter(task.get('workspace_ids', [])), None)
-            workspace = next((item for item in self.store.list('interface_workspace')
-                              if item['id'] == first and item.get('project_id') == self._robot()), None)
-            result['icon'] = workspace.get('icon', 'generic') if workspace else 'generic'
+            workspace = self.store.db.execute(
+                "SELECT json_extract(body,'$.icon'),json_type(body,'$.icon') FROM documents "
+                "WHERE kind='interface_workspace' AND id=? AND json_extract(body,'$.project_id')=?",
+                (first, key)).fetchone()
+            result['icon'] = workspace[0] if workspace and workspace[1] else 'generic'
         return result
 
     def bind(self, identity, interface):
@@ -607,15 +626,14 @@ class RosTasks:
             self.validate_structure(data)
             config=self.environments.snapshot(data)
             return None,config,{'op':'compute_probe','operation':data.get('operation'),'entrypoint':data.get('compute_entrypoint') if data.get('operation')=='extension' else ''}
-        from .ros_interfaces import InterfaceLibrary
         identity = data['id']
         expected = self.validate_structure(data)
-        schemas = {data['ros_type']: expected}
+        schemas = {data['ros_type']: support_schema(expected)}
         if data.get('schema_id'):
             record = self.store.get('ros_schema', data['schema_id'])
             if record.get('project_id') != self._robot():
                 fail('$.task.' + identity, 'ownership', '任务接口定义不属于当前工程')
-            schemas.update(InterfaceLibrary(self.store, self._robot()).compile(record['definitions'], saved_definitions=False))
+            schemas.update(compiled_support(self._robot(), json.dumps(record['definitions'], sort_keys=True, ensure_ascii=False)))
         return schemas,self.environments.snapshot(data) if self.environments else None,{'op':'verify','expected':schemas}
 
     def _validate_support(self, data, schemas, result):
@@ -668,11 +686,10 @@ class RosTasks:
         data.setdefault('_use_sim_time', self.connection().get('use_sim_time',False))
         if self.environments:
             data.setdefault('_execution_environment', self.environments.snapshot(data))
-            data['_expected_schemas'] = {data['ros_type']: schema} if data['kind']!='compute' else {}
+            data['_expected_schemas'] = {data['ros_type']: support_schema(schema)} if data['kind']!='compute' else {}
             if data.get('schema_id'):
-                from .ros_interfaces import InterfaceLibrary
                 record = self.store.get('ros_schema', data['schema_id'])
-                data['_expected_schemas'].update(InterfaceLibrary(self.store, self._robot()).compile(record['definitions'], saved_definitions=False))
+                data['_expected_schemas'].update(compiled_support(self._robot(), json.dumps(record['definitions'], sort_keys=True, ensure_ascii=False)))
         result = await asyncio.to_thread(self._execute, data, stop, feedback)
         if isinstance(result, str):
             result = {'state':result,'response':data.get('payload',{})}
@@ -717,6 +734,9 @@ class RosTasks:
             if not unchanged:
                 return {'state':'FAILED','stop_confirmed':True,'response':{},'error':{'code':'environment_changed','reason':'冻结的工作区执行环境已变化，请重新加载','retryable':False}}
             expected = data.pop('_expected_schemas', {})
+            # Form descriptors were already checked in this process; workers
+            # validate the live wire types and request values without this duplicate
+            data.pop('interface_schema', None)
             if data['kind']=='compute':
                 return self.environments.compute(config,data,stop)
             return self.environments.call(config, {'op':'run','task':data,'expected':expected}, stop, feedback)

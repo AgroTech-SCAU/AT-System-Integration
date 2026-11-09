@@ -33,15 +33,25 @@ class SessionRecords:
     def list(self):
         return [self._hydrate(record) for record in self.store.list('hsm_session')]
 
-    def save(self, record):
+    def save(self, record, *, changes=None):
         identity = record['id']
         identifier(identity)
-        body = encoded({**{key: value for key, value in record.items() if key not in self.FROZEN}, '_frozen_session': identity})
-        existing = self.store.db.execute("SELECT 1 FROM documents WHERE kind='hsm_frozen' AND id=?", (identity,)).fetchone()
-        frozen = self._frozen_json(record) if not existing else None
         # First frozen inputs and first mutable state commit together; subsequent
         # transitions keep the same durable boundary without rewriting the inputs
         with self.store.db:
+            if changes and not set(changes).intersection(self.FROZEN):
+                values = [item for key, value in changes.items()
+                          for item in ('$.' + json.dumps(key, ensure_ascii=False), encoded(value))]
+                updates = ','.join('?,json(?)' for _ in changes)
+                cursor = self.store.db.execute(
+                    "UPDATE documents SET body=json_set(body," + updates + ") "
+                    "WHERE kind='hsm_session' AND id=? AND json_extract(body,'$._frozen_session')=?",
+                    (*values, identity, identity))
+                if cursor.rowcount:
+                    return record
+            body = encoded({**{key: value for key, value in record.items() if key not in self.FROZEN}, '_frozen_session': identity})
+            existing = self.store.db.execute("SELECT 1 FROM documents WHERE kind='hsm_frozen' AND id=?", (identity,)).fetchone()
+            frozen = self._frozen_json(record) if not existing else None
             if frozen is not None:
                 self.store.db.execute('INSERT INTO documents VALUES (?,?,?)', ('hsm_frozen', identity, frozen))
             self.store.db.execute('INSERT OR REPLACE INTO documents VALUES (?,?,?)', ('hsm_session', identity, body))

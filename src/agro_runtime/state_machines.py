@@ -229,9 +229,13 @@ class StateMachines:
         return machine
 
     def check(self, identity):
+        return self._checked(identity)[0]
+
+    def _checked(self, identity):
         machine = self.get(identity)
         definitions = self.definitions()
-        spec = validate(machine['document'], definitions, self.ros_definitions())
+        ros_definitions = self.ros_definitions()
+        spec = validate(machine['document'], definitions, ros_definitions)
         trees = {item['id']: item for item in definitions}
         tasks, checked, task_origins = [], set(), {}
         for state in spec['states']:
@@ -265,7 +269,7 @@ class StateMachines:
         diagnostics = []
         from .data_contracts import contract_reason
         variable_contracts = spec.get('variable_contracts', {})
-        task_map = {'ros:' + item['id']: item for item in self.ros_definitions()}
+        task_map = {'ros:' + item['id']: item for item in ros_definitions}
         for state in spec['states']:
             for phase in ('entry', 'do', 'exit'):
                 ref = state.get(phase)
@@ -305,8 +309,8 @@ class StateMachines:
                                         **task_origins.get(task.get('id'), {})} for issue in exc.issues)
         from .flow_validation import check_dataflow
         diagnostics.extend(check_dataflow(spec, {**trees, **task_map}))
-        return {'valid': not diagnostics, 'diagnostics': diagnostics, 'behaviors': len(checked),
-                'message': '离线配置检查通过' if not diagnostics else '运行前需补充配置'}
+        return ({'valid': not diagnostics, 'diagnostics': diagnostics, 'behaviors': len(checked),
+                 'message': '离线配置检查通过' if not diagnostics else '运行前需补充配置'}, machine, spec)
 
     def running(self):
         return self._starting or self._session is not None and self._session.get('status') in ('RUNNING','ENTERING','TRANSITIONING','STOPPING')
@@ -337,7 +341,7 @@ class StateMachines:
             changes['finished_at'] = now
         changes['updated_at'] = now
         self._session.update(changes)
-        self.sessions.save(self._session)
+        self.sessions.save(self._session, changes=changes)
 
     def _transition_event(self, **event):
         """Persist each transition so fast states remain visible between UI polls."""
@@ -687,12 +691,10 @@ class StateMachines:
     async def start(self,identity,mode='auto',confirm_safety=False):
         async with self._lock:
             if self.running():fail('$.machine','running','已有状态机正在运行')
-            checked = self.check(identity)
+            checked, machine, spec = self._checked(identity)
             if not checked['valid']:
                 from .errors import ContractValidationError, ValidationIssue
                 raise ContractValidationError([ValidationIssue(path='$.states.' + item.get('state_id', '') + '.' + item.get('phase', '') + '.' + item.get('path', ''), code='workflow_not_ready', reason=item['message']) for item in checked['diagnostics']])
-            machine=self.get(identity)
-            spec=validate(machine['document'],self.definitions(),self.ros_definitions())
             robot=self.robots.selected()
             if mode=='auto':
                 mode='managed' if self.robots.active() and self.context.state=='READY' else 'ros_only'
@@ -705,7 +707,10 @@ class StateMachines:
                 fail('$.system','not_ready','需先应用机器人配置并启动系统，保持待命模式，或为空白机器人选择独立 ROS 2 模式')
             if any(t['state'] in ACTIVE or t['state']=='UNKNOWN' or not t['stop_confirmed'] for t in self.tasks.list()):
                 fail('$.task','task_busy','仍有任务在执行或停止结果未确认，不能开始新的状态机')
-            if any(r['snapshot']['state']=='UNKNOWN' or r['snapshot']['stop_state']=='UNCONFIRMED' for r in self.store.list('ros_operation')):
+            if self.store.db.execute(
+                "SELECT 1 FROM documents WHERE kind='ros_operation' AND "
+                "(json_extract(body,'$.snapshot.state')='UNKNOWN' OR "
+                "json_extract(body,'$.snapshot.stop_state')='UNCONFIRMED') LIMIT 1").fetchone():
                 fail('$.task','task_busy','ROS 能力仍在执行或停止结果未确认')
             dependencies={}
             self._starting=True
@@ -744,9 +749,10 @@ class StateMachines:
             self._activation+=1
             sid='session_'+uuid4().hex
             now=timestamp()
+            sequence=self.store.db.execute("SELECT count(*) FROM documents WHERE kind='hsm_session'").fetchone()[0]+1
             self._event_values={name:value for name,value in spec.get('variables',{}).items()
                                 if value is None or type(value) in (str,int,float,bool)}
-            self._session={'id':sid,'machine_id':identity,'robot_system_id':self._robot(),'execution_mode':'ROS_ONLY' if mode=='ros_only' else 'MANAGED','status':'ENTERING', 'active':None,'path':[], 'events':[], 'variables':spec.get('variables',{}),'task_run_id':None, 'ros_task_id':None,'ros_feedback':None, 'action':None, 'error':None,'sequence':len(self.sessions.list())+1,'pending_events':0,'definition':copy.deepcopy(machine),'dependencies':dependencies,'do_policy':'active_path','behaviors':[],
+            self._session={'id':sid,'machine_id':identity,'robot_system_id':self._robot(),'execution_mode':'ROS_ONLY' if mode=='ros_only' else 'MANAGED','status':'ENTERING', 'active':None,'path':[], 'events':[], 'variables':spec.get('variables',{}),'task_run_id':None, 'ros_task_id':None,'ros_feedback':None, 'action':None, 'error':None,'sequence':sequence,'pending_events':0,'definition':copy.deepcopy(machine),'dependencies':dependencies,'do_policy':'active_path','behaviors':[],
                            'started_at':now,'updated_at':now,'finished_at':None,'state_entered_at':None}
             self._persist(attention=[])
             self._runner=asyncio.create_task(self._enter(spec))
