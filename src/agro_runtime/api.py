@@ -591,6 +591,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     class RosConnection(BaseModel):
         domain_id: int = Field(ge=0,le=232)
         namespace: str = '/'
+        use_sim_time: bool = False
 
     @api.get('/ros/connection')
     async def ros_connection():
@@ -601,7 +602,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
         async with runtime.transition:
             if deployment.has_processes() or hsm.running() or any(item['state'] in ('ACCEPTED','RUNNING','CANCELING','UNKNOWN') for item in tasks.list()) or any(item['snapshot']['state'] in ('ACCEPTED','RUNNING','CANCELING','UNKNOWN') for item in store.list('ros_operation')):
                 fail('$.connection','running','请先停止运行并确认设备状态，再切换 ROS 域')
-            return ros_tasks.save_connection(body.domain_id,body.namespace)
+            return ros_tasks.save_connection(body.domain_id,body.namespace,body.use_sim_time)
 
     @api.get('/ros/message')
     async def ros_message(interface: str, ros_type: str):

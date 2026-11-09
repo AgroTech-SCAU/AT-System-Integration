@@ -76,7 +76,9 @@ def _run_task(data, stop, feedback=None, *, context=None, unconfirmed=None, comp
             fail('$.payload', 'invalid_fields', '消息字段与 ROS 2 接口定义不匹配: ' + str(exc))
         return msg
     try:
-        node = rclpy.create_node('atil_task_' + uuid4().hex[:8], context=context)
+        from rclpy.parameter import Parameter
+        node = rclpy.create_node('atil_task_' + uuid4().hex[:8], context=context,
+                                 parameter_overrides=[Parameter('use_sim_time', value=data.get('_use_sim_time',False))])
         executor = SingleThreadedExecutor(context=context)
         executor.add_node(node)
         try:
@@ -97,6 +99,13 @@ def _run_task(data, stop, feedback=None, *, context=None, unconfirmed=None, comp
                 except (ValueError, KeyError, TypeError, IndexError) as error:
                     result.update(state='FAILED', error={'code':'output_semantics','reason':str(error),'retryable':False})
             return result
+        while data.get('_use_sim_time') and node.get_clock().now().nanoseconds == 0:
+            if stop.is_set():
+                return {'state':'CANCELED','response':{},'stop_confirmed':True}
+            if remaining() <= 0:
+                return {'state':'FAILED','response':{},'stop_confirmed':True,
+                        'error':{'code':'clock_unavailable','reason':'尚未收到 ROS 仿真时钟 /clock','retryable':False}}
+            executor.spin_once(timeout_sec=min(.05, remaining()))
         check_semantics('inputs', data.get('payload', {}))
         interface = data['interface']
         ros_type = data['ros_type']

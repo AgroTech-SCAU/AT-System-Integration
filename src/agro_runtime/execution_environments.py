@@ -354,8 +354,8 @@ class WorkspaceEnvironments:
         for thread in reapers:
             thread.join()
 
-    def computer(self, config, domain):
-        key=(config['workspace_id'],domain,config['signature'])
+    def computer(self, config, domain, use_sim_time=False):
+        key=(config['workspace_id'],domain,use_sim_time,config['signature'])
         with self.lock:
             existing=self.computers.get(key)
             if existing and existing['process'].poll() is None:return existing
@@ -379,7 +379,7 @@ class WorkspaceEnvironments:
                 events.put({'error':'数据处理进程已退出'})
             threading.Thread(target=read,daemon=True).start()
             try:
-                process.stdin.write(json.dumps({'domain_id':domain})+'\n');process.stdin.flush()
+                process.stdin.write(json.dumps({'domain_id':domain,'use_sim_time':use_sim_time})+'\n');process.stdin.flush()
                 try:value=events.get(timeout=20)
                 except queue.Empty as error:raise EnvironmentFailure('数据处理环境启动超时') from error
                 if not value.get('ready'):raise EnvironmentFailure(value.get('error','无法启动数据处理环境'))
@@ -394,7 +394,7 @@ class WorkspaceEnvironments:
             return result
 
     def compute(self, config, data, stop):
-        computer=self.computer(config,data.get('_ros_domain',0))
+        computer=self.computer(config,data.get('_ros_domain',0),data.get('_use_sim_time',False))
         with computer['lock']:
             if stop.is_set():return {'state':'CANCELED','response':{},'stop_confirmed':True}
             process=computer['process'];events=computer['events']

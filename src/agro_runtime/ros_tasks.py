@@ -497,13 +497,15 @@ class RosTasks:
         return next((item for item in self.store.list('ros_connection') if item['id']==key),
                     {'id':key,'domain_id':int(os.environ.get('ROS_DOMAIN_ID','0')),'namespace':'/'})
 
-    def save_connection(self, domain_id, namespace):
+    def save_connection(self, domain_id, namespace, use_sim_time=False):
         if not isinstance(domain_id,int) or isinstance(domain_id,bool) or not 0<=domain_id<=232:
             fail('$.domain_id','invalid_domain','ROS 域需为 0 到 232 的整数')
         if not isinstance(namespace,str) or not re.fullmatch(r'/(?:[A-Za-z_][A-Za-z0-9_]*(?:/[A-Za-z_][A-Za-z0-9_]*)*)?/?',namespace):
             fail('$.namespace','invalid_namespace','命名空间需要以 / 开头，并使用 ROS 名称')
+        if not isinstance(use_sim_time,bool):
+            fail('$.use_sim_time','invalid_clock','仿真时钟选项需为布尔值')
         self.close()
-        return self.store.put('ros_connection',self._robot(),{'id':self._robot(),'domain_id':domain_id,'namespace':namespace.rstrip('/') or '/'})
+        return self.store.put('ros_connection',self._robot(),{'id':self._robot(),'domain_id':domain_id,'namespace':namespace.rstrip('/') or '/','use_sim_time':use_sim_time})
 
     def discover(self,connection=None,execution_environment=None):
         connection=connection or self.connection()
@@ -568,6 +570,7 @@ class RosTasks:
         self.require_snapshot(data)
         if data['kind']=='compute':
             data['_ros_domain']=self.connection()['domain_id']
+            data['_use_sim_time']=self.connection().get('use_sim_time',False)
             return copy.deepcopy(data)
         if not data.get('interface'):
             fail('$.task.' + identity, 'missing_endpoint', '任务尚未绑定机器人端点：' + data['name'])
@@ -576,6 +579,7 @@ class RosTasks:
         data['interface_schema'] = {name: value for name, value in expected.items() if name not in ('source', 'schema_id')}
         self.validate_structure(data)
         data['_ros_domain'] = self.connection()['domain_id']
+        data['_use_sim_time'] = self.connection().get('use_sim_time',False)
         return copy.deepcopy(data)
 
     def verify_support(self, data):
@@ -660,6 +664,7 @@ class RosTasks:
             await self.robots.deployment.require_tasks_ready([original])
         data = prepared_task(original, inputs, self.validate_structure(original))
         data.setdefault('_ros_domain', self.connection()['domain_id'])
+        data.setdefault('_use_sim_time', self.connection().get('use_sim_time',False))
         if self.environments:
             data.setdefault('_execution_environment', self.environments.snapshot(data))
             data['_expected_schemas'] = {data['ros_type']: self.validate_structure(original)} if data['kind']!='compute' else {}
@@ -673,7 +678,8 @@ class RosTasks:
         stop_evidence = None
         if original.get('stop_observation') and result.get('terminal_received') and original['kind']=='action':
             confirmation={'kind':'compute','operation':'wait_stationary','payload':original['stop_observation'],
-                          'timeout_s':original['stop_observation'].get('timeout_s',5),'_ros_domain':original.get('_ros_domain',self.connection()['domain_id'])}
+                          'timeout_s':original['stop_observation'].get('timeout_s',5),'_ros_domain':original.get('_ros_domain',self.connection()['domain_id']),
+                          '_use_sim_time':data.get('_use_sim_time',False)}
             # Cancellation must still wait for measured standstill after the action reaches a terminal state
             try:
                 measured=await asyncio.to_thread(self.environments.compute,self.environments.snapshot(original),confirmation,threading.Event())

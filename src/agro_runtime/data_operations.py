@@ -23,13 +23,15 @@ def stamp_ns(header):
 
 class DataContext:
     """Continuous TF history is retained across workflow steps in one isolated worker."""
-    def __init__(self, domain):
+    def __init__(self, domain, use_sim_time=False):
         import rclpy
         from rclpy.executors import MultiThreadedExecutor
         from tf2_ros import Buffer, TransformListener
         from rclpy.duration import Duration
         self.context=rclpy.context.Context();rclpy.init(context=self.context,domain_id=domain)
-        self.node=rclpy.create_node('atil_data_operations',context=self.context)
+        from rclpy.parameter import Parameter
+        self.node=rclpy.create_node('atil_data_operations',context=self.context,
+                                    parameter_overrides=[Parameter('use_sim_time', value=use_sim_time)])
         self.buffer=Buffer(cache_time=Duration(seconds=15),node=self.node)
         self.listener=TransformListener(self.buffer,self.node)
         self.executor=MultiThreadedExecutor(num_threads=2,context=self.context);self.executor.add_node(self.node)

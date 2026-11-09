@@ -456,7 +456,7 @@ class Deployment:
                     if self.stopping:raise RuntimeError('启动已取消')
                     self._progress('checking',current={'id':task['id'],'name':task['name'],'kind':'task'},
                                    completed=index,total=len(task_values),deadline_at=None,health=None)
-                    self.ros.verify_support(task)
+                    await self.ros.verify_support_async(task)
                     self._progress('checking',completed=index+1)
                 for index, identity in enumerate(sorted(references)):
                     if self.stopping:raise RuntimeError('启动已取消')
@@ -472,7 +472,8 @@ class Deployment:
                         self._progress('environment',current={'id':config['workspace_id'],
                                        'name':config.get('name',task['name']),'kind':'workspace'},
                                        completed=0,total=1,deadline_at=None,health=None)
-                        await asyncio.to_thread(self.ros.environments.computer,config,self.ros.connection()['domain_id'])
+                        await asyncio.to_thread(self.ros.environments.computer,config,self.ros.connection()['domain_id'],
+                                                self.ros.connection().get('use_sim_time',False))
                         if self.stopping:raise RuntimeError('启动已取消')
                         self._progress('environment',completed=1)
                 if self.stopping:raise RuntimeError('启动已取消')

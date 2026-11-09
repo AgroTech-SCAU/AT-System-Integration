@@ -206,7 +206,7 @@ class RobotSystems:
             remap = {}
             for frozen in original.get('ros_tasks', []):
                 portable = {field: copy.deepcopy(value) for field, value in frozen.items()
-                            if field not in ('robot_system_id', 'revision', '_ros_domain', 'interface_schema')}
+                            if field not in ('robot_system_id', 'revision', '_ros_domain', '_use_sim_time', 'interface_schema')}
                 existing = next((item for item in ros_tasks if item['id'] == portable['id']), None)
                 if existing and encoded(existing) == encoded(portable):
                     continue

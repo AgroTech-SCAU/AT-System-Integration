@@ -190,11 +190,12 @@ class RosOperations:
                 fail('$.operation','pending_goal','通信进程仍在等待目标结束，暂不能解除资源占用')
         config = definition.get('_execution_environment') or self.ros_tasks.environments.snapshot(definition)
         task = {'kind':'service','interface':service,'ros_type':'std_srvs/srv/Trigger','payload':{},'timeout_s':5,
-                '_ros_domain':definition.get('_ros_domain',self.ros_tasks.connection()['domain_id'])}
+                '_ros_domain':definition.get('_ros_domain',self.ros_tasks.connection()['domain_id']),
+                '_use_sim_time':definition.get('_use_sim_time',self.ros_tasks.connection().get('use_sim_time',False))}
         if observation and not previous_session:
             if not record['snapshot'].get('terminal_received'):
                 fail('$.operation','terminal_unconfirmed','尚未收到动作终态，仅有静止反馈不能证明目标已经结束')
-            result=await asyncio.to_thread(self.ros_tasks.environments.compute,config,{'operation':'wait_stationary','payload':observation,'timeout_s':observation.get('timeout_s',5),'_ros_domain':task['_ros_domain']},threading.Event())
+            result=await asyncio.to_thread(self.ros_tasks.environments.compute,config,{'operation':'wait_stationary','payload':observation,'timeout_s':observation.get('timeout_s',5),'_ros_domain':task['_ros_domain'],'_use_sim_time':task['_use_sim_time']},threading.Event())
         else:
             result = await asyncio.to_thread(self.ros_tasks.environments.call,config,{'op':'run','task':task},threading.Event())
         if result.get('state') != 'SUCCEEDED' or (previous_session or not observation) and result.get('response',{}).get('success') is not True:
