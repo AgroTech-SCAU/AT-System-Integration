@@ -12,6 +12,15 @@ export default function ExecutionEnvironment({client,workspaceId,epoch,open,onOp
  const [state,setState]=useState<EnvironmentState|null>(null),[python,setPython]=useState(''),[setup,setSetup]=useState('')
  const [busy,setBusy]=useState(''),[error,setError]=useState<unknown>(null)
  const context=useRef<{client:ApiClient;workspaceId?:string}|null>(null)
+ const scope=useRef({client,workspaceId})
+ if(scope.current.client!==client||scope.current.workspaceId!==workspaceId)scope.current={client,workspaceId}
+ const currentScope=scope.current
+ const operation=useRef<{scope:typeof currentScope;controller:AbortController}|null>(null)
+ useEffect(()=>{
+  context.current=null
+  setBusy('')
+  return()=>{if(operation.current?.scope===currentScope){operation.current.controller.abort();operation.current=null}}
+ },[currentScope])
  useEffect(()=>{
   const controller=new AbortController(),changed=context.current?.client!==client||context.current?.workspaceId!==workspaceId
   if(changed){setState(null);setError(null);setPython('');setSetup('')}
@@ -25,15 +34,20 @@ export default function ExecutionEnvironment({client,workspaceId,epoch,open,onOp
  function chooseSetup(value:string){setSetup(value);setError(null)}
  function choosePython(value:string){setPython(value);setError(null)}
  async function action(kind:string){
+  if(!workspaceId||operation.current?.scope===currentScope)return
+  const pending={scope:currentScope,controller:new AbortController()}
+  operation.current=pending
+  const valid=()=>scope.current===currentScope&&operation.current===pending&&!pending.controller.signal.aborted
   setBusy(kind);setError(null)
   try{
-   const next=await client.request<EnvironmentState>(`/ros/interface-workspaces/${workspaceId}/environment/${kind}`,'POST',{python,setup},undefined,kind==='supplement'?300000:90000)
+   const next=await client.request<EnvironmentState>(`/ros/interface-workspaces/${workspaceId}/environment/${kind}`,'POST',{python,setup},pending.controller.signal,kind==='supplement'?300000:90000)
+   if(!valid())return
    setState(next)
    const loaded=kind==='load'&&next.loaded&&next.report?.ready
    setPython((loaded?next.active?.python:next.report?.python)||python)
    setSetup((loaded?next.active?.setup:next.report?.setup)||setup)
    window.dispatchEvent(new Event('agro:environment:changed'))
-  }catch(cause){setError(cause)}finally{setBusy('')}
+  }catch(cause){if(valid())setError(cause)}finally{if(valid()){operation.current=null;setBusy('')}}
  }
  const report=state?.report?.setup===setup&&state.report.python===python?state.report:null
  const errorReason=error instanceof ApiError?(error.details[0]?.reason||t(error.kind==='offline'?'连接暂时不可用，请重试':'运行环境检查未完成')):error instanceof Error?error.message:error?t('运行环境检查未完成'):''

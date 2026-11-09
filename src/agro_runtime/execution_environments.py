@@ -149,15 +149,44 @@ class WorkspaceEnvironments:
         return self.status(workspace_id)
 
     def load(self, workspace_id, python='', setup=''):
-        self._idle()
-        state = self.check(workspace_id, python, setup)
-        if not state['report']['ready']:
-            return state
-        config = self._configuration(workspace_id, state['report']['python'], state['report']['setup'])
-        self._idle()
-        config['signature'] = self.signature(config)
-        self.store.put('execution_environment', config['id'], config)
-        return self.status(workspace_id)
+        with self.lock:
+            self._idle()
+            config = self._configuration(workspace_id, python, setup)
+            self._retire_workspace_workers(workspace_id)
+            state = self.check(workspace_id, config['python'], config['setup'])
+            if not state['report']['ready']:
+                active = self.active(workspace_id)
+                if active and all(active[name] == config[name] for name in ('python', 'setup')):
+                    self.store.put('execution_environment', active['id'], {**active, 'signature': ''})
+                    return self.status(workspace_id)
+                return state
+            config = self._configuration(workspace_id, state['report']['python'], state['report']['setup'])
+            self._idle()
+            config['signature'] = self.signature(config)
+            self.store.put('execution_environment', config['id'], config)
+            return self.status(workspace_id)
+
+    def _retire_workspace_workers(self, workspace_id):
+        workers = [worker for key, pool in self.transport_workers.items() if key[0] == workspace_id for worker in pool]
+        computers = [(key, computer) for key, computer in self.computers.items() if key[0] == workspace_id]
+        locked = []
+        try:
+            if any(worker['busy'] and worker['process'].poll() is None for worker in workers):
+                fail('$.environment', 'environment_busy', '通信任务尚未结束，不能重新加载执行环境')
+            for _, computer in computers:
+                if not computer['lock'].acquire(blocking=False):
+                    fail('$.environment', 'environment_busy', '数据处理尚未结束，不能重新加载执行环境')
+                locked.append(computer['lock'])
+            # Explicit loading refreshes imports even when setup itself is unchanged
+            for worker in workers:
+                self._retire_transport(worker)
+            for key, computer in computers:
+                try:computer['process'].stdin.write('QUIT\n');computer['process'].stdin.flush()
+                except (OSError, ValueError):pass
+                self._finish_worker(computer['process'])
+                self.computers.pop(key, None)
+        finally:
+            for lock in locked:lock.release()
 
     def supplement(self, workspace_id, python='', setup=''):
         self._idle()
@@ -394,7 +423,9 @@ class WorkspaceEnvironments:
                 with self.lock:
                     self.processes.pop(process, None)
                     self.transport_processes.pop(process,None)
-                process.stdin.close(); process.stdout.close()
+                for stream in (process.stdin, process.stdout):
+                    try:stream.close()
+                    except OSError:pass
 
     def close(self):
         self.close_computers()
