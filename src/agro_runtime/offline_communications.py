@@ -504,7 +504,7 @@ def scan_communications(root, mode='source', profile='', arguments=None, module=
             parameters.append(static_value(module.get('parameters', {})))
             cli_overrides = any(v in ('-p', '--param', '-r', '--remap', '--params-file') for v in module.get('arguments', []))
             nodes.append({'package': module['package'], 'executable': module.get('executable'),
-                          'name': module.get('node_name') or module['id'], '_source_node': original['node'],
+                          'name': module.get('node_name') or (module['id'] if module['kind']=='component' else original['node']), '_source_node': original['node'],
                           '_source_file': original['source'], 'namespace': module.get('namespace', ''),
                           'parameters': parameters, 'remappings': module.get('remappings', []),
                           'unknown': ['parameters'] if cli_overrides else []})

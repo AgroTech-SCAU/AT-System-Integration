@@ -39,7 +39,7 @@ class ContractModel(BaseModel):
 
 
 class TypeDescriptor(ContractModel):
-    type: Literal['string', 'integer', 'number', 'boolean', 'stamped_pose', 'target_list', 'pick_result', 'json']
+    type: Literal['string', 'integer', 'number', 'boolean', 'stamped_pose', 'target_list', 'json']
     unit: Nonempty | None = None
     minimum: Number | None = None
     maximum: Number | None = None
@@ -98,7 +98,7 @@ def scalar_error(spec, value, *, check_choices=True):
              'boolean': lambda x: type(x) is bool,
              'stamped_pose': lambda x: isinstance(x, dict),
              'target_list': lambda x: isinstance(x, list),
-             'pick_result': lambda x: isinstance(x, dict), 'json': valid_json}
+             'json': valid_json}
     if not types[spec.type](value):
         return 'invalid_type', f'需要 {spec.type} 类型'
     if spec.type in {'number', 'integer'}:
@@ -217,9 +217,9 @@ class RoleBinding(ContractModel):
 class SystemConfig(ContractModel):
     system_id: Identifier
     packages: list[Nonempty] = Field(default_factory=list)
-    backends: list[BackendInstance] = Field(min_length=1)
-    required_roles: list[Identifier] = Field(min_length=1)
-    roles: dict[Identifier, RoleBinding]
+    backends: list[BackendInstance] = Field(default_factory=list)
+    required_roles: list[Identifier] = Field(default_factory=list)
+    roles: dict[Identifier, RoleBinding] = Field(default_factory=dict)
 
     @model_validator(mode='after')
     def check_ids(self):
@@ -247,18 +247,6 @@ class StampedPose(ContractModel):
 
 class TargetList(RootModel[list[StampedPose]]):
     pass
-
-
-class PickResult(ContractModel):
-    target_id: Identifier
-    outcome: Literal['picked', 'skipped', 'failed', 'unknown']
-    reason: Nonempty | None = None
-
-    @model_validator(mode='after')
-    def check_reason(self):
-        if self.outcome in {'failed', 'unknown'} and self.reason is None:
-            invalid(('reason',), 'required_field', '失败或结果未知必须保留单果原因')
-        return self
 
 
 class ControlToken(ContractModel):

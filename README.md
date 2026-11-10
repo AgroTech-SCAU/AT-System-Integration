@@ -1,12 +1,38 @@
 # AT-System-Integration
 
-把独立的 ROS 2 子系统接入同一个机器人工程，创建可复用任务，再用层级状态机组织工作流，适合熟悉 ROS 2 的机器人开发者
+独立的 ROS 2 系统集成软件，用于接入子系统、创建可复用任务，再用层级状态机和行为树组织工作流，适合熟悉 ROS 2 的机器人开发者
+
+机器人名称、接口、启动配置、计算扩展与业务流程由外部机器人工程提供；本软件不内置具体机器人或作业策略
 
 你可以离线读取接口、填写任务参数和编排流程；运行时由工作台准备所需环境、启动模块并执行工作流，重试、并行和多步骤子流程可用行为树组合
 
+## 版本与授权
+
+当前版本为 `v0.1.0`，项目采用 [GNU General Public License Version 3](LICENSE)，原文日期为 29 June 2007；GUI 引用来源与第三方授权保留在 [THIRD_PARTY_NOTICES.md](gui/THIRD_PARTY_NOTICES.md)
+
 ## 安装与启动
 
-在 Ubuntu 桌面准备 Python、Node.js、npm、CMake、C++ 编译环境、libcurl 开发包和 Electron 图形依赖
+当前验证环境为 Ubuntu 22.04 图形桌面；安装需要 Python 3.10 或以上、Node.js 22.x（至少 22.12）或 24 及以上版本、npm、CMake 3.16.3 或以上和 C++17 编译环境
+
+先安装 Ubuntu 22.04 的系统依赖
+
+```bash
+sudo apt update
+sudo apt install python3 python3-venv build-essential cmake pkg-config \
+  libcurl4-openssl-dev ca-certificates \
+  libgtk-3-0 libnss3 libgbm1 libasound2 libxss1 libxtst6
+```
+
+Node.js 与 npm 按 [Node.js 官方下载页](https://nodejs.org/en/download) 的 Linux 安装步骤准备，可选择 22.x（至少 22.12）或 24.x；Ubuntu 22.04 默认软件源中的 Node.js 版本不满足本项目要求，安装后在新终端核对版本
+
+```bash
+python3 --version
+node --version
+npm --version
+cmake --version
+```
+
+桌面窗口需要可用的图形会话；在其他 Ubuntu 版本上准备依赖时，使用该版本对应的包名，例如 Ubuntu 24.04 的 GTK 与音频库为 `libgtk-3-0t64`、`libasound2t64`
 
 进入本仓库目录，依次执行
 
@@ -24,6 +50,17 @@
 打开工程用于恢复已保存的配置；准备好配置后，在运行台确认设备环境并开始运行，工作台才会准备子系统和工作流
 
 若移动了软件仓库，启动时提示安装目录不匹配，在新位置重新执行 `./install.sh`
+
+安装脚本会重新创建路径不匹配的 task-engine 构建目录；安装目录下保存运行记录与配置的 `state/` 保留，机器人工程仍保存在原工程目录
+
+默认安装位置为仓库内 `.install/`；需要自定义位置时，安装、启动和以后重装均传入相同的 `AGRO_INSTALL_DIR`，该变量不会自动保存，也不会迁移已有运行记录或配置
+
+```bash
+AGRO_INSTALL_DIR=/absolute/path/to/atil-install ./install.sh
+AGRO_INSTALL_DIR=/absolute/path/to/atil-install ./launch.sh
+```
+
+首次安装需要下载 Python 与 npm 依赖、Electron 运行时和 BehaviorTree.CPP 源码；已准备 BehaviorTree.CPP 4.7.0 源码时，可通过 `./install.sh --bt-source /absolute/path/to/BehaviorTree.CPP` 使用本地源码，其余依赖仍需可访问的下载源或缓存
 
 ## 先认识四个对象
 
@@ -49,7 +86,7 @@
 
 ## 配置时最常用的几个概念
 
-**接口类型与通信名称** 分别决定消息结构和调用位置，例如 `tomato_picker_interfaces/action/MoveArm` 描述参数与结果，`/arm/move` 是实际 Action 名称；名称可从源码与启动配置离线扫描，动态名称需补充配置，在线接口查看用于核对实际运行情况
+**接口类型与通信名称** 分别决定消息结构和调用位置，例如 `robot_interfaces/action/MoveArm` 描述参数与结果，`/arm/move` 是实际 Action 名称；名称可从源码与启动配置离线扫描，动态名称需补充配置，在线接口查看用于核对实际运行情况
 
 **消息字段与业务含义** 根据接口定义生成参数表单，字段注释、常量和补充元数据帮助解释含义；`command_type` 等自定义字段的取值按子系统作者的定义填写
 
@@ -66,7 +103,7 @@
 | 发布一次话题消息 | 发送后完成，设备动作的完成情况需另有反馈确认 |
 | 持续发布话题消息 | 持续运行，退出状态或取消时停止发布，并按配置发送停止消息 |
 | 等待话题消息 | 收到满足条件的消息后完成，超过等待时限则超时 |
-| Service | 收到响应并检查业务条件；需要停止设备操作时配置停止核对 |
+| Service | 收到响应并检查业务条件；声明为只读的服务可取消本地等待，设备操作需要配置停止核对 |
 | Action | 等待最终结果并检查业务条件，取消时核对终态和配置的停止反馈 |
 
 Service 与 Action 的停止核对服务应在确认设备或业务操作结束后返回成功；工作台据此确认停止并释放对应资源
@@ -98,7 +135,6 @@ Service 与 Action 的停止核对服务应在确认设备或业务操作结束�
 | --- | --- |
 | gui/ | 桌面界面 |
 | src/agro_runtime/ | 工程管理、流程编排、通信与运行服务 |
-| adapters/ | 执行适配器和模拟组件 |
+| adapters/ | 通用执行适配器 |
 | task_engine/ | 行为树执行引擎 |
-| examples/ | 独立开发资源与示例配置 |
 | docs/ | 使用与设计资料 |

@@ -75,5 +75,4 @@ class Diagnostics:
             checks.append(runtime.readiness(backend,capability,control=None))
         return {'system':runtime.status(),'capabilities':checks,
             'executor_available':bool(runtime.tasks.executable and Path(runtime.tasks.executable).is_file() and os.access(runtime.tasks.executable,os.X_OK)),
-            'module_logs_available':False,'control_acquired':False,
-            'completed_targets':{name:sorted(runtime.tasks.completed_targets(name)) for name in runtime.bound.backends}}
+            'module_logs_available':False,'control_acquired':False}

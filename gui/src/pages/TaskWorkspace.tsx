@@ -16,7 +16,7 @@ type Surface='hsm'|'tree'|'ros'
 type TaskRequest={kind:'ros'|'tree';reference?:string;stateId:string;stateLabel:string;phase:'entry'|'do'|'exit';machineId?:string}
 const phases={entry:'进入',do:'持续',exit:'退出'}
 
-type Props=PageProps & {robotId?:string;robotExampleId?:string|null;configured:boolean;onNavigate:(page:Workspace)=>void}
+type Props=PageProps & {robotId?:string;configured:boolean;onNavigate:(page:Workspace)=>void}
 export default function TaskWorkspace(props:Props){return <TaskWorkspaceContent key={props.robotId||'none'} {...props}/>}
 function TaskWorkspaceContent(props:Props){
  const {t}=useLocale()
@@ -44,12 +44,12 @@ function TaskWorkspaceContent(props:Props){
   },[props.robotId])
   async function select(next:Surface){
     if(tab===next){if(next==='tree'){setContext(null);setBrowseKey(key=>key+1)}return}
-    if((tab==='tree'||tab==='ros')&&!await requestNavigation('agro:studio:leave-task'))return
+    if(!await requestNavigation('agro:studio:leave-task'))return
     setTab(next);setContext(null)
     if(next==='tree')setBrowseKey(key=>key+1)
     if(next==='hsm')window.dispatchEvent(new Event('agro:hsm:refresh'))
   }
-  function openTask(request:TaskRequest){setContext(request);setRequestKey(key=>key+1);setTab(request.kind)}
+  async function openTask(request:TaskRequest){if(!await requestNavigation('agro:studio:leave-task'))return;setContext(request);setRequestKey(key=>key+1);setTab(request.kind)}
   function bind(reference:string){
     if(!context)return
     window.dispatchEvent(new CustomEvent('agro:studio:bind',{detail:{stateId:context.stateId,phase:context.phase,reference,machineId:context.machineId}}))

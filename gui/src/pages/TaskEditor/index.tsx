@@ -8,7 +8,8 @@ import {useLocale} from '../../locale'
 import {useEffect,useRef,useState} from 'react'
 import {Field} from '../../components/Foundation'
 import {ApiError} from '../../api'
-import {ErrorFields,JsonInputDraftContext,durableIntent,type Json,type PageProps} from '../shared'
+import WorkflowPreparation,{useWorkflowPreparation} from '../WorkflowPreparation'
+import {ErrorFields,JsonInputDraftContext,durableIntent,finishIntent,type Json,type PageProps} from '../shared'
 import {clone,copyFragment,duplicate,nodeId,positions,remove,reparent,parentOf,pasteFragment,includeSubtrees,restoreSubtrees,translateBranch,orderSibling,canReferenceTree,type EditorValue,type Fragment} from './editor'
 import TreeCanvas from './TreeCanvas'
 import TreeOutline from './TreeOutline'
@@ -46,6 +47,7 @@ export default function TaskEditor({client,observation,language,changed,configur
  const [inspectorOpen,setInspectorOpen]=useState(()=>window.matchMedia('(min-width:1101px)').matches),[libraryTab,setLibraryTab]=useState<'nodes'|'structure'>('nodes'),[inspectorTab,setInspectorTab]=useState<'node'|'task'>('node'),[diagnosticsOpen,setDiagnosticsOpen]=useState(false),[paletteOpen,setPaletteOpen]=useState(false),[quickSearch,setQuickSearch]=useState(''),[commandIndex,setCommandIndex]=useState(0),[extractOpen,setExtractOpen]=useState(false),[layoutKey,setLayoutKey]=useState(0),[loaded,setLoaded]=useState(false)
  const root=useRef<HTMLDivElement>(null),history=useRef<{past:EditorValue[];future:EditorValue[]}>({past:[],future:[]}),taskIntent=useRef<string|null>(null),dirtyRef=useRef(false),op=useWorkbenchOperation(),reader=useRef(0),editSequence=useRef(0),lastEdit=useRef({key:'',time:0}),clipboard=useRef<Fragment|null>(null),externalRequest=useRef(''),insertion=useRef<{parent:string;before?:string}|null>(null),treePath=useRef<string[]>([]),returnFocus=useRef<HTMLElement|null>(null)
  const currentValue=useRef(value),currentDraft=useRef(draft),studioSeen=useRef<StudioLocation|null>(null)
+ const preparation=useWorkflowPreparation(client,draft?.id||'')
  const [pendingStudioLocation,setPendingStudioLocation]=useState<StudioLocation|null>(null)
  currentValue.current=value;currentDraft.current=draft;dirtyRef.current=dirty
  async function load(){
@@ -60,7 +62,7 @@ export default function TaskEditor({client,observation,language,changed,configur
   void op.run(t("打开状态行为"),async()=>{
    if(dirtyRef.current)await save()
    if(requestedDefinition)await openBehavior(requestedDefinition)
-   else await create('general',contextLabel)
+   else await create(contextLabel)
    setView('edit');setInspectorTab('node')
   })
  },[loaded,requestKey,requestedDefinition,op.busy])
@@ -95,9 +97,9 @@ export default function TaskEditor({client,observation,language,changed,configur
  },[])
  useEffect(()=>{
   if(!value||draft?.document.readonly)return
-  const controller=new AbortController(),timer=setTimeout(()=>{client.request<Json>('/trees/validate','POST',{document:value.document,policy:draft?.policy,parameters:value.parameters},controller.signal).then(result=>{if(!controller.signal.aborted){setDiagnostics(result.diagnostics);setSources(result.sources)}}).catch(error=>{if(!controller.signal.aborted)op.setError(error)})},450)
+  const controller=new AbortController(),timer=setTimeout(()=>{client.request<Json>('/trees/validate','POST',{document:value.document,parameters:value.parameters},controller.signal).then(result=>{if(!controller.signal.aborted){setDiagnostics(result.diagnostics);setSources(result.sources)}}).catch(error=>{if(!controller.signal.aborted)op.setError(error)})},450)
   return()=>{clearTimeout(timer);controller.abort()}
- },[value?.document,value?.parameters,client,draft?.policy])
+ },[value?.document,value?.parameters,client])
  useEffect(()=>{
   if(view!=='run')return
   let active=true;const controller=new AbortController(),sequence=++reader.current
@@ -128,10 +130,10 @@ export default function TaskEditor({client,observation,language,changed,configur
   setView('edit')
  }
  async function backToLibrary(){if(dirtyRef.current)await save();setShowLibrary(true);setView('edit');setDiagnosticsOpen(false);await load()}
- async function importFile(file:File){if(file.size>1048576)throw Error(t('文件超过允许大小'));if(dirtyRef.current)await save();choose(await client.request<Json>('/trees/drafts','POST',{xml:await file.text(),template:'general',name:file.name.replace(/\.xml$/i,'').slice(0,80)||t('未命名行为树')}));await load()}
- async function create(template='general',name?:string){
+ async function importFile(file:File){if(file.size>1048576)throw Error(t('文件超过允许大小'));if(dirtyRef.current)await save();choose(await client.request<Json>('/trees/drafts','POST',{xml:await file.text(),name:file.name.replace(/\.xml$/i,'').slice(0,80)||t('未命名行为树')}));await load()}
+ async function create(name?:string){
   if(dirtyRef.current)await save()
-  const next=await client.request<Json>('/trees/drafts','POST',{template,name:(name||t('未命名行为树')).slice(0,80),owner})
+  const next=await client.request<Json>('/trees/drafts','POST',{name:(name||t('未命名行为树')).slice(0,80),owner})
   onRememberReference?.(next.id)
   choose(next);await load()
  }
@@ -217,7 +219,7 @@ export default function TaskEditor({client,observation,language,changed,configur
  async function checked(){
   requireValidInputs()
   const current=dirtyRef.current?await save():currentDraft.current;if(!current)return null
-  const result=models?.offline_only?await client.request<Json>('/trees/validate','POST',{document:current.document,policy:current.policy,parameters:current.parameters}):await client.request<Json>(`/trees/drafts/${current.id}/validate`,'POST',{})
+  const result=models?.offline_only?await client.request<Json>('/trees/validate','POST',{document:current.document,parameters:current.parameters}):await client.request<Json>(`/trees/drafts/${current.id}/validate`,'POST',{})
   setDiagnostics(result.diagnostics);setSources(result.sources)
   if(result.valid){setCheckFeedback({ok:true,messages:[t("结构和数据校验通过")]})}
   else{const messages=(result.diagnostics||[]).map((issue:Json)=>String(issue.reason||issue.code||t("校验未通过")));setCheckFeedback({ok:false,messages});setDiagnosticsOpen(true);throw new ApiError('response',result.diagnostics.map((issue:Json)=>({path:`${issue.tree_id||'$'}/${issue.editor_id||''}/${issue.port||''}`,code:issue.code,reason:issue.reason})))}
@@ -292,11 +294,18 @@ export default function TaskEditor({client,observation,language,changed,configur
   throw Error(t("设备停止尚未确认，请继续观察当前任务"))
  }
  async function start(){
-  const prepared=await publish();if(!prepared)return
-  const definition=prepared
-  const request=durableIntent('tree-start',{definition_id:definition.id,previous:task&&!['RUNNING','ACCEPTED','CANCELING'].includes(task.state)?task.task_run_id:null});taskIntent.current=request;localStorage.setItem('agro.tree_request',request)
-  try{remember(await client.request<Json>(`/trees/definitions/${definition.id}/start`,'POST',{request_id:request,confirm_safety:!configured&&safetyConfirmed}))}catch(error){if(error instanceof ApiError&&error.kind==='offline'){const found=await client.request<Json>(`/tasks/by-request/${request}`);if(found.found)remember(found.task);else throw error}else throw error}
-  setView('run');await changed()
+  const completed=await preparation.run(async()=>{
+   const definition=await publish()
+   return definition?{kind:'tree',reference:definition.id,confirm_safety:safetyConfirmed}:null
+  },async workflow=>{
+   const request=durableIntent('tree-start',{definition_id:workflow.reference,previous:task&&!['RUNNING','ACCEPTED','CANCELING'].includes(task.state)?task.task_run_id:null});taskIntent.current=request;localStorage.setItem('agro.tree_request',request)
+   let accepted:Json
+   try{accepted=await client.request<Json>(`/trees/definitions/${workflow.reference}/start`,'POST',{request_id:request,confirm_safety:workflow.confirm_safety},undefined,120000)}
+   catch(error){if(!(error instanceof ApiError)||error.kind!=='offline')throw error;const found=await client.request<Json>(`/tasks/by-request/${request}`);if(!found.found)throw error;accepted=found.task}
+   finishIntent('tree-start')
+   return accepted
+  })
+  if(completed){remember(completed.result);setView('run');await changed()}
  }
  async function exportXml(){const current=dirtyRef.current?await save():currentDraft.current;if(!current)return;const result=await client.request<Json>(`/trees/drafts/${current.id}/xml`);if(window.agroDesktop)await window.agroDesktop.exportTreeXml(current.id);else{const url=URL.createObjectURL(new Blob([result.xml],{type:'application/xml'})),anchor=document.createElement('a');anchor.href=url;anchor.download=`${current.document.main_tree_id}.xml`;anchor.click();URL.revokeObjectURL(url)}setXml(result.xml)}
  async function previewExtraction(){if(!value)return;setProposal(await client.request<Json>('/trees/extract','POST',{document:value.document,tree_id:treeId,editor_id:selected,subtree_id:subtreeName}))}
@@ -320,7 +329,7 @@ export default function TaskEditor({client,observation,language,changed,configur
 
  if(showLibrary)return <div ref={root} className="behavior-workbench"><BehaviorLibrary items={library} busy={op.busy} loaded={loaded}
   onOpen={item=>{setTransitionId(item.id);void op.run(t('打开行为树'),()=>openBehavior(item.id))}}
-  onCreate={name=>op.run(t('新建行为树'),()=>create('general',name))}
+  onCreate={name=>op.run(t('新建行为树'),()=>create(name))}
   onRename={(item,name)=>op.run(t('重命名行为树'),async()=>{await client.request(`/trees/behaviors/${item.id}`,'PATCH',{name});await load()})}
   onCopy={(item,name)=>op.run(t('复制行为树'),async()=>{await client.request(`/trees/behaviors/${item.id}/copy`,'POST',{name});await load()})}
   onDelete={item=>op.run(t('删除行为树'),async()=>{await client.request(`/trees/behaviors/${item.id}`,'DELETE');if(draft?.id===item.id){setDraft(null);setValue(null)}await load()})}
@@ -340,7 +349,8 @@ export default function TaskEditor({client,observation,language,changed,configur
   </div>
   {((!configured&&needsBackend)||models?.offline_only)&&<div className="bw-notice"><span>{!configured&&needsBackend?t("设计内容可离线保存，执行前需要应用机器人配置"):t("离线设计可保存并关联，执行前检查运行环境")}</span>{!configured&&needsBackend&&onNavigate&&<button onClick={()=>onNavigate('system')}>{t("打开机器人配置 ")}<Icon name="arrow"/></button>}</div>}
 
-  {view==='run'?<div className="bw-runtime">{!configured&&<label className="bw-safety-confirm"><input type="checkbox" checked={safetyConfirmed} onChange={event=>setSafetyConfirmed(event.target.checked)}/><span>{t("已确认设备急停、动作取消与通信失联保护可用")}</span></label>}<div className="bw-runtime-toolbar"><button disabled={op.busy||!draft||(configured?observation?.system.state!=='READY':!safetyConfirmed)||observation?.control.mode!=='STANDBY'} onClick={()=>void op.run(t("启动行为"),start)}><Icon name="play"/>{t('试运行当前行为树')}</button><button disabled={op.busy||!task||!['RUNNING','ACCEPTED','CANCELING'].includes(task.state)} onClick={()=>void op.run(t("取消任务"),cancelTask)}>{t("取消任务")}</button></div>{dirty&&<div className="bw-notice">{t("执行前将保存并检查当前修改")}</div>}{stale&&<p className="bw-field-error">{t("连接中断 · 恢复后继续观察当前任务")}</p>}{task?<RuntimeTree task={task} language={language}/>:<div className="bw-empty"><Icon name="play"/><h3>{t("等待运行")}</h3><p>{t('试运行当前行为树，或前往运行台查看完整记录')}</p></div>}</div>:tree&&value&&models?<>
+  <WorkflowPreparation preparation={preparation}/>
+  {view==='run'?<div className="bw-runtime"><label className="bw-safety-confirm"><input type="checkbox" checked={safetyConfirmed} onChange={event=>setSafetyConfirmed(event.target.checked)}/><span>{t("已确认设备急停、动作取消与通信失联保护可用")}</span></label><div className="bw-runtime-toolbar"><button disabled={op.busy||preparation.canCancel||!draft||!safetyConfirmed||!['READY','STOPPED'].includes(observation?.system.state||'')||observation?.control.mode!=='STANDBY'} onClick={()=>void op.run(t("启动行为"),start)}><Icon name="play"/>{t('试运行当前行为树')}</button><button disabled={op.busy||!task||!['RUNNING','ACCEPTED','CANCELING'].includes(task.state)} onClick={()=>void op.run(t("取消任务"),cancelTask)}>{t("取消任务")}</button></div>{dirty&&<div className="bw-notice">{t("执行前将保存并检查当前修改")}</div>}{stale&&<p className="bw-field-error">{t("连接中断 · 恢复后继续观察当前任务")}</p>}{task?<RuntimeTree task={task} language={language}/>:<div className="bw-empty"><Icon name="play"/><h3>{t("等待运行")}</h3><p>{t('试运行当前行为树，或前往运行台查看完整记录')}</p></div>}</div>:tree&&value&&models?<>
    {readonly&&<div className="bw-notice">{t("导入的 XML 含有未支持节点 · 当前为只读")}</div>}
    <div className="bw-workspace">
     <aside className="bw-library"><div className="bw-pane-tabs"><button aria-pressed={libraryTab==='nodes'} onClick={()=>setLibraryTab('nodes')}>{libraryTab==='nodes'&&<motion.span layoutId="tree-library-tab" className="workspace-selection" transition={springs.quick}/>}<span>{t("节点库")}</span></button><button aria-pressed={libraryTab==='structure'} onClick={()=>setLibraryTab('structure')}>{libraryTab==='structure'&&<motion.span layoutId="tree-library-tab" className="workspace-selection" transition={springs.quick}/>}<span>{t("结构")}</span></button></div>

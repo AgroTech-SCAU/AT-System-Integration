@@ -26,16 +26,12 @@ struct TargetList {
 struct JsonValue {
   Json value;
 };
-struct PickResult {
-  Json value;
-};
 Json read_json(const std::string &path);
 void validate_value(const Json &spec, const Json &value);
 std::ostream &operator<<(std::ostream &, const Quantity &);
 std::ostream &operator<<(std::ostream &, const IntegerQuantity &);
 std::ostream &operator<<(std::ostream &, const StampedPose &);
 std::ostream &operator<<(std::ostream &, const TargetList &);
-std::ostream &operator<<(std::ostream &, const PickResult &);
 std::ostream &operator<<(std::ostream &, const JsonValue &);
 struct Transport {
   virtual ~Transport() = default;
@@ -118,6 +114,4 @@ template <>
 agro_bt::StampedPose convertFromString<agro_bt::StampedPose>(StringView);
 template <>
 agro_bt::TargetList convertFromString<agro_bt::TargetList>(StringView);
-template <>
-agro_bt::PickResult convertFromString<agro_bt::PickResult>(StringView);
 } // namespace BT

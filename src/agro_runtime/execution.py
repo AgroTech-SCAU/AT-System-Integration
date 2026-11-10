@@ -133,8 +133,6 @@ class ExecutionEngine:
         self.gateway = DeviceGateway(self.control, self.bound)
         self.control.resources.restore(self.records.recover_pending())
         self._adapters: dict[str, Adapter] = {}
-        # 每个 ExecutionEngine 只持有一个模拟世界，不跨系统/进程共享
-        self._mock_world = None
         self._operations: dict[str, _Operation] = {}
         self._requests: dict[str, tuple[str, str]] = {}
         self._lock = asyncio.Lock()
@@ -167,14 +165,6 @@ class ExecutionEngine:
                 package.package_id, allowed_entrypoints=allowed_entrypoints
             )
             return self._adapters[backend_instance]
-        if package.adapter_entrypoint == "agro_mock:create_adapter":
-            # 模拟视觉、导航、机械臂和电控的不同实例应看到同一目标/夹持状态
-            # 仅对显式授权的模拟适配器注入，绝不影响真实设备适配器
-            if self._mock_world is None:
-                from agro_mock import MockWorld
-
-                self._mock_world = MockWorld()
-            options.setdefault("world", self._mock_world)
         module, name = package.adapter_entrypoint.split(":")
         try:
             factory = getattr(importlib.import_module(module), name)

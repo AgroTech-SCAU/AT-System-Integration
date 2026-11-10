@@ -1,15 +1,17 @@
 """Persistent observation context with serialized, cancellable data operations."""
+import inspect
 import json
 import queue
 import sys
 import threading
+import time
 
 from data_operations import DataContext
 
 
 def main():
     first=json.loads(sys.stdin.readline())
-    context=DataContext(first.get('domain_id',0))
+    context=DataContext(first.get('domain_id',0), first.get('use_sim_time',False))
     jobs=queue.Queue();stop=threading.Event()
     def reader():
         for line in sys.stdin:
@@ -32,11 +34,18 @@ def main():
                         if not contract.get('stamp_path') and not contract.get('frame_path'):continue
                         reason=semantic_reason(contract,field_at_path(value,path),{'ros':context.now()})
                         if reason:raise ValueError(name+' · '+reason)
+                deadline=time.monotonic()+task.get('timeout_s',15)
+                while first.get('use_sim_time') and context.now()==0:
+                    if stop.is_set():raise InterruptedError('数据处理已取消')
+                    if time.monotonic()>deadline:raise TimeoutError('尚未收到 ROS 仿真时钟 /clock')
+                    time.sleep(.02)
                 validate_semantics('inputs',task.get('payload',{}))
                 if task['operation']=='extension':
                     import importlib
                     module, function=task['compute_entrypoint'].split(':')
-                    result=getattr(importlib.import_module(module),function)(task.get('payload',{}),stop)
+                    entrypoint=getattr(importlib.import_module(module),function)
+                    options={'context':context} if 'context' in inspect.signature(entrypoint).parameters else {}
+                    result=entrypoint(task.get('payload',{}),stop,**options)
                     if not isinstance(result,dict):raise ValueError('计算扩展必须返回 JSON 对象')
                 else:
                     result=context.run(task['operation'],task.get('payload',{}),stop)

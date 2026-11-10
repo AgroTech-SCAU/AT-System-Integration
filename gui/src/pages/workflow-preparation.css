@@ -1,0 +1,4 @@
+.workflow-preparation{flex:none;min-width:0;max-height:min(36dvh,320px);overflow:auto;padding:14px 18px;border-bottom:1px solid var(--line);background:var(--subtle);font-size:12px}
+.workflow-preparation>header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.workflow-preparation>header>strong{font-weight:550}.workflow-preparation>p{margin:10px 0 0;color:var(--muted)}
+.workflow-preparation .runtime-preparation-summary{margin:12px 0 0}.workflow-preparation .runtime-summary-facts{gap:8px 18px}

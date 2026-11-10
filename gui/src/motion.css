@@ -28,7 +28,6 @@ input,select,textarea{line-height:1.5}
 :lang(en) .wb-document-select{max-width:220px}
 :lang(en) .bw-inspector .bw-node-actions{flex-wrap:wrap}
 :lang(en) .bw-inspector .bw-node-actions button{flex:1;min-width:70px}
-:lang(en) .robot-source-options small{white-space:normal}
 :lang(en) .robot-manager-toolbar>button{padding-inline:10px}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important}button,.file-button,input,select,textarea,.robot-manager-row,.interface-list>button,.ros-browser-items>button,.bw-command-list>button,.run-history-list>button,.wb-node-body,.wb-container-bg,.wb-edge-line,.bw-node-bg{transition:none!important}}
 :root{--state-outline-width:196px;--state-inspector-width:274px;--tree-library-width:206px;--tree-inspector-width:278px}

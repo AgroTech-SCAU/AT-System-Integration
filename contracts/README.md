@@ -17,8 +17,8 @@
 
 ```bash
 python -m pip install -e .
-agroctl package validate contracts/examples/tomato_mock.package.yaml
-agroctl system validate contracts/examples/tomato_mock.system.yaml
+agroctl package validate /path/to/package.yaml
+agroctl system validate config/system.yaml
 python contracts/export_schema.py
 ```
 
@@ -37,7 +37,7 @@ python contracts/export_schema.py
 | `required_roles` | 声明当前系统所需角色 |
 | `roles` | 绑定能力和后端实例，声明预期输入输出，字段集合、类型、单位、范围、坐标系与时间域需兼容 |
 
-静态参数支持 string、integer、number、boolean 和 json，输入输出业务数据还支持 stamped_pose、target_list 与 pick_result
+静态参数支持 string、integer、number、boolean 和 json，输入输出业务数据还支持 stamped_pose 与 target_list
 
 数值声明单位，无量纲使用 `1`，默认值按相同类型、范围与可选值规则校验，`required` 参数缺失且没有默认值时拒绝请求
 
@@ -101,7 +101,7 @@ JSON 消息可通过 `frame_path` 和 `stamp_path` 声明实际坐标系与采�
 
 共享 Schema 导出 TreeDocument、TreeDefinition、TreeNode、PortBinding、LayoutDocument、Diagnostic 及草稿、提取、校验与发布请求，子树端口复用 TypeDescriptor，任务输入复用 ParameterDescriptor
 
-发布以标准 BehaviorTree.CPP XML 为执行定义，布局和显示名独立保存，Agent 冻结模型摘要、XML、系统、清单、资产、ROS 2 任务定义、软件来源和真实实例映射，TaskStart 与 TaskManifest 还声明任务参数、标定引用和有限候选策略
+发布以标准 BehaviorTree.CPP XML 为执行定义，布局和显示名独立保存，Agent 冻结模型摘要、XML、系统、清单、资产、ROS 2 任务定义、软件来源和真实实例映射，TaskStart 与 TaskManifest 声明任务参数、不可变资产引用与运行时限
 
 包含能力节点的定义需匹配有效系统快照，纯 ROS 2 行为树可在独立模式执行，工程与运行条件见[系统架构](../docs/architecture.md)
 
@@ -116,7 +116,6 @@ JSON 消息可通过 `frame_path` 和 `stamp_path` 声明实际坐标系与采�
 | [move.request.json](examples/move.request.json) | 单机单调时钟域位姿请求，校验上下文使用 `now=100.5` 与 `clock_domain=monotonic_host` |
 | [unknown.operation.json](examples/unknown.operation.json) | 分别表达结果未知和停止未确认 |
 | [targets.json](examples/targets.json) | StampedPose 数组，每项沿用位姿的单位、坐标系、时间域和新鲜度校验，列表级 choices 比较整个列表 |
-| [pick.result.json](examples/pick.result.json) | 单果未知结果，failed 与 unknown 必须携带 reason |
 | [bt.registry.json](examples/bt.registry.json) | 行为树离线注册样例，执行器用法见[行为树执行器](../task_engine/README.md) |
 
-能力接入见[模拟适配器](../adapters/mock/README.md)，任务组织见[番茄采摘示例](../examples/tomato_picker/README.md)
+机器人业务通过外部工程中的任务、状态机和计算扩展定义，接入过程见[工作台使用指南](../docs/interactive-guide.md)

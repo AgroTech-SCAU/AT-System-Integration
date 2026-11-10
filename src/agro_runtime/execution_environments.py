@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import queue
 import subprocess
+import tempfile
 import threading
 import time
 from uuid import uuid4
@@ -20,6 +21,14 @@ def _executable_file(path):
     return Path(path).is_file() and os.access(path, os.X_OK)
 
 
+def _worker_failure_reason(reason, diagnostics):
+    try:
+        size = os.fstat(diagnostics.fileno()).st_size
+        detail = os.pread(diagnostics.fileno(), 8192, max(0, size - 8192)).decode('utf-8', errors='replace').strip()
+    except (OSError,ValueError):detail=''
+    return str(reason) + ('\n' + detail if detail else '')
+
+
 class WorkspaceEnvironments:
     def __init__(self, store, robots):
         self.store, self.robots = store, robots
@@ -27,6 +36,9 @@ class WorkspaceEnvironments:
         self.processes = {}
         self.lock = threading.RLock()
         self.computers = {}
+        self.transport_workers = {}
+        self.transport_processes = {}
+        self.reapers = {}
 
     def manage(self, robot, action, workspace_id, python='', setup=''):
         from types import SimpleNamespace
@@ -35,6 +47,9 @@ class WorkspaceEnvironments:
         manager = WorkspaceEnvironments(store, SimpleNamespace(selected_id=lambda:robot))
         manager.processes, manager.lock = self.processes, self.lock
         manager.computers = self.computers
+        manager.transport_workers = self.transport_workers
+        manager.transport_processes = self.transport_processes
+        manager.reapers = self.reapers
         try:
             with self.lock:
                 return getattr(manager, action)(workspace_id, python, setup)
@@ -57,7 +72,7 @@ class WorkspaceEnvironments:
     def _idle(self):
         robot = self._robot()
         with self.lock:
-            busy = any(v[0] == robot and v[1] != 'data_context' and p.poll() is None for p, v in self.processes.items())
+            busy = any(v[0] == robot and v[1] not in ('data_context','ros_context') and p.poll() is None for p, v in self.processes.items())
         records = [v for v in self.store.list('ros_operation') if v.get('definition', {}).get('robot_system_id') == robot]
         if busy or any(v['snapshot']['state'] in ('ACCEPTED', 'RUNNING', 'CANCELING') or v['snapshot'].get('stop_state') == 'UNCONFIRMED' for v in records):
             fail('$.environment', 'environment_busy', '仍有执行中的任务或停止未确认的操作，不能切换执行环境')
@@ -134,15 +149,44 @@ class WorkspaceEnvironments:
         return self.status(workspace_id)
 
     def load(self, workspace_id, python='', setup=''):
-        self._idle()
-        state = self.check(workspace_id, python, setup)
-        if not state['report']['ready']:
-            return state
-        config = self._configuration(workspace_id, state['report']['python'], state['report']['setup'])
-        self._idle()
-        config['signature'] = self.signature(config)
-        self.store.put('execution_environment', config['id'], config)
-        return self.status(workspace_id)
+        with self.lock:
+            self._idle()
+            config = self._configuration(workspace_id, python, setup)
+            self._retire_workspace_workers(workspace_id)
+            state = self.check(workspace_id, config['python'], config['setup'])
+            if not state['report']['ready']:
+                active = self.active(workspace_id)
+                if active and all(active[name] == config[name] for name in ('python', 'setup')):
+                    self.store.put('execution_environment', active['id'], {**active, 'signature': ''})
+                    return self.status(workspace_id)
+                return state
+            config = self._configuration(workspace_id, state['report']['python'], state['report']['setup'])
+            self._idle()
+            config['signature'] = self.signature(config)
+            self.store.put('execution_environment', config['id'], config)
+            return self.status(workspace_id)
+
+    def _retire_workspace_workers(self, workspace_id):
+        workers = [worker for key, pool in self.transport_workers.items() if key[0] == workspace_id for worker in pool]
+        computers = [(key, computer) for key, computer in self.computers.items() if key[0] == workspace_id]
+        locked = []
+        try:
+            if any(worker['busy'] and worker['process'].poll() is None for worker in workers):
+                fail('$.environment', 'environment_busy', '通信任务尚未结束，不能重新加载执行环境')
+            for _, computer in computers:
+                if not computer['lock'].acquire(blocking=False):
+                    fail('$.environment', 'environment_busy', '数据处理尚未结束，不能重新加载执行环境')
+                locked.append(computer['lock'])
+            # Explicit loading refreshes imports even when setup itself is unchanged
+            for worker in workers:
+                self._retire_transport(worker)
+            for key, computer in computers:
+                try:computer['process'].stdin.write('QUIT\n');computer['process'].stdin.flush()
+                except (OSError, ValueError):pass
+                self._finish_worker(computer['process'])
+                self.computers.pop(key, None)
+        finally:
+            for lock in locked:lock.release()
 
     def supplement(self, workspace_id, python='', setup=''):
         self._idle()
@@ -214,28 +258,40 @@ class WorkspaceEnvironments:
         # A surviving descendant may still own the original process group
         return not LocalProcessManager._group_alive(record['pid'])
 
-    def call(self, config, request, stop=None, feedback=None):
+    def _transport_worker(self, config, request):
+        task=request.get('task',{})
+        domain=task.get('_ros_domain',request.get('domain_id'))
+        sim_time=task.get('_use_sim_time',False)
+        lane='run' if request['op']=='run' else 'ready' if request['op'] in ('ready','discover') else 'inspect'
+        key=(config['workspace_id'],domain,sim_time,config.get('signature') or self.signature(config),lane)
+        with self.lock:
+            for worker in self.transport_workers.get(key,[]):
+                if not worker['busy'] and not worker['retired'] and worker['process'].poll() is None:
+                    worker['busy']=True
+                    self.processes[worker['process']]=(worker['robot'],request['op'])
+                    return worker
+            worker=self._start_transport_worker(config,key,domain,sim_time)
+            self.transport_workers.setdefault(key,[]).append(worker)
+            self.processes[worker['process']]=(worker['robot'],request['op'])
+            return worker
+
+    def _start_transport_worker(self, config, key, domain, sim_time):
         # Positional shell arguments avoid interpreting paths as shell commands
         env = dict(os.environ)
-        for key in ('AMENT_PREFIX_PATH', 'CMAKE_PREFIX_PATH', 'COLCON_PREFIX_PATH', 'PYTHONPATH', 'PYTHONHOME', 'VIRTUAL_ENV', 'LD_LIBRARY_PATH'):
-            env.pop(key, None)
+        for env_name in ('AMENT_PREFIX_PATH', 'CMAKE_PREFIX_PATH', 'COLCON_PREFIX_PATH', 'PYTHONPATH', 'PYTHONHOME', 'VIRTUAL_ENV', 'LD_LIBRARY_PATH'):
+            env.pop(env_name, None)
         env['PYTHONDONTWRITEBYTECODE'] = '1'
         env['ROS_LOG_DIR'] = str(self.store.root / 'ros_logs')
         command = ['bash', '--noprofile', '--norc', '-c',
                    'source "$1" >/dev/null && exec "$2" -u "$3"', 'atil-environment', config['setup'], config['python'], str(WORKER)]
+        diagnostics = tempfile.TemporaryFile(mode='w+t', encoding='utf-8')
         try:
-            process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                       text=True, env=env, start_new_session=True)
+            process=subprocess.Popen(command,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=diagnostics,
+                                     text=True,env=env,start_new_session=True)
         except OSError as error:
-            if request['op'] == 'run':
-                return {'state':'FAILED','stop_confirmed':True,'response':{},
-                        'error':{'code':'environment_not_ready','reason':str(error),'retryable':False}}
+            diagnostics.close()
             raise EnvironmentFailure(str(error)) from error
-        try:self.record_worker(process, request.get('task', {}).get('_operation_id'))
-        except BaseException:
-            process.terminate();process.communicate(timeout=5)
-            raise
-        events = queue.Queue()
+        events=queue.Queue()
         def reader():
             try:
                 for line in process.stdout:
@@ -244,74 +300,149 @@ class WorkspaceEnvironments:
                         except (ValueError, TypeError): pass
             finally:
                 events.put({'kind': 'eof', 'value': None})
-        with self.lock:
-            self.processes[process] = (config.get('robot_system_id', config['id']), request['op'])
-        threading.Thread(target=reader, daemon=True).start()
-        sent_stop, dispatched, detached = False, False, False
-        started = time.monotonic()
+        worker={'key':key,'robot':config.get('robot_system_id',config['id']),'process':process,'events':events,
+                'diagnostics':diagnostics,'busy':True,'retired':False,'write_lock':threading.Lock(),
+                'request_id':None,'dispatched':False,'reaping':False}
+        self.processes[process]=(worker['robot'],'ros_context')
+        self.transport_processes[process]=worker
+        threading.Thread(target=reader,daemon=True).start()
         try:
-            process.stdin.write(json.dumps(request) + '\n'); process.stdin.flush()
+            self._write_transport(worker,{'domain_id':domain,'use_sim_time':sim_time})
+        except BaseException:
+            self._finish_worker(process);diagnostics.close()
+            raise
+        return worker
+
+    @staticmethod
+    def _write_transport(worker, value):
+        with worker['write_lock']:
+            worker['process'].stdin.write(json.dumps(value)+'\n');worker['process'].stdin.flush()
+
+    def _retire_transport(self, worker, *, pending=False):
+        with self.lock:
+            worker['retired']=True
+            pool=self.transport_workers.get(worker['key'],[])
+            if worker in pool:pool.remove(worker)
+            if not pool:self.transport_workers.pop(worker['key'],None)
+            if worker['reaping']:return
+            worker['reaping']=True
+        try:self._write_transport(worker,{'quit':True})
+        except (OSError,ValueError):pass
+        def finish():
+            try:
+                if pending:worker['process'].wait()
+                self._finish_worker(worker['process'])
+            finally:worker['diagnostics'].close()
+        if pending:threading.Thread(target=finish,daemon=True).start()
+        else:finish()
+
+    def call(self, config, request, stop=None, feedback=None):
+        worker=None;dispatched=False;retired=False;result=None;finished=False
+        request_id=uuid4().hex;started=time.monotonic();sent_stop=False
+        try:
+            if stop and stop.is_set():return {'state':'CANCELED','response':{},'stop_confirmed':True}
+            worker=self._transport_worker(config,request)
+            process=worker['process'];diagnostics=worker['diagnostics'];events=worker['events']
+            worker.update(request_id=request_id,dispatched=False)
+            self.record_worker(process,request.get('task',{}).get('_operation_id'))
+            with self.lock:self.processes[process]=(worker['robot'],request['op'])
+            self._write_transport(worker,{'request_id':request_id,'request':request})
             while True:
                 if stop and stop.is_set() and not sent_stop:
-                    process.stdin.write('STOP\n'); process.stdin.flush(); sent_stop = True
+                    self._write_transport(worker,{'stop':request_id});sent_stop=True
                 try: event = events.get(timeout=.05)
                 except queue.Empty:
                     limit = request.get('task', {}).get('timeout_s', 15) + 25 if dispatched else 30
                     if time.monotonic() - started > limit:
                         if dispatched:
                             if not sent_stop:
-                                process.stdin.write('STOP\n'); process.stdin.flush()
-                            detached = True
+                                self._write_transport(worker,{'stop':request_id})
+                            retired=True
                         raise EnvironmentFailure('执行进程响应超时，停止未确认' if dispatched else '加载执行环境超时')
                     continue
                 kind, value = event['kind'], event['value']
-                if kind == 'dispatched': dispatched = True
+                if kind=='eof':
+                    retired=True
+                    if result is not None:finished=True;return result
+                    raise EnvironmentFailure('执行进程退出，未返回有效结果')
+                if event.get('request_id')!=request_id:continue
+                if kind == 'dispatched':
+                    dispatched=True;worker['dispatched']=True
                 elif kind == 'feedback' and feedback: feedback(value)
-                elif kind == 'result': return value
+                elif kind == 'result':
+                    result=value
+                    if isinstance(value,dict) and value.get('state')=='UNKNOWN':
+                        retired=True;finished=True;return value
+                elif kind=='idle':
+                    if result is None:raise EnvironmentFailure('执行进程未返回结果')
+                    finished=True;return result
                 elif kind == 'unconfirmed':
-                    detached = True
+                    retired=True
                     raise EnvironmentFailure(value)
                 elif kind == 'error':
-                    if request['op'] == 'run' and not dispatched:
-                        return {'state': 'FAILED', 'response': {}, 'stop_confirmed': True,
-                                'error': {'code': 'environment_not_ready', 'reason': value['reason'], 'retryable': False}}
                     raise EnvironmentFailure(value['reason'], value.get('missing', ''))
-                elif kind == 'eof': raise EnvironmentFailure('执行进程退出，未返回有效结果')
         except (EnvironmentFailure, OSError) as error:
+            reason=_worker_failure_reason(error,worker['diagnostics']) if worker else str(error)
+            retired=True
             if request['op'] == 'run' and not dispatched:
                 return {'state':'FAILED','stop_confirmed':True,'response':{},
-                        'error':{'code':'environment_not_ready','reason':str(error),'retryable':False}}
-            if dispatched and process.poll() is None:
-                detached = True
+                        'error':{'code':'environment_not_ready','reason':reason,'retryable':False}}
+            if dispatched and worker and worker['process'].poll() is None:
                 try:
-                    process.stdin.write('STOP\n'); process.stdin.flush()
-                except OSError:
+                    self._write_transport(worker,{'stop':request_id})
+                except (OSError,ValueError):
                     pass
-            raise
+            raise EnvironmentFailure(reason, getattr(error, 'missing', '')) from error
         finally:
-            if detached:
-                # Preserve delayed-cancel ownership; resources remain UNCONFIRMED in Studio
-                def reap():
-                    process.wait()
-                    with self.lock: self.processes.pop(process, None)
-                    process.stdin.close(); process.stdout.close()
-                threading.Thread(target=reap, daemon=True).start()
-            else:
-                try: process.wait(timeout=2)
-                except subprocess.TimeoutExpired: process.terminate(); process.wait(timeout=2)
-                with self.lock: self.processes.pop(process, None)
-                process.stdin.close(); process.stdout.close()
+            if worker:
+                if retired or worker['retired'] or not finished or worker['process'].poll() is not None:
+                    self._retire_transport(worker,pending=dispatched and not finished)
+                else:
+                    with self.lock:
+                        worker.update(busy=False,request_id=None,dispatched=False)
+                        self.processes[worker['process']]=(worker['robot'],'ros_context')
+
+    def close_transports(self):
+        with self.lock:workers=[worker for pool in self.transport_workers.values() for worker in pool]
+        for worker in workers:
+            self._retire_transport(worker,pending=worker['busy'] and worker['key'][-1]=='run')
+
+    def _finish_worker(self, process):
+        try:
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.terminate()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=2)
+        finally:
+            if process.poll() is not None:
+                with self.lock:
+                    self.processes.pop(process, None)
+                    self.transport_processes.pop(process,None)
+                for stream in (process.stdin, process.stdout):
+                    try:stream.close()
+                    except OSError:pass
 
     def close(self):
         self.close_computers()
         with self.lock:
             for process in list(self.processes):
                 if process.poll() is None:
-                    try: process.stdin.write('STOP\n'); process.stdin.flush()
+                    try:
+                        worker=self.transport_processes.get(process)
+                        if worker:self._write_transport(worker,{'stop':worker['request_id'],'quit':True})
+                        else:process.stdin.write('STOP\n'); process.stdin.flush()
                     except (OSError, ValueError): pass
+            reapers = list(self.reapers.values())
+        for thread in reapers:
+            thread.join()
 
-    def computer(self, config, domain):
-        key=(config['workspace_id'],domain,config['signature'])
+    def computer(self, config, domain, use_sim_time=False):
+        key=(config['workspace_id'],domain,use_sim_time,config['signature'])
         with self.lock:
             existing=self.computers.get(key)
             if existing and existing['process'].poll() is None:return existing
@@ -320,7 +451,12 @@ class WorkspaceEnvironments:
             for name in ('AMENT_PREFIX_PATH','CMAKE_PREFIX_PATH','COLCON_PREFIX_PATH','PYTHONPATH','PYTHONHOME','VIRTUAL_ENV','LD_LIBRARY_PATH'):env.pop(name,None)
             worker=Path(__file__).with_name('data_worker.py')
             command=['bash','--noprofile','--norc','-c','source "$1" >/dev/null && exec "$2" -u "$3"','atil-data',config['setup'],config['python'],str(worker)]
-            process=subprocess.Popen(command,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,env=env,start_new_session=True)
+            diagnostics=tempfile.TemporaryFile(mode='w+t',encoding='utf-8')
+            try:
+                process=subprocess.Popen(command,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=diagnostics,text=True,env=env,start_new_session=True)
+            except OSError as error:
+                diagnostics.close()
+                raise EnvironmentFailure('无法启动数据处理环境：'+str(error)) from error
             events=queue.Queue()
             def read():
                 for line in process.stdout:
@@ -329,18 +465,23 @@ class WorkspaceEnvironments:
                         except ValueError:pass
                 events.put({'error':'数据处理进程已退出'})
             threading.Thread(target=read,daemon=True).start()
-            process.stdin.write(json.dumps({'domain_id':domain})+'\n');process.stdin.flush()
             try:
-                value=events.get(timeout=20)
+                process.stdin.write(json.dumps({'domain_id':domain,'use_sim_time':use_sim_time})+'\n');process.stdin.flush()
+                try:value=events.get(timeout=20)
+                except queue.Empty as error:raise EnvironmentFailure('数据处理环境启动超时') from error
                 if not value.get('ready'):raise EnvironmentFailure(value.get('error','无法启动数据处理环境'))
-            except BaseException:
-                process.terminate();process.wait(timeout=5);raise
+            except BaseException as error:
+                self._finish_worker(process)
+                if isinstance(error,(EnvironmentFailure,OSError)):
+                    raise EnvironmentFailure(_worker_failure_reason(error,diagnostics)) from error
+                raise
+            finally:diagnostics.close()
             result={'process':process,'events':events,'lock':threading.Lock()}
             self.computers[key]=result;self.processes[process]=(config['robot_system_id'],'data_context')
             return result
 
     def compute(self, config, data, stop):
-        computer=self.computer(config,data.get('_ros_domain',0))
+        computer=self.computer(config,data.get('_ros_domain',0),data.get('_use_sim_time',False))
         with computer['lock']:
             if stop.is_set():return {'state':'CANCELED','response':{},'stop_confirmed':True}
             process=computer['process'];events=computer['events']
@@ -360,6 +501,7 @@ class WorkspaceEnvironments:
                         raise EnvironmentFailure('数据处理超时，未继续派发动作')
 
     def close_computers(self):
+        self.close_transports()
         with self.lock:
             for computer in self.computers.values():
                 process=computer['process']

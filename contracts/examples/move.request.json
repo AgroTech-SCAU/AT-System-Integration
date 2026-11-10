@@ -3,7 +3,7 @@
   "backend_instance": "arm_left",
   "input": {
     "target": {
-      "target_id": "tomato_1",
+      "target_id": "target_1",
       "frame_id": "arm_base",
       "timestamp": 100,
       "clock_domain": "monotonic_host",

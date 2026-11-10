@@ -23,11 +23,6 @@ class ConfigurationApply(WorkspaceRequest):
     base_snapshot_id: StrictStr=Field(pattern=r'^[0-9a-f]{64}$')
     request_id: Identifier
 
-class PlanCreate(WorkspaceRequest):
-    template_id: Identifier='tomato_picker'
-    parameters: dict[Identifier,JsonValue]=Field(default_factory=dict)
-    asset_id: Identifier | None=None
-
 class TaskIntent(WorkspaceRequest):
     request_id: Identifier
 

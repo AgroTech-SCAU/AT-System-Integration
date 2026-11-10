@@ -26,7 +26,8 @@ export class ApiClient {
     const abort = () => controller.abort()
     signal?.addEventListener('abort', abort, { once: true })
     if (signal?.aborted) controller.abort()
-    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    let timedOut = false
+    const timer = setTimeout(() => { if (!controller.signal.aborted) { timedOut = true; controller.abort() } }, timeoutMs)
     try {
       const response = await fetch(this.basePath + path, {
         method, headers: { Authorization: `Bearer ${this.#credential}`, 'Content-Type': 'application/json' },
@@ -45,6 +46,7 @@ export class ApiClient {
     } catch (error) {
       const operation = method==='GET'?'读取失败':path.includes('/copy')?'创建副本失败':method==='DELETE'?'删除失败':path.includes('/start')||path.includes('/operations')?'执行请求失败':path.includes('/tasks')?'任务保存失败':path.includes('/state-machines')?'状态机操作失败':path.includes('/interface-workspaces')?'子系统工作区操作失败':'配置未能保存'
       if (error instanceof ApiError) { error.operation ||= operation; throw error }
+      if (timedOut) throw new ApiError('response', [{ path: '$', code: 'observation_timeout', reason: '请求等待超时，结果尚未确认，请查看运行状态' }], '请求等待超时')
       throw new ApiError('offline', [], operation)
     } finally {
       clearTimeout(timer)

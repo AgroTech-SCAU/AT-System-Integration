@@ -1,8 +1,9 @@
-"""任务快照、事件与单果结果的持久存储"""
+"""任务快照与事件的持久存储"""
 import json
 import sqlite3
 
 from .errors import fail
+from .management import timestamp
 
 
 class TaskStore:
@@ -16,9 +17,6 @@ class TaskStore:
                 fingerprint TEXT NOT NULL, snapshot TEXT NOT NULL, status TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS task_events (
                 seq INTEGER PRIMARY KEY AUTOINCREMENT, task_run_id TEXT NOT NULL, payload TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS target_results (
-                task_run_id TEXT NOT NULL, target_id TEXT NOT NULL, payload TEXT NOT NULL,
-                PRIMARY KEY(task_run_id, target_id));
         ''')
 
     def by_request(self, identity):
@@ -38,32 +36,28 @@ class TaskStore:
         return json.loads(row['snapshot'])
 
     def reserve(self, request_id, identity, fingerprint, snapshot, status):
+        now = timestamp()
+        status.update(started_at=now, updated_at=now, finished_at=None)
         with self.db:
             self.db.execute('INSERT INTO tasks VALUES (?,?,?,?,?)',
                             (request_id, identity, fingerprint, json.dumps(snapshot), json.dumps(status)))
             self.event(identity, {'type': 'task_accepted', 'state': status['state']})
 
     def save(self, identity, status):
+        status['updated_at'] = timestamp()
+        if status['state'] in {'SUCCEEDED', 'FAILED', 'CANCELED', 'STOPPED'} and status.get('stop_confirmed') and not status.get('finished_at'):
+            status['finished_at'] = status['updated_at']
         with self.db:
             self.db.execute('UPDATE tasks SET status=? WHERE task_run_id=?', (json.dumps(status), identity))
 
     def event(self, identity, payload):
         with self.db:
             self.db.execute('INSERT INTO task_events(task_run_id,payload) VALUES (?,?)',
-                            (identity, json.dumps(payload)))
+                            (identity, json.dumps({'timestamp': timestamp(), **payload})))
 
     def events(self, identity):
         return [dict(seq=row['seq'], **json.loads(row['payload'])) for row in self.db.execute(
             'SELECT seq,payload FROM task_events WHERE task_run_id=? ORDER BY seq', (identity,))]
-
-    def target(self, identity, payload):
-        with self.db:
-            self.db.execute('INSERT OR REPLACE INTO target_results VALUES (?,?,?)',
-                            (identity, payload['target_id'], json.dumps(payload)))
-
-    def targets(self, identity):
-        return [json.loads(row['payload']) for row in self.db.execute(
-            'SELECT payload FROM target_results WHERE task_run_id=? ORDER BY target_id', (identity,))]
 
     def list(self):
         return [json.loads(row['status']) for row in self.db.execute('SELECT status FROM tasks ORDER BY rowid')]

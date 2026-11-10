@@ -2,16 +2,19 @@
 import asyncio
 import copy
 from contextlib import nullcontext
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import signal
 from uuid import uuid4
 
 from .configuration import encoded
 from .errors import fail
 from .models import RuntimeDescriptor
+from .management import timestamp
 from .runtime import LocalProcessManager
 
 
@@ -20,12 +23,27 @@ class Deployment:
         self.store, self.robots, self.ros, self.documents, self.hsm = store, robots, ros_tasks, documents, hsm
         self.root = store.root / 'deployment'
         self.root.mkdir(exist_ok=True)
-        self.manager = LocalProcessManager(state_directory=self.root / 'processes', config_identity='robot-profile')
+        self.manager = LocalProcessManager(state_directory=self.root / 'processes', config_identity='robot-profile',
+                                           stop_signal=signal.SIGINT)
         self.lock = asyncio.Lock()
         self.stopping = False
         self.monitor = None
         self.state = 'STOPPED'
         self.reason = ''
+        self.robot_system_id = None
+        self.progress = None
+        self._health_checked_at = {}
+
+    def _progress(self, phase, *, reset=False, **changes):
+        now = timestamp()
+        if reset or not self.progress:
+            self.progress = {'started_at':now, 'robot_system_id':self.robot_system_id,
+                             'current':None, 'completed':0, 'total':0, 'deadline_at':None, 'health':None}
+        self.progress.update(phase=phase, updated_at=now, **changes)
+
+    @staticmethod
+    def _deadline(seconds):
+        return (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
 
     def has_processes(self):
         return bool(self.manager.identities)
@@ -261,13 +279,19 @@ class Deployment:
         for workspace in sorted(required):
             location={'page':'overview','workspaceId':workspace,'section':'environment'}
             try:
-                loaded=bool(self.ros.environments.active(workspace))
+                state=self.ros.environments.status(workspace)
+                loaded=state['loaded']
+                saved=state.get('active') or {}
                 config=(self.ros.environments.snapshot(workspace_id=workspace) if loaded else
-                        self.ros.environments._configuration(workspace,''))
+                        self.ros.environments._configuration(workspace,saved.get('python',''),saved.get('setup','')))
                 environments.append({'workspace_id':workspace,'name':config.get('name',workspace),
                                      'configured':True,'loaded':loaded})
                 if not loaded:
-                    notes.append({'reason':'开始运行时将检查并加载执行环境','name':config.get('name',workspace),'target':location})
+                    if self.has_processes():
+                        execution.append({'code':'environment_busy','reason':'执行环境需要重新加载，请先停止子系统',
+                                          'target':location})
+                    else:
+                        notes.append({'reason':'开始运行时将检查并加载执行环境','name':config.get('name',workspace),'target':location})
             except (ContractValidationError, OSError, ValueError) as error:
                 environments.append({'workspace_id':workspace,'configured':False})
                 errors(error,execution,location)
@@ -343,13 +367,16 @@ class Deployment:
                 'modules':[modules[k] for k in order], 'issues':issues,'ready':not issues}
 
     async def status(self):
+        selected = self.robots.selected_id()
+        current = self.robot_system_id in (None, selected)
         rows = []
         for record in self.store.list('deployment_module'):
-            if record.get('robot_system_id') != self.robots.selected_id():continue
-            if record['id'] not in self.manager.identities and self.state=='STOPPED':continue
+            if record.get('robot_system_id') != selected:continue
+            if record['id'] not in self.manager.identities and (not current or self.state=='STOPPED'):continue
             measured = await self.manager.status(record['id'],RuntimeDescriptor(**record['descriptor']))
             rows.append({**record,'process':measured})
-        return {'state':self.state,'reason':self.reason,'modules':rows}
+        return {'state':self.state if current else 'STOPPED','reason':self.reason if current else '',
+                'robot_system_id':selected,'progress':copy.deepcopy(self.progress) if current else None,'modules':rows}
 
     async def require_ready(self, kind, reference):
         tasks=self.tasks_for(kind,reference)
@@ -365,7 +392,7 @@ class Deployment:
         if plan['issues']:fail('$.modules','module_binding_required',plan['issues'][0]['reason'])
         for module in plan['modules']:
             record=next((v for v in self.store.list('deployment_module') if v['id']==module['id']),None)
-            if not record or record.get('state')!='READY' or self.state!='READY':
+            if not record or record.get('robot_system_id')!=self.ros._robot() or record.get('state')!='READY' or self.state!='READY' or self.robot_system_id!=self.ros._robot():
                 fail('$.modules','modules_not_prepared','请先在运行台准备当前流程所需子系统')
             if not module.get('oneshot') and not (await self.manager.status(module['id'],RuntimeDescriptor(**record['descriptor'])))['running']:
                 fail('$.modules','module_not_running','启动模块已退出：'+module['name'])
@@ -389,54 +416,94 @@ class Deployment:
         async with self.lock:
             if self.hsm.running() or any(v['state'] in ('ACCEPTED','RUNNING','CANCELING','UNKNOWN') or not v['stop_confirmed'] for v in self.robots.context.tasks.list()):
                 fail('$.workflow','workflow_busy','请先停止正在运行的流程并确认停止结果')
-            references = self.preflight(kind, reference, inputs)
-            plan = self.plan(kind,reference)
-            if plan['issues']: fail('$.modules','module_binding_required',plan['issues'][0]['reason'])
             self.state='PREPARING'; self.reason=''
+            self.robot_system_id=self.ros._robot()
+            self._progress('checking',reset=True,kind=kind,reference=reference)
             started=[]
             try:
+                references = self.preflight(kind, reference, inputs)
+                plan = self.plan(kind,reference)
+                if plan['issues']: fail('$.modules','module_binding_required',plan['issues'][0]['reason'])
                 configs={}
                 # Check every environment and module before starting the first process
                 task_values=self.tasks_for(kind,reference)
                 workspaces={m['workspace_id'] for m in plan['modules']}
                 for task in task_values:
                     workspaces.add(self.ros.environments.workspace_for(task))
-                for identity in sorted(workspaces):
+                environments={identity:self.ros.environments.status(identity) for identity in sorted(workspaces)}
+                if self.has_processes() and any(not state['loaded'] for state in environments.values()):
+                    fail('$.environment','environment_busy','执行环境需要重新加载，请先停止子系统')
+                for index, identity in enumerate(sorted(workspaces)):
                     if self.stopping:raise RuntimeError('启动已取消')
-                    if not self.ros.environments.active(identity):
-                        result=await asyncio.to_thread(self.ros.environments.manage,self.ros._robot(),'load',identity)
+                    saved=environments[identity].get('active') or {}
+                    workspace_name=self.store.get('interface_workspace',identity)['name']
+                    self._progress('environment',current={'id':identity,'name':workspace_name,'kind':'workspace'},
+                                   completed=index,total=len(workspaces),deadline_at=None,health=None)
+                    if not environments[identity]['loaded']:
+                        result=await asyncio.to_thread(self.ros.environments.manage,self.ros._robot(),'load',identity,
+                                                      saved.get('python',''),saved.get('setup',''))
                         if not result['loaded']:fail('$.environment','environment_not_ready',result['report']['reason'])
                     configs[identity]=self.ros.environments.snapshot(workspace_id=identity)
-                for module in plan['modules']:
                     if self.stopping:raise RuntimeError('启动已取消')
+                    self._progress('environment',completed=index+1)
+                for index, module in enumerate(plan['modules']):
+                    if self.stopping:raise RuntimeError('启动已取消')
+                    self._progress('probing',current={'id':module['id'],'name':module['name'],'kind':'module'},
+                                   completed=index,total=len(plan['modules']),deadline_at=None,health=None)
                     await asyncio.to_thread(self.ros.environments.call,configs[module['workspace_id']],{'op':'module_probe','module':module})
-                for task in task_values:
-                    self.ros.verify_support(task)
-                for identity in sorted(references):
+                    if self.stopping:raise RuntimeError('启动已取消')
+                    self._progress('probing',completed=index+1)
+                for index, task in enumerate(task_values):
+                    if self.stopping:raise RuntimeError('启动已取消')
+                    self._progress('checking',current={'id':task['id'],'name':task['name'],'kind':'task'},
+                                   completed=index,total=len(task_values),deadline_at=None,health=None)
+                    await self.ros.verify_support_async(task)
+                    self._progress('checking',completed=index+1)
+                for index, identity in enumerate(sorted(references)):
+                    if self.stopping:raise RuntimeError('启动已取消')
                     if not identity.startswith('draft_'):
-                        self.documents.definition_request(identity, 'deployment_preflight')
+                        self._progress('checking',current={'id':identity,'name':identity,'kind':'tree'},
+                                       completed=index,total=len(references),deadline_at=None,health=None)
+                        await self.documents.definition_request(identity, 'deployment_preflight')
+                        self._progress('checking',completed=index+1)
                 for task in task_values:
+                    if self.stopping:raise RuntimeError('启动已取消')
                     if task.get('kind')=='compute' or task.get('stop_observation'):
                         config=self.ros.environments.snapshot(task)
-                        await asyncio.to_thread(self.ros.environments.computer,config,self.ros.connection()['domain_id'])
+                        self._progress('environment',current={'id':config['workspace_id'],
+                                       'name':config.get('name',task['name']),'kind':'workspace'},
+                                       completed=0,total=1,deadline_at=None,health=None)
+                        await asyncio.to_thread(self.ros.environments.computer,config,self.ros.connection()['domain_id'],
+                                                self.ros.connection().get('use_sim_time',False))
+                        if self.stopping:raise RuntimeError('启动已取消')
+                        self._progress('environment',completed=1)
+                if self.stopping:raise RuntimeError('启动已取消')
                 self.state='STARTING'
-                for module in plan['modules']:
+                for index, module in enumerate(plan['modules']):
                     if self.stopping: raise RuntimeError('启动已取消')
                     identity=module['id']; config=configs[module['workspace_id']]
+                    current={'id':identity,'name':module['name'],'kind':'module'}
+                    deadline_at=self._deadline(module['startup_timeout_s'])
+                    self._progress('start',current=current,completed=index,total=len(plan['modules']),deadline_at=deadline_at,health=None)
                     records={v['id']:v for v in self.store.list('deployment_module')}
                     dependencies={key:records[key].get('token') for key in module.get('dependencies',[])}
                     fingerprint=hashlib.sha256(encoded({'module':module,'environment':config,'dependencies':dependencies}).encode()).hexdigest()
                     previous=records.get(identity)
                     if previous and previous.get('state')=='READY' and previous.get('fingerprint')==fingerprint:
                         if module.get('oneshot') or (await self.manager.status(identity,RuntimeDescriptor(**previous['descriptor'])))['running']:
+                            self._progress('start',completed=index+1,deadline_at=None,health=previous.get('health'))
                             continue
                     if identity in self.manager.identities:
                         fail('$.modules','module_config_changed','已启动模块的配置或依赖发生变化，请先停止子系统：'+module['name'])
                     descriptor=self.descriptor(module,config)
                     prior=identity in self.manager.identities
+                    started_at=timestamp()
                     await self.manager.start(identity,descriptor)
+                    deadline_at=self._deadline(module['startup_timeout_s'])
+                    self._progress('wait',deadline_at=deadline_at)
                     if not prior: started.append(identity)
-                    self.store.put('deployment_module',identity,{'id':identity,'name':module['name'],'robot_system_id':self.ros._robot(),'descriptor':descriptor.model_dump(mode='json'),'state':'STARTING','fingerprint':fingerprint,'token':uuid4().hex})
+                    self.store.put('deployment_module',identity,{'id':identity,'name':module['name'],'robot_system_id':self.ros._robot(),'descriptor':descriptor.model_dump(mode='json'),'state':'STARTING','fingerprint':fingerprint,'token':uuid4().hex,
+                        'started_at':started_at,'updated_at':timestamp(),'ready_at':None,'stopped_at':None,'deadline_at':deadline_at})
                     deadline=asyncio.get_running_loop().time()+module['startup_timeout_s']
                     while True:
                         if self.stopping: raise RuntimeError('启动已取消')
@@ -447,17 +514,26 @@ class Deployment:
                                 await self.manager.stop(identity,descriptor); ready={'ready':True,'missing':[],'level':'oneshot'}; break
                             raise RuntimeError(module['name']+' 已退出，请查看启动日志')
                         ready=await self.probe(module, config)
+                        row=self.store.get('deployment_module',identity)
+                        self.store.put('deployment_module',identity,{**row,'health':ready,'updated_at':timestamp()})
+                        self._progress('wait',health=ready)
                         if ready['ready']:break
                         if asyncio.get_running_loop().time()>=deadline:raise RuntimeError(module['name']+' 等待接口就绪超时')
                         await asyncio.sleep(.2)
-                    row=self.store.get('deployment_module',identity);self.store.put('deployment_module',identity,{**row,'state':'READY','health':ready})
+                    row=self.store.get('deployment_module',identity);self.store.put('deployment_module',identity,{**row,'state':'READY','health':ready,'updated_at':timestamp(),'ready_at':timestamp(),'deadline_at':None})
+                    self._progress('start',completed=index+1,deadline_at=None,health=ready)
                 self.state='READY'
+                self._progress('ready',current=None,completed=len(plan['modules']),total=len(plan['modules']),deadline_at=None,health=None)
                 if self.monitor is None or self.monitor.done():self.monitor=asyncio.create_task(self.watch())
                 return {**plan,**await self.status()}
             except BaseException as error:
-                self.state='FAILED';self.reason=str(error)
+                self.state='STOPPING' if self.stopping else 'FAILED';self.reason=str(error)
+                self._progress('cancel' if self.stopping else 'failed',deadline_at=None,health={'ready':False,'reason':str(error)})
                 for identity in reversed(started):
-                    try: await self.manager.stop(identity,RuntimeDescriptor(**self.store.get('deployment_module',identity)['descriptor']))
+                    try:
+                        row=self.store.get('deployment_module',identity)
+                        await self.manager.stop(identity,RuntimeDescriptor(**row['descriptor']))
+                        self.store.put('deployment_module',identity,{**row,'state':'STOPPED','updated_at':timestamp(),'stopped_at':timestamp(),'deadline_at':None})
                     except Exception: self.reason+='；部分进程停止未确认'
                 if not self.has_processes():await asyncio.to_thread(self.ros.environments.close_computers)
                 raise
@@ -466,9 +542,11 @@ class Deployment:
         if not module.get('provides') and not module.get('health_checks'):
             return {'ready':not module.get('oneshot'), 'missing':[], 'level':'process'}
         config = config or self.ros.environments.snapshot(workspace_id=module['workspace_id'])
-        return await asyncio.to_thread(self.ros.environments.call, config, {'op':'ready',
+        health = await asyncio.to_thread(self.ros.environments.call, config, {'op':'ready',
             'endpoints':module.get('provides',[]), 'health_checks':module.get('health_checks',[]),
             'domain_id':self.ros.connection()['domain_id']})
+        self._health_checked_at[module['id']]=asyncio.get_running_loop().time()
+        return {**health,'checked_at':timestamp()}
 
     async def watch(self):
         deadlines = {}
@@ -477,20 +555,34 @@ class Deployment:
             for record in self.store.list('deployment_module'):
                 identity = record['id']
                 if identity not in self.manager.identities or identity not in modules:continue
+                health = None
                 try:
                     if not (await self.manager.status(identity,RuntimeDescriptor(**record['descriptor'])))['running']:
                         raise RuntimeError('模块进程已退出')
                     now=asyncio.get_running_loop().time()
-                    if now < deadlines.get(identity,0):continue
                     module=modules[identity]
+                    if identity not in deadlines:
+                        deadlines[identity]=self._health_checked_at.get(identity,now)+module.get('health_interval_s',5)
+                    if now < deadlines.get(identity,0):continue
                     health=await self.probe(module)
                     if self.stopping or self.state!='READY':return
                     deadlines[identity]=now+module.get('health_interval_s',5)
-                    self.store.put('deployment_module',identity,{**record,'health':health})
-                    if not health['ready']:raise RuntimeError('健康条件失效：'+'、'.join(health['missing']))
+                    self.store.put('deployment_module',identity,{**record,'health':health,'updated_at':timestamp()})
+                    if not health['ready']:
+                        notes=[]
+                        for sample in health.get('details',[]):
+                            if 'topic '+sample['name'] not in health['missing']:continue
+                            age=sample.get('sample_age_s')
+                            if age is None:notes.append(sample['name']+' 尚未收到首帧')
+                            elif age>sample['max_age_s']:notes.append(f"{sample['name']} 最近消息 {age:.3f} 秒，有效期 {sample['max_age_s']:.3f} 秒")
+                            elif not sample.get('condition_met'):notes.append(sample['name']+' 最新消息不满足条件')
+                        raise RuntimeError('健康条件失效：'+'、'.join(health['missing'])+('（'+'；'.join(notes)+'）' if notes else ''))
                 except Exception as error:
                     self.state='FAILED';self.reason=record['name']+' · '+str(error)
-                    self.store.put('deployment_module',identity,{**record,'state':'FAILED','health':{'ready':False,'reason':str(error)}})
+                    failure={**(health or {}),'ready':False,'reason':str(error)}
+                    self._progress('failed',current={'id':identity,'name':record['name'],'kind':'module'},
+                                   deadline_at=None,health=failure)
+                    self.store.put('deployment_module',identity,{**record,'state':'FAILED','updated_at':timestamp(),'health':failure})
                     if self.hsm.running():self.hsm.request_stop()
                     await self.robots.context.tasks.stop_all()
                     return
@@ -498,21 +590,58 @@ class Deployment:
 
     async def stop(self):
         self.stopping=True
+        self.robot_system_id=self.robots.selected_id()
+        self.state='STOPPING';self.reason=''
+        previous=self.progress or {}
+        self._progress('cancel',reset=True,kind=previous.get('kind'),reference=previous.get('reference'))
         async with self.lock:
-            if self.hsm.running(): await self.hsm.stop()
-            await self.robots.context.tasks.stop_all()
-            if any(v['snapshot'].get('stop_state')=='UNCONFIRMED' for v in self.store.list('ros_operation')):
-                self.state='UNKNOWN'
-                fail('$.modules','stop_unconfirmed','动作停止未确认，保留通信模块以继续确认停止')
+            try:
+                if self.hsm.running():
+                    session=self.hsm.status()
+                    if session:
+                        self._progress('cancel',current={'id':session['id'],'name':session.get('definition',{}).get('name') or session.get('machine_id',session['id']),'kind':'flow'},
+                                       deadline_at=None)
+                    await self.hsm.stop()
+                self._progress('confirm_stop',current=None,deadline_at=None)
+                await self.robots.context.tasks.stop_all()
+                if any(v.get('definition',{}).get('robot_system_id',self.robot_system_id)==self.robot_system_id and v['snapshot'].get('stop_state')=='UNCONFIRMED'
+                       for v in self.store.list('ros_operation')):
+                    fail('$.modules','stop_unconfirmed','动作停止未确认，保留通信模块以继续确认停止')
+            except BaseException as error:
+                self.state='UNKNOWN';self.reason=str(error)
+                self._progress('confirm_stop',deadline_at=None,health={'ready':False,'reason':str(error)})
+                raise
             errors=[]
-            for record in reversed(self.store.list('deployment_module')):
-                if record.get('robot_system_id')!=self.robots.selected_id():continue
+            records=[record for record in self.store.list('deployment_module')
+                     if record.get('robot_system_id')==self.robot_system_id and
+                     (record['id'] in self.manager.identities or record.get('state')!='STOPPED')]
+            controlled={record['id']:record for record in records}
+            catalog={module['id']:module for module in self.store.list('subsystem_module')
+                     if module.get('robot_system_id')==self.robot_system_id}
+            modules={identity:{'dependencies':[dependency for dependency in
+                        record['descriptor'].get('dependencies',catalog.get(identity,{}).get('dependencies',[]))
+                        if dependency in controlled]}
+                     for identity,record in controlled.items()}
+            records=[controlled[identity] for identity in reversed(self.order(controlled,modules))]
+            completed=0
+            for record in records:
+                deadline_at=self._deadline(record['descriptor'].get('stop_timeout_s',15))
+                self._progress('stop',current={'id':record['id'],'name':record['name'],'kind':'module'},
+                               completed=completed,total=len(records),deadline_at=deadline_at,health=None)
+                self.store.put('deployment_module',record['id'],{**record,'state':'STOPPING','updated_at':timestamp(),'deadline_at':deadline_at})
                 try:
                     if record['id'] in self.manager.identities:
                         await self.manager.stop(record['id'],RuntimeDescriptor(**record['descriptor']))
-                    self.store.put('deployment_module',record['id'],{**record,'state':'STOPPED'})
-                except Exception as error:errors.append(str(error))
+                    self.store.put('deployment_module',record['id'],{**record,'state':'STOPPED','updated_at':timestamp(),'stopped_at':timestamp(),'deadline_at':None})
+                    completed+=1
+                    self._progress('stop',completed=completed,deadline_at=None)
+                except Exception as error:
+                    errors.append(str(error))
+                    self.store.put('deployment_module',record['id'],{**record,'state':'UNKNOWN','updated_at':timestamp(),
+                        'deadline_at':None,'health':{'ready':False,'reason':str(error)}})
             self.state='UNKNOWN' if errors else 'STOPPED';self.reason='；'.join(errors)
+            self._progress('confirm_stop' if errors else 'stopped',current=None,deadline_at=None,
+                           health={'ready':False,'reason':self.reason} if errors else None)
             if errors:fail('$.modules','stop_unconfirmed',self.reason)
             await asyncio.to_thread(self.ros.environments.close_computers)
             return await self.status()

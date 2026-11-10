@@ -1,14 +1,13 @@
-"""机器人系统工作区：实例与范例分离，选中不等于启动设备"""
+"""机器人系统工作区：选中工程不等于启动设备"""
 
 import copy
 import hashlib
 import json
-from pathlib import Path
 from uuid import uuid4
 
 from .configuration import encoded
 from .errors import fail
-from .registry import read_document, Registry, bind_system
+from .registry import Registry, bind_system
 from .models import PackageDescriptor, SystemConfig
 from .errors import parse
 from .runtime import runtime_plan
@@ -19,9 +18,6 @@ class RobotSystems:
         self.context = context
         self.store = store
         self.configuration = configuration
-        self.example = (
-            Path(__file__).resolve().parents[2] / "examples" / "tomato_picker"
-        )
 
     def selected_id(self):
         rows = self.store.list("robot_selection")
@@ -59,14 +55,6 @@ class RobotSystems:
             "selected_id": self.selected_id(),
             "active": self.active(),
             "running_state": self.context.state,
-            "examples": [
-                {
-                    "id": "tomato_picker",
-                    "title": "番茄采摘机器人",
-                    "description": "四类独立模拟后端、共享场景、标定资产和完整采摘行为树",
-                    "simulation": True,
-                }
-            ],
         }
 
     def _name(self, name):
@@ -95,49 +83,25 @@ class RobotSystems:
             fail('$.name', 'duplicate_name', '已有同名机器人，请使用其他名称')
         return self.store.put('robot_system', key, {**record, 'name': name, 'revision': revision + 1})
 
-    def create(self, name, example_id=None):
+    def create(self, name):
         name = self._available_name(name)
-        if example_id not in (None, "tomato_picker"):
-            fail("$.example_id", "unknown_example", "不存在此示例")
         key = "robot_" + uuid4().hex
-        system_id = key  # 实例拥有自己的系统身份，不与示例共用
-        if example_id == "tomato_picker":
-            content = read_document(self.example / "system_four_backends.yaml")
-            content["system_id"] = system_id
-            content["packages"] = ["packages/tomato_simulator.yaml"]
-            if not any(
-                item["id"] == "tomato_simulator"
-                for item in self.configuration.catalog()
-            ):
-                self.configuration.import_package(
-                    "tomato_simulator.yaml",
-                    (self.example / "package.yaml").read_text(encoding="utf-8"),
-                )
-            valid = self.configuration.validate(content)
-            if not valid["valid"]:
-                fail(
-                    "$.example_id",
-                    "example_invalid",
-                    "示例配置校验失败，请先核对接入包",
-                )
-        else:
-            content = {
-                "system_id": system_id,
-                "packages": [],
-                "backends": [],
-                "required_roles": [],
-                "roles": {},
-            }
+        content = {
+            "system_id": key,
+            "packages": [],
+            "backends": [],
+            "required_roles": [],
+            "roles": {},
+        }
         record = {
             "id": key,
             "name": name,
-            "example_id": example_id,
             "content": content,
-            "configured": bool(example_id),
+            "configured": False,
             "revision": 1,
         }
         self.store.put("robot_system", key, record)
-        # 新建仅持久化项目，不自动启动后端、不切换正在运行的机器人
+        # 新建仅持久化工程，不启动后端、不切换正在运行的机器人
         return record
 
     def delete(self, key):
@@ -153,7 +117,7 @@ class RobotSystems:
         # cancelled or failed deletion cannot leave a half-deleted project
         with self.store.db:
             self.store.db.execute("DELETE FROM documents WHERE kind='robot_profile' AND id=?", (key,))
-            for kind in ("tree_draft", "plan", "state_machine", "ros_task", "ros_resource", "ros_binding"):
+            for kind in ("tree_draft", "state_machine", "ros_task", "ros_resource", "ros_binding"):
                 for row in self.store.list(kind):
                     if row.get("robot_system_id") == key:
                         self.store.db.execute(
@@ -218,49 +182,6 @@ class RobotSystems:
         for item in published:
             if not any(encoded(item) == encoded(existing) for existing in drafts):
                 drafts.append(item)
-        plans = [
-            {"template_id": item["template_id"], "parameters": item["parameters"]}
-            for item in self.store.list("plan")
-            if item.get("robot_system_id") == key
-        ]
-        plans.extend(copy.deepcopy(record.get("pending_task_plans", [])))
-        assets = []
-        referenced = {
-            item.get("asset_id")
-            for item in self.store.list("plan")
-            if item.get("robot_system_id") == key
-        }
-        for asset in self.store.list("asset"):
-            if asset["id"] not in referenced:
-                continue
-            path = self.store.root / "assets" / (asset["sha256"] + ".json")
-            if not path.is_file():
-                fail("$.assets", "missing_asset", "任务引用的标定资产丢失")
-            content_text = path.read_text(encoding="utf-8")
-            if (
-                hashlib.sha256(content_text.encode("utf-8")).hexdigest()
-                != asset["sha256"]
-            ):
-                fail("$.assets", "asset_checksum_mismatch", "标定资产摘要不匹配")
-            assets.append(
-                {
-                    "filename": asset["filename"],
-                    "sha256": asset["sha256"],
-                    "content": content_text,
-                }
-            )
-        # 导入后尚未激活的工程也能再次导出，保留其内置模拟标定资产
-        if not assets and record.get("pending_task_plans"):
-            asset_text = (self.example / "assets" / "camera_to_arm.json").read_text(
-                encoding="utf-8"
-            )
-            assets.append(
-                {
-                    "filename": "camera_to_arm.json",
-                    "sha256": hashlib.sha256(asset_text.encode()).hexdigest(),
-                    "content": asset_text,
-                }
-            )
         state_machines = [
             {'name': row['name'], 'document': copy.deepcopy(row['document']), 'layout':copy.deepcopy(row.get('layout', {'positions':{}}))}
             for row in self.store.list('state_machine')
@@ -285,7 +206,7 @@ class RobotSystems:
             remap = {}
             for frozen in original.get('ros_tasks', []):
                 portable = {field: copy.deepcopy(value) for field, value in frozen.items()
-                            if field not in ('robot_system_id', 'revision', '_ros_domain', 'interface_schema')}
+                            if field not in ('robot_system_id', 'revision', '_ros_domain', '_use_sim_time', 'interface_schema')}
                 existing = next((item for item in ros_tasks if item['id'] == portable['id']), None)
                 if existing and encoded(existing) == encoded(portable):
                     continue
@@ -307,14 +228,11 @@ class RobotSystems:
             "format_version": 1,
             "system": {
                 "name": record["name"],
-                "example_id": record.get("example_id"),
                 "configured": record["configured"],
                 "configuration": copy.deepcopy(record["content"]),
             },
             "packages": [catalog[name]["description"] for name in package_ids],
-            "assets": assets,
             "task_drafts": drafts,
-            "task_plans": plans,
             "state_machines": state_machines,
             "ros_tasks": ros_tasks,
             "interface_workspaces": [{**{field: copy.deepcopy(item[field]) for field in ('id', 'name', 'definitions')},
@@ -349,14 +267,12 @@ class RobotSystems:
             "system",
             "packages",
             "task_drafts",
-            "task_plans",
             "state_machines",
             "ros_tasks",
             "interface_definitions",
             "interface_selection",
             "interface_workspaces",
             "interface_foundation",
-            "assets",
             "notes",
         }:
             fail("$.bundle", "unexpected_fields", "工程文件包含未支持字段")
@@ -368,25 +284,16 @@ class RobotSystems:
         name = system.get("name")
         if not isinstance(name, str) or not 1 <= len(name.strip()) <= 60:
             fail("$.name", "invalid_name", "系统名称应为 1–60 个字符")
-        example = system.get("example_id")
-        if example not in (None, "tomato_picker"):
-            fail("$.example_id", "unknown_example", "工程使用了未知示例类型")
         descriptors = bundle.get("packages")
-        transfer_assets = bundle.get("assets", [])
         drafts = bundle.get("task_drafts", [])
-        plans = bundle.get("task_plans", [])
         imported_machines = bundle.get("state_machines", [])
         imported_ros_tasks = bundle.get("ros_tasks", [])
         if (
             not isinstance(descriptors, list)
             or not isinstance(drafts, list)
-            or not isinstance(plans, list)
             or not isinstance(imported_machines,list) or len(imported_machines)>80
             or not isinstance(imported_ros_tasks,list) or len(imported_ros_tasks)>100
-            or not isinstance(transfer_assets, list)
-            or len(transfer_assets) > 50
             or len(drafts) > 100
-            or len(plans) > 100
         ):
             fail(
                 "$.bundle",
@@ -465,16 +372,10 @@ class RobotSystems:
         for i, item in enumerate(drafts):
             if (
                 not isinstance(item, dict)
-                or item.get("policy") not in ("general", "tomato_picker", "simulation_inspection")
+                or item.get("policy") != "general"
                 or not isinstance(item.get("parameters"), dict)
             ):
                 fail(f"$.task_drafts[{i}]", "invalid_task_draft", "任务草稿格式无效")
-            if item["policy"] == "tomato_picker" and example != "tomato_picker":
-                fail(
-                    f"$.task_drafts[{i}]",
-                    "template_not_imported",
-                    "番茄任务必须依附番茄示例系统",
-                )
             draft_id = 'draft_' + uuid4().hex
             original_id = item.get('id')
             if original_id:
@@ -631,71 +532,6 @@ class RobotSystems:
             ):
                 fail(f'$.state_machines[{i}].layout','invalid_layout','画布布局无效')
             clean_machines.append({'name':str(item.get('name') or '导入状态机')[:80], 'document': document, 'layout':{'positions':copy.deepcopy(positions)}, 'needs_tree_rebinding':needs_rebinding})
-        # 当前资产系统只认可内置模拟标定证据；未来真实标定须由独立校验器接入
-        allowed_fixture = json.loads(
-            (self.example / "assets" / "camera_to_arm.json").read_text(encoding="utf-8")
-        )
-        for i, asset in enumerate(transfer_assets):
-            if not isinstance(asset, dict) or set(asset) != {
-                "filename",
-                "content",
-                "sha256",
-            }:
-                fail(f"$.assets[{i}]", "invalid_asset", "标定资产格式无效")
-            content_text = asset["content"]
-            if (
-                not isinstance(content_text, str)
-                or len(content_text.encode()) > 1024 * 1024
-            ):
-                fail(f"$.assets[{i}]", "invalid_asset", "标定资产内容无效")
-            if hashlib.sha256(content_text.encode()).hexdigest() != asset["sha256"]:
-                fail(f"$.assets[{i}]", "asset_checksum_mismatch", "标定资产摘要不匹配")
-            try:
-                decoded_asset = json.loads(content_text)
-            except ValueError:
-                fail(f"$.assets[{i}]", "invalid_asset", "标定资产不是 JSON")
-            if decoded_asset != allowed_fixture:
-                fail(
-                    f"$.assets[{i}]",
-                    "unsupported_asset",
-                    "暂不支持导入未验证的真实标定资产",
-                )
-        if plans and not transfer_assets:
-            # 兼容早期导出：内置示例资产仍可由本地例程重建
-            if example != "tomato_picker":
-                fail("$.assets", "missing_asset", "模板任务缺少标定资产")
-        clean_plans = []
-        if plans:
-            from .tasks import TaskManifest
-            from .registry import _values
-
-            template_manifest = parse(
-                TaskManifest,
-                read_document(self.example / "tasks" / "harvest.task.json"),
-            )
-        for i, item in enumerate(plans):
-            if (
-                not isinstance(item, dict)
-                or item.get("template_id") != "tomato_picker"
-                or example != "tomato_picker"
-                or not isinstance(item.get("parameters"), dict)
-            ):
-                fail(
-                    f"$.task_plans[{i}]",
-                    "invalid_task_plan",
-                    "工程包含未知或不兼容的模板任务",
-                )
-            clean_plans.append(
-                {
-                    "template_id": "tomato_picker",
-                    "parameters": _values(
-                        item["parameters"],
-                        template_manifest.parameters,
-                        f"$.task_plans[{i}].parameters",
-                        parameters=True,
-                    ),
-                }
-            )
         for pid, desc in imported.items():
             if pid not in existing:
                 import yaml
@@ -707,12 +543,10 @@ class RobotSystems:
         record = {
             "id": key,
             "name": self._available_name(name),
-            "example_id": example,
             "content": content,
             "configured": bool(system.get("configured")),
             "revision": 1,
             "pending_task_drafts": [],
-            "pending_task_plans": clean_plans,
             "pending_state_machines": clean_machines,
         }
         self.store.put("robot_system", key, record)
@@ -742,8 +576,7 @@ class RobotSystems:
     def restore_imported_tasks(self, record):
         """Only after explicit selection and verified configuration. Imported execution artifacts remain drafts."""
         pending_drafts = record.get("pending_task_drafts", [])
-        pending_plans = record.get("pending_task_plans", [])
-        if not pending_drafts and not pending_plans:
+        if not pending_drafts:
             return
         for draft in pending_drafts:
             key = "draft_" + uuid4().hex
@@ -764,16 +597,7 @@ class RobotSystems:
                     "robot_system_id": record["id"],
                 },
             )
-        if pending_plans:
-            from .assets import AssetService
-
-            assets = AssetService(self.context, self.store, self)
-            for plan in pending_plans:
-                assets.create_plan(
-                    plan["parameters"], assets.builtin["id"], plan["template_id"]
-                )
         record.pop("pending_task_drafts", None)
-        record.pop("pending_task_plans", None)
         self.store.put("robot_system", record["id"], record)
 
     def require_stopped(self):

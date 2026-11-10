@@ -19,10 +19,15 @@ ACTIVE = {'ACCEPTED', 'RUNNING', 'CANCELING'}
 class RosOperations:
     def __init__(self, context, store, tasks, ros_tasks):
         self.context, self.store, self.tasks, self.ros_tasks = context, store, tasks, ros_tasks
+        from .session_records import SessionRecords
+        self.sessions = SessionRecords(store)
         self.workers = {}
         self.stops = {}
+        self._changes = {}
         self._requests = {}
         self._closed = False
+        with store.db:
+            store.db.execute("CREATE INDEX IF NOT EXISTS ros_operations_by_task ON documents(json_extract(body,'$.task_run_id')) WHERE kind='ros_operation'")
         for record in store.list('ros_operation'):
             self._requests[record['request_id']] = record['id']
             snapshot = record['snapshot']
@@ -35,17 +40,42 @@ class RosOperations:
 
     def snapshot(self, identity):
         record=self.store.get('ros_operation', identity)
-        return {**copy.deepcopy(record['snapshot']), 'previous_session':record.get('executor_session') != self.ros_tasks.environments.session_id}
+        return self._snapshot_record(record)
+
+    def _snapshot_record(self, record):
+        # WorkspaceStore has already decoded this record into an independent object
+        return {**record['snapshot'], 'previous_session':record.get('executor_session') != self.ros_tasks.environments.session_id}
+
+    async def wait(self, identity, timeout=.05):
+        changed=self._changes.get(identity)
+        if changed is None:return self.snapshot(identity)
+        changed.clear()
+        snapshot=self.snapshot(identity)
+        if snapshot['state'] not in ACTIVE:return snapshot
+        try:await asyncio.wait_for(changed.wait(),timeout)
+        except asyncio.TimeoutError:pass
+        return self.snapshot(identity)
 
     def operations(self, task_id):
-        return [{**self.snapshot(r['id']), 'task_run_id':task_id, 'node_id':r['node_id'],
-                 'capability_id':'ros.'+r['ros_task_id'], 'input':r['input'], 'parameters':{}}
-                for r in self.store.list('ros_operation') if r['task_run_id']==task_id]
+        return json.loads(self.operations_json(task_id))
+
+    def operations_json(self, task_id):
+        rows = self.store.db.execute("""
+            SELECT json_set(json_extract(body,'$.snapshot'),
+                '$.previous_session', json(CASE WHEN json_extract(body,'$.executor_session')=? THEN 'false' ELSE 'true' END),
+                '$.task_run_id', ?, '$.node_id', json_extract(body,'$.node_id'),
+                '$.capability_id', 'ros.' || json_extract(body,'$.ros_task_id'),
+                '$.input', json_extract(body,'$.input'), '$.parameters', json('{}'))
+            FROM documents WHERE kind='ros_operation' AND json_extract(body,'$.task_run_id')=? ORDER BY rowid
+            """, (self.ros_tasks.environments.session_id, task_id, task_id))
+        return '[' + ','.join(row[0] for row in rows) + ']'
 
     def _update(self, identity, **changes):
         record = self.store.get('ros_operation', identity)
         record['snapshot'].update(changes)
         self.store.put('ros_operation', identity, record)
+        changed=self._changes.get(identity)
+        if changed:changed.set()
         return record['snapshot']
 
     async def submit(self, request):
@@ -93,6 +123,7 @@ class RosOperations:
             raise
         self._requests[request_id] = identity
         stop = self.stops[identity] = threading.Event()
+        self._changes[identity]=asyncio.Event()
         self.workers[identity] = asyncio.create_task(self._run(identity,definition,inputs,token,control,resources,stop))
         return self.snapshot(identity)
 
@@ -138,6 +169,7 @@ class RosOperations:
             control.resources.settle(identity,resources,StopState(snapshot['stop_state']))
             self.stops.pop(identity,None)
             self.workers.pop(identity,None)
+            self._changes.pop(identity,None)
 
     def cancel(self, identity):
         snapshot = self.snapshot(identity)
@@ -168,7 +200,7 @@ class RosOperations:
             from .runtime import LocalProcessManager
             task_ids=[record['task_run_id']]
             if record['task_run_id'].startswith('session_'):
-                session=self.store.get('hsm_session',record['task_run_id'])
+                session=self.sessions.get(record['task_run_id'])
                 task_ids=[v.get('task_run_id') for v in session.get('behaviors',[]) if v.get('task_run_id')]
             for task_id in task_ids:
                 saved=self.tasks.store.status(task_id).get('process_identity') or {}
@@ -183,15 +215,16 @@ class RosOperations:
         if any(v['snapshot']['state'] in ACTIVE and v['definition'].get('robot_system_id') == definition.get('robot_system_id') for v in self.store.list('ros_operation')):
             fail('$.operation','operation_active','请先停止当前机器人的其他任务')
         with self.ros_tasks.environments.lock:
-            if any(p.poll() is None and value[0] == definition.get('robot_system_id') and value[1]!='data_context' for p,value in self.ros_tasks.environments.processes.items()):
+            if any(p.poll() is None and value[0] == definition.get('robot_system_id') and value[1] not in ('data_context','ros_context') for p,value in self.ros_tasks.environments.processes.items()):
                 fail('$.operation','pending_goal','通信进程仍在等待目标结束，暂不能解除资源占用')
         config = definition.get('_execution_environment') or self.ros_tasks.environments.snapshot(definition)
         task = {'kind':'service','interface':service,'ros_type':'std_srvs/srv/Trigger','payload':{},'timeout_s':5,
-                '_ros_domain':definition.get('_ros_domain',self.ros_tasks.connection()['domain_id'])}
+                '_ros_domain':definition.get('_ros_domain',self.ros_tasks.connection()['domain_id']),
+                '_use_sim_time':definition.get('_use_sim_time',self.ros_tasks.connection().get('use_sim_time',False))}
         if observation and not previous_session:
             if not record['snapshot'].get('terminal_received'):
                 fail('$.operation','terminal_unconfirmed','尚未收到动作终态，仅有静止反馈不能证明目标已经结束')
-            result=await asyncio.to_thread(self.ros_tasks.environments.compute,config,{'operation':'wait_stationary','payload':observation,'timeout_s':observation.get('timeout_s',5),'_ros_domain':task['_ros_domain']},threading.Event())
+            result=await asyncio.to_thread(self.ros_tasks.environments.compute,config,{'operation':'wait_stationary','payload':observation,'timeout_s':observation.get('timeout_s',5),'_ros_domain':task['_ros_domain'],'_use_sim_time':task['_use_sim_time']},threading.Event())
         else:
             result = await asyncio.to_thread(self.ros_tasks.environments.call,config,{'op':'run','task':task},threading.Event())
         if result.get('state') != 'SUCCEEDED' or (previous_session or not observation) and result.get('response',{}).get('success') is not True:
@@ -210,8 +243,6 @@ class RosOperations:
                 and all(o['state'] not in ACTIVE and o['stop_state'] in ('CONFIRMED','NOT_APPLICABLE') for o in operations)
                 and ((status.get('error') or {}).get('code') not in ('restart_requires_review','task_monitor_failed') or previous_session)):
             status.update(state='FAILED', stop_confirmed=True, error={'code':'stop_recovered','reason':'设备已确认停止，原任务未成功完成'})
-            if status.get('business_result'):
-                status['business_result']['outcome']='failed'
             self.tasks.store.save(task_id,status)
             self.tasks.store.event(task_id,{'type':'device_stop_confirmed','operation_id':identity,'state':'FAILED'})
             control = self.context.engine.control
@@ -222,7 +253,7 @@ class RosOperations:
         return snapshot
 
     def _settle_recovered_sessions(self, task_id, robot):
-        for session in self.store.list('hsm_session'):
+        for session in self.sessions.list():
             if session.get('robot_system_id',robot)!=robot or session['status']!='UNKNOWN':continue
             behaviors=session.get('behaviors',[])
             if session['id']!=task_id and not any(v.get('task_run_id')==task_id for v in behaviors):continue
@@ -239,7 +270,7 @@ class RosOperations:
                     if status['state'] in ACTIVE|{'UNKNOWN'} or status['stop_state'] not in ('CONFIRMED','NOT_APPLICABLE'):ready=False
                 elif behavior.get('status') in ACTIVE|{'UNKNOWN'}:ready=False
             if ready:
-                self.store.put('hsm_session',session['id'],{**session,'status':'FAILED','error':'已核对设备停止，原流程未完成','attention':[]})
+                self.sessions.save({**session,'status':'FAILED','error':'已核对设备停止，原流程未完成','attention':[]})
 
     async def close(self):
         self._closed = True

@@ -18,8 +18,6 @@ def references(documents):
             except (KeyError,IndexError,ValueError,TypeError):continue
     def task(record,owner):
         yield from declared(record,owner)
-        if record.get('operation')=='transform_targets' and isinstance(record.get('payload'),dict):
-            yield from field(record['payload'],'calibration_file',owner,True)
     for kind,rows in documents.items():
         for record in rows:
             owner=kind+':'+record['id']

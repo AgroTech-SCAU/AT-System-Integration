@@ -14,7 +14,7 @@
 已有机器人工程可在启动时指定目录
 
 ```bash
-./launch.sh --profile /path/to/Bringup/src/robot-profile
+./launch.sh --profile /path/to/robot-profile
 ```
 
 打开工程后先编辑配置，启动设备和执行工作流在运行台发起

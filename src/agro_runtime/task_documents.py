@@ -1,6 +1,7 @@
 """实际节点注册驱动的 XML、类型流、子树与持久发布服务"""
 import copy
 from contextlib import contextmanager
+from contextvars import ContextVar
 import hashlib
 import json
 import os
@@ -12,7 +13,7 @@ from pathlib import Path
 from uuid import uuid4
 from .configuration import encoded,identifier
 from .errors import ContractValidationError,fail,parse
-from .models import TypeDescriptor,StampedPose,PickResult,scalar_error
+from .models import TypeDescriptor,StampedPose,scalar_error
 from .tree_models import TreeDocument,LayoutDocument
 
 
@@ -57,8 +58,9 @@ def literal(port,spec):
 
 
 class TaskDocuments:
-    def __init__(self,context,store,assets):
-        self.context=context;self.store=store;self.assets=assets;self._models=None;self._model_key=None;self.ros_tasks=None;self._ros_override=None
+    def __init__(self,context,store,robot_systems=None):
+        self.context=context;self.store=store;self.robot_systems=robot_systems;self._models=None;self._model_key=None;self.ros_tasks=None
+        self._ros_override=ContextVar('task_documents_ros_override',default=None)
 
     @staticmethod
     def requires_system(document):
@@ -66,8 +68,9 @@ class TaskDocuments:
                    for tree in document['trees'].values() for node in tree['nodes'].values())
 
     def ros_definitions(self):
-        if self._ros_override is not None:
-            return copy.deepcopy(self._ros_override)
+        frozen=self._ros_override.get()
+        if frozen is not None:
+            return copy.deepcopy(frozen)
         return self.ros_tasks.list() if self.ros_tasks and self.ros_tasks.robots.selected_id() else []
 
     def registry_snapshot(self):
@@ -75,12 +78,11 @@ class TaskDocuments:
 
     @contextmanager
     def frozen_ros(self, definitions):
-        previous = self._ros_override
-        self._ros_override = definitions
+        token = self._ros_override.set(definitions)
         try:
             yield
         finally:
-            self._ros_override = previous
+            self._ros_override.reset(token)
 
     def _ros_models(self, nodes):
         for task in self.ros_definitions():
@@ -169,9 +171,6 @@ class TaskDocuments:
             for spec in model['ports'].values():
                 if spec['type'] in {'number','integer'}:spec.setdefault('unit','1')
         self._ros_models(nodes)
-        for name in {'ForEachTarget','HasTarget','PickSucceeded','MakePickResult','SelectTarget','TargetsFromPose'}:
-            if name in nodes:
-                nodes[name]['library_hidden'] = True
         models['digest']=digest(nodes);models['system_snapshot_id']=self.context.snapshot_id
         self._models=copy.deepcopy(models);self._model_key=key
         return models
@@ -252,7 +251,7 @@ class TaskDocuments:
                         if value['kind']=='blackboard_reference' and value['key']==key and spec.get('type')==contract['type'].get('type'):
                             contract['type'].update({k:spec[k] for k in ('unit','frame_id','clock_domain','max_age_s') if spec.get(k) is not None})
         document['inputs']=declared_inputs.get(document['main_tree_id'],{})
-        # 固定模板的已知边界可转换为显式端口，其余自动映射保留只读
+        # 仅将可确定的输入自动映射转换为显式端口
         if not unsupported:
             for tree in trees.values():
                 for node in tree['nodes'].values():
@@ -263,7 +262,7 @@ class TaskDocuments:
                             if node['ports']:
                                 unsupported.append('unsupported_mixed_autoremap');continue
                             outputs=any(self.port_specs(n,document,models).get(k,{}).get('direction')=='OUTPUT' for n in target['nodes'].values() for k in n['ports'])
-                            if outputs and xml.strip()!=self.assets.template.read_text().strip():
+                            if outputs:
                                 unsupported.append('unsupported_output_autoremap');continue
                             target['ports']=boundary
                             node['ports']={key:{'kind':'blackboard_reference','key':key,'type':{},'value':None} for key in boundary}
@@ -363,22 +362,6 @@ class TaskDocuments:
         main=document['main_tree_id']
         return visit(main,trees[main]['root_id'],{},'', [main])
 
-    def canonical(self,document):
-        variables={};stages=[]
-        def visit(node):
-            ports={}
-            for name,value in sorted(node['ports'].items()):
-                if value['kind']=='blackboard_reference':
-                    key=value['key']
-                    if key not in variables:variables[key]='variable_'+str(len(variables))
-                    ports[name]=['reference',variables[key]]
-                else:ports[name]=['literal',value.get('value'),value.get('type',{}).get('unit')]
-            attrs={k:v for k,v in node['attributes'].items() if k in {'role','backend_instance'}}
-            if node['registration_id'].startswith(('Capability_','RosTask_')):
-                stages.append(node)
-            return [node['registration_id'],attrs,ports,[visit(c) for c in node['expanded_children']]]
-        return visit(self.expanded(document)),stages
-
     def validate_tree(self,document,policy='general',parameters=None,engine=True,editing=False):
         diagnostics=[];sources=[];models=self.describe_nodes();parameters=parameters or {}
         def error(code,reason,tree=None,node=None,port=None,pending=False):
@@ -393,7 +376,8 @@ class TaskDocuments:
                     if node['registration_id'].startswith('RosTask_')}
         if self.ros_tasks and task_ids:
             try:
-                tasks = [task for task in self._ros_override if task['id'] in task_ids] if self._ros_override is not None else sorted(task_ids)
+                frozen=self._ros_override.get()
+                tasks = [task for task in frozen if task['id'] in task_ids] if frozen is not None else sorted(task_ids)
                 self.ros_tasks.validate_task_workspaces(tasks)
             except ContractValidationError as exc:
                 for issue in exc.issues:error(issue.code,issue.reason)
@@ -452,7 +436,6 @@ class TaskDocuments:
                                     pose=parse(StampedPose,item)
                                     for field,actual,code in [('unit',pose.position_unit,'unit_mismatch'),('frame_id',pose.frame_id,'frame_mismatch'),('clock_domain',pose.clock_domain,'clock_mismatch')]:
                                         if spec.get(field) is not None and spec[field]!=actual:error(code,'位姿常量与端口契约不兼容',tree_id,identity,port)
-                            elif spec['type']=='pick_result':parse(PickResult,value.get('value'))
                         except ContractValidationError as exc:
                             for issue in exc.issues:error(issue.code,issue.reason,tree_id,identity,port)
                         except ValueError:error('invalid_literal','常量不符合端口契约',tree_id,identity,port)
@@ -503,10 +486,6 @@ class TaskDocuments:
                     spec=specs.get(port,{})
                     if spec.get('direction')=='OUTPUT' and value['kind']=='blackboard_reference':
                         out={k:spec[k] for k in ('type','unit','frame_id','clock_domain','max_age_s','minimum','maximum','choices','extensions','frame_path','stamp_path') if spec.get(k) is not None}
-                        if registration in {'ForEachTarget','SelectTarget','TargetsFromPose'}:
-                            source=node['ports'].get('targets' if registration!='TargetsFromPose' else 'target')
-                            if source and source['kind']=='blackboard_reference' and source['key'] in env:
-                                out={**env[source['key']], 'type':spec['type']}
                         out['_producers']=[{'tree_id':tree_id,'editor_id':identity,'port':port,'kind':'node_output'}]
                         env[value['key']]=out
             if registration=='SubTree':
@@ -554,10 +533,6 @@ class TaskDocuments:
                 threshold=node['ports'].get('success_count',{}).get('value',-1)
                 if threshold in {-1,len(branches)}:
                     for branch in branches:env.update(branch)
-            elif registration=='ForEachTarget':
-                before=copy.deepcopy(env);output_values()
-                for child in node['children']:flow(tree_id,child,env,stack,depth+1)
-                env=before
             elif registration=='Inverter':
                 for child in node['children']:flow(tree_id,child,env,stack,depth+1)
             elif registration=='Repeat':
@@ -571,55 +546,19 @@ class TaskDocuments:
                 output_values()
             return env
         blackboard={}
-        if policy in {'general','simulation_inspection','tomato_picker'}:
+        if policy == 'general':
             from .models import ParameterDescriptor
             from .registry import _values
-            # 所有任务均由当前文档声明参数，旧版番茄草稿兼容原有声明
-            definitions=document['inputs']
-            if policy=='tomato_picker' and not definitions:
-                from .registry import read_document
-                definitions=read_document(self.assets.template.with_suffix('.task.json'))['parameters']
-            specs={k:parse(ParameterDescriptor,v) for k,v in definitions.items()}
+            specs={k:parse(ParameterDescriptor,v) for k,v in document['inputs'].items()}
             try:
                 effective=_values(parameters,specs,'$.parameters',parameters=True)
                 for name,value in effective.items():blackboard[name]={**specs[name].model_dump(mode='json',exclude_none=True),'value':value}
-                if policy=='tomato_picker' and 'calibration_offset_x' not in blackboard:
-                    fixture=self.assets.builtin['metadata']
-                    blackboard['calibration_offset_x']={'type':'number','unit':'m','value':fixture['translation_m'][0]}
             except ContractValidationError as exc:
                 for issue in exc.issues:error(issue.code,issue.reason,port=issue.path)
         else:error('unknown_task_policy','任务策略不支持')
         main=document['main_tree_id'];initial={k:{**{a:v[a] for a in ('type','unit','minimum','maximum','choices','extensions','frame_id','clock_domain','max_age_s','frame_path','stamp_path') if a in v},'_producers':[{'tree_id':main,'port':k,'kind':'task_input'}]} for k,v in blackboard.items()}
         flow(main,trees[main]['root_id'],initial,[main])
-        stage_by_editor={};stage_by_instance={}
         try:
-            canonical,instances=self.canonical(document)
-            readonly_caps={'perception.detect_tomato','perception.detect_targets','manipulation.check_reachability','geometry.transform_pose','geometry.offset_pose','perception.verify_pick','perception.verify_place','manipulation.collection_pose'}
-            if policy=='simulation_inspection':
-                for node in instances:
-                    model=models['nodes'][node['registration_id']]
-                    backend=node['attributes'].get('backend_instance')
-                    role=self.context.bound.roles.get(node['attributes'].get('role'))
-                    backend=backend or (role.backend_instance if role else None)
-                    package=self.context.registry.packages[self.context.bound.backends[backend].package_id] if backend else None
-                    if model.get('capability_id') not in readonly_caps or not package or package.adapter_entrypoint!='agro_mock:create_adapter' or any(r['access']=='exclusive' for r in model.get('resources',[])):
-                        error('inspection_side_effect_forbidden','查询策略仅允许模拟只读能力',node['tree_id'],node['editor_id'])
-                if any(n['registration_id'] in {'ForEachTarget','MakePickResult'} for t in trees.values() for n in t['nodes'].values()):error('inspection_policy_violation','查询策略不允许采摘循环或结果记账')
-            elif policy=='tomato_picker':
-                # 仅用于兼容既有冻结番茄任务，新建任务使用通用策略
-                original=self.parse_xml(self.assets.template.read_text());expected,original_instances=self.canonical(original)
-                if canonical!=expected:error('tomato_policy_violation','旧版番茄任务仍需保留原安全执行结构')
-                else:
-                    for node,reference in zip(instances,original_instances):
-                        stage=reference['attributes'].get('node_id');stage_by_editor[node['editor_id']]=stage
-                        stage_by_instance[node['instance_path']]=stage
-            elif policy=='general':
-                # 节点标识允许携带业务阶段标签，采摘结果的证明仍由执行核心检查
-                for item in instances:
-                    stage=item['attributes'].get('node_id')
-                    if stage:
-                        stage_by_editor[item['editor_id']]=stage
-                        stage_by_instance[item['instance_path']]=stage
             # XML 可加载不能授权物理动作重入
             # Validate only descendants of the relevant control node, including expanded subtrees
             def check_effects(node, required=frozenset()):
@@ -639,11 +578,11 @@ class TaskDocuments:
                     check_effects(child, required)
             check_effects(self.expanded(document))
         except (ContractValidationError,KeyError,RecursionError) as exc:error('invalid_expansion','子树无法安全展开 '+str(exc))
-        result={'valid':not diagnostics,'diagnostics':diagnostics,'sources':sources,'model_digest':models['digest'],'system_snapshot_id':self.context.snapshot_id,'blackboard':blackboard,'stage_by_editor':stage_by_editor,'stage_by_instance':stage_by_instance}
+        result={'valid':not diagnostics,'diagnostics':diagnostics,'sources':sources,'model_digest':models['digest'],'system_snapshot_id':self.context.snapshot_id,'blackboard':blackboard}
         if result['valid'] and engine:
             try:
                 compiled=self.serialize_xml(document);checked=self.engine(compiled['xml'],blackboard)
-                result['node_mapping']=[{**n,'editor_id':n['name'],'stage':stage_by_instance.get(n['path'])} for n in checked['nodes']]
+                result['node_mapping']=[{**n,'editor_id':n['name']} for n in checked['nodes']]
                 result['xml_sha256']=hashlib.sha256(compiled['xml'].encode()).hexdigest()
             except ContractValidationError as exc:
                 for issue in exc.issues:error(issue.code,issue.reason)
@@ -671,7 +610,7 @@ class TaskDocuments:
         return {'document':document,'call_id':call_id,'ports':ports}
 
     def _check_ownership(self, record):
-        if self.assets.robot_systems and record.get('robot_system_id') != self.assets.robot_systems.selected_id():
+        if self.robot_systems and record.get('robot_system_id') != self.robot_systems.selected_id():
             fail('$.robot_system_id','different_robot_system','此任务定义属于其他机器人系统')
 
     @staticmethod
@@ -681,7 +620,7 @@ class TaskDocuments:
         return record.get('name') or record.get('layout', {}).get('labels', {}).get(root) or document['main_tree_id']
 
     def behaviors(self):
-        robot = self.assets.robot_systems.selected_id() if self.assets.robot_systems else None
+        robot = self.robot_systems.selected_id() if self.robot_systems else None
         drafts = [item for item in self.store.list('tree_draft') if item.get('robot_system_id') == robot]
         archived = {item['id'] for item in drafts if item.get('archived')}
         records = [item for item in drafts + self.store.list('tree_definition')
@@ -698,7 +637,7 @@ class TaskDocuments:
     def behavior_uses(self, reference):
         aliases = {reference}
         aliases.update(item['id'] for item in self.store.list('tree_definition') if item.get('draft_id') == reference)
-        robot = self.assets.robot_systems.selected_id() if self.assets.robot_systems else None
+        robot = self.robot_systems.selected_id() if self.robot_systems else None
         result = []
         for machine in self.store.list('state_machine'):
             if machine.get('robot_system_id') != robot:
@@ -739,22 +678,14 @@ class TaskDocuments:
             fail('$.name','invalid_name','请输入行为树名称')
         if owner and (set(owner) - {'machine_id','state_id','phase'} or owner.get('phase') not in {'entry','do','exit'}):
             fail('$.owner','invalid_owner','状态行为来源无效')
-        if template=='tomato_picker' and not self.assets.template_enabled():
-            fail('$.template', 'template_not_imported', '先在总览导入并选择番茄采摘机器人示例')
+        if template != 'general':
+            fail('$.template', 'unknown_template', '不支持此任务模板')
         if xml is None:
-            if template=='tomato_picker':xml=self.assets.template.read_text()
-            elif template=='general':xml='<root BTCPP_format="4" main_tree_to_execute="Main"><BehaviorTree ID="Main"><Sequence/></BehaviorTree></root>'
-            else:xml='<root BTCPP_format="4" main_tree_to_execute="Main"><BehaviorTree ID="Main"><Sequence><AlwaysSuccess/></Sequence></BehaviorTree></root>'
+            xml='<root BTCPP_format="4" main_tree_to_execute="Main"><BehaviorTree ID="Main"><Sequence/></BehaviorTree></root>'
         document=self.parse_xml(xml)
-        if template=='tomato_picker':
-            from .registry import read_document
-            manifest=read_document(self.assets.template.with_suffix('.task.json'))
-            document['inputs'].update(manifest['parameters'])
-            document['inputs']['calibration_offset_x']={'type':'number','unit':'m','default':self.assets.builtin['metadata']['translation_m'][0],'apply_policy':'idle'}
         key='draft_'+uuid4().hex
-        # 模板只用于生成初始内容，之后按照通用任务策略自由编辑
-        policy='general' if template=='tomato_picker' else template
-        return self.store.put('tree_draft',key,{'id':key,'name':(name or '未命名行为树').strip(),'owner':owner,'revision':1,'layout_revision':1,'policy':policy,'base_snapshot_id':self.context.snapshot_id,'document':document,'layout':LayoutDocument().model_dump(mode='json'),'parameters':{},'validation':None,'published':None,'robot_system_id':self.assets.robot_systems.selected_id() if self.assets.robot_systems else None})
+        policy='general'
+        return self.store.put('tree_draft',key,{'id':key,'name':(name or '未命名行为树').strip(),'owner':owner,'revision':1,'layout_revision':1,'policy':policy,'base_snapshot_id':self.context.snapshot_id,'document':document,'layout':LayoutDocument().model_dump(mode='json'),'parameters':{},'validation':None,'published':None,'robot_system_id':self.robot_systems.selected_id() if self.robot_systems else None})
 
     def copy_behavior(self, reference, name):
         original = self.store.get('tree_draft' if reference.startswith('draft_') else 'tree_definition', reference)
@@ -823,19 +754,12 @@ class TaskDocuments:
         compiled=self.serialize_xml(draft['document']);key_definition='definition_'+uuid4().hex
         root=self.store.root/'plans'/key_definition;root.mkdir(parents=True)
         xml=root/'task.xml';xml.write_text(compiled['xml']);xml.chmod(0o400)
-        if draft['policy']=='tomato_picker':
-            # 旧版已保存草稿仍按原策略发布
-            from .registry import read_document
-            manifest=read_document(self.assets.template.with_suffix('.task.json'))
-            raw=(self.assets.example/'assets/camera_to_arm.json').read_bytes();asset_path=root/'camera_to_arm.json';asset_path.write_bytes(raw);asset_path.chmod(0o400)
-            manifest['assets']['camera_to_arm']['path']='camera_to_arm.json'
-        else:
-            budgets = {task['id']: task.get('timeout_s',15) for task in frozen_tasks}
-            # The outer deadline must leave time for each declared ROS task and cancellation
-            duration = sum(budgets.get(node['registration_id'][8:],0) for tree in draft['document']['trees'].values()
-                           for node in tree['nodes'].values() if node['registration_id'].startswith('RosTask_'))
-            manifest={'kind':draft['policy'],'assets':{},'parameters':draft['document']['inputs'],'max_targets':8,'max_recovery_attempts':0,
-                      'timeout_ms':min(3660000,max(30000,int((duration+30)*1000)))}
+        budgets = {task['id']: task.get('timeout_s',15) for task in frozen_tasks}
+        # The outer deadline leaves time for the declared ROS tasks and cancellation
+        duration = sum(budgets.get(node['registration_id'][8:],0) for tree in draft['document']['trees'].values()
+                       for node in tree['nodes'].values() if node['registration_id'].startswith('RosTask_'))
+        manifest={'kind':'general','assets':{},'parameters':draft['document']['inputs'],
+                  'timeout_ms':min(3660000,max(30000,int((duration+30)*1000)))}
         (root/'task.task.json').write_text(encoded(manifest));(root/'task.task.json').chmod(0o400)
         definition={'id':key_definition,'draft_id':key,'revision':revision,'system_snapshot_id':self.context.snapshot_id,'model_digest':checked['model_digest'],'document':draft['document'],'layout':draft['layout'],'xml':compiled['xml'],'xml_sha256':checked['xml_sha256'],'manifest':manifest,'parameters':draft['parameters'],'node_mapping':checked['node_mapping'],'blackboard':checked['blackboard'],'task_ref':str(xml),'immutable':True,'robot_system_id':draft.get('robot_system_id'),'ros_tasks':frozen_tasks}
         definition['name'] = self.behavior_name(draft)
@@ -845,24 +769,25 @@ class TaskDocuments:
         self.store.put('tree_definition',key_definition,definition);draft['published']=key_definition;self.store.put('tree_draft',key,draft)
         return definition
 
-    def prepare_behavior(self, reference):
+    async def prepare_behavior(self, reference):
         if reference.startswith('draft_'):
             draft = self.store.get('tree_draft', reference)
-            return self.publish(reference, draft['revision'], self.context.snapshot_id)
-        self.definition_request(reference, 'behavior_preflight')
+            reference = self.publish(reference, draft['revision'], self.context.snapshot_id)['id']
+        await self.definition_request(reference, 'behavior_preflight')
         return copy.deepcopy(self.store.get('tree_definition', reference))
 
-    def definition_request(self,key,request_id,parameters=None):
+    async def definition_request(self,key,request_id,parameters=None):
         definition=self.store.get('tree_definition',key)
+        self._check_ownership(definition)
         with self.frozen_ros(definition.get('ros_tasks', [])):
+            for task in definition.get('ros_tasks', []):
+                await self.ros_tasks.verify_support_async(task)
             return self._definition_request(definition, request_id, parameters)
 
     def _definition_request(self,definition,request_id,parameters=None):
         from .tasks import TaskStart
         key=definition['id']
         self._check_ownership(definition)
-        for task in definition.get('ros_tasks', []):
-            self.ros_tasks.verify_support(task)
         if self.requires_system(definition['document']) and definition['system_snapshot_id']!=self.context.snapshot_id:fail('$.definition','snapshot_conflict','系统配置已改变，请重新检查行为中的能力绑定')
         path=Path(definition['task_ref']).resolve()
         if not path.is_relative_to((self.store.root/'plans'/key).resolve()):fail('$.definition','invalid_definition_path','定义路径不在受控目录')
@@ -871,10 +796,10 @@ class TaskDocuments:
         if not checked['valid']:fail('$.definition','definition_invalid',encoded(checked['diagnostics']))
         return TaskStart(task_ref=str(path),parameters=definition['parameters'] if parameters is None else parameters,request_id=request_id)
 
-    def frozen_definition(self,path):
+    async def frozen_definition(self,path):
         for definition in self.store.list('tree_definition'):
             if Path(definition['task_ref']).resolve()==Path(path).resolve():
-                self.definition_request(definition['id'],'freeze_validation')
+                await self.definition_request(definition['id'],'freeze_validation')
                 if json.loads(Path(path).with_suffix('.task.json').read_text())!=definition['manifest']:
                     fail('$.definition','definition_checksum_mismatch','不可变任务清单已改变')
                 return definition

@@ -47,16 +47,42 @@ def _matches_value(value, cond):
     return value > right if op == 'greater' else value < right
 
 
-def _run_task(data, stop, feedback=None, *, context=None, unconfirmed=None):
+class RosSession:
+    """One workspace worker owns a ROS participant and its reusable endpoints."""
+    def __init__(self, domain_id, use_sim_time=False):
+        rclpy, _, _, _ = _ros_modules()
+        from rclpy.executors import SingleThreadedExecutor
+        from rclpy.parameter import Parameter
+        self.context=rclpy.context.Context()
+        rclpy.init(context=self.context, **({'domain_id':domain_id} if domain_id is not None else {}))
+        self.node=rclpy.create_node('atil_workspace_'+uuid4().hex[:8],context=self.context,
+                                   parameter_overrides=[Parameter('use_sim_time',value=use_sim_time)])
+        self.executor=SingleThreadedExecutor(context=self.context);self.executor.add_node(self.node)
+        self.entities={}
+
+    def entity(self, kind, key, create):
+        identity=(kind,*key)
+        if identity not in self.entities:self.entities[identity]=create()
+        return self.entities[identity]
+
+    def close(self):
+        import rclpy
+        for identity,entity in self.entities.items():
+            if identity[0]=='action':entity.destroy()
+        self.executor.shutdown();self.node.destroy_node();rclpy.shutdown(context=self.context)
+
+
+def _run_task(data, stop, feedback=None, *, context=None, unconfirmed=None, completed=None, session=None):
     rclpy, (get_message, get_service, get_action), fill, _ = _ros_modules()
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.action import ActionClient
-    owns_context=context is None
+    owns_context=context is None and session is None
     if owns_context:
         context = rclpy.context.Context()
         rclpy.init(context=context)
     node = None
     executor = None
+    subscription = None
     action_goal = None
     kind = data['kind']
     deadline = time.monotonic() + data.get('timeout_s', 15)
@@ -76,9 +102,15 @@ def _run_task(data, stop, feedback=None, *, context=None, unconfirmed=None):
             fail('$.payload', 'invalid_fields', '消息字段与 ROS 2 接口定义不匹配: ' + str(exc))
         return msg
     try:
-        node = rclpy.create_node('atil_task_' + uuid4().hex[:8], context=context)
-        executor = SingleThreadedExecutor(context=context)
-        executor.add_node(node)
+        if session:
+            node,executor=session.node,session.executor
+            executor.spin_once(timeout_sec=0)
+        else:
+            from rclpy.parameter import Parameter
+            node = rclpy.create_node('atil_task_' + uuid4().hex[:8], context=context,
+                                     parameter_overrides=[Parameter('use_sim_time', value=data.get('_use_sim_time',False))])
+            executor = SingleThreadedExecutor(context=context)
+            executor.add_node(node)
         try:
             from .data_contracts import field_at_path, semantic_reason
         except ImportError:
@@ -97,6 +129,13 @@ def _run_task(data, stop, feedback=None, *, context=None, unconfirmed=None):
                 except (ValueError, KeyError, TypeError, IndexError) as error:
                     result.update(state='FAILED', error={'code':'output_semantics','reason':str(error),'retryable':False})
             return result
+        while data.get('_use_sim_time') and node.get_clock().now().nanoseconds == 0:
+            if stop.is_set():
+                return {'state':'CANCELED','response':{},'stop_confirmed':True}
+            if remaining() <= 0:
+                return {'state':'FAILED','response':{},'stop_confirmed':True,
+                        'error':{'code':'clock_unavailable','reason':'尚未收到 ROS 仿真时钟 /clock','retryable':False}}
+            executor.spin_once(timeout_sec=min(.05, remaining()))
         check_semantics('inputs', data.get('payload', {}))
         interface = data['interface']
         ros_type = data['ros_type']
@@ -104,7 +143,9 @@ def _run_task(data, stop, feedback=None, *, context=None, unconfirmed=None):
             cls = get_message(ros_type)
             from rclpy.qos import QoSProfile, ReliabilityPolicy
             qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT if data.get('qos_reliability') == 'best_effort' else ReliabilityPolicy.RELIABLE)
-            pub = node.create_publisher(cls, interface, qos)
+            pub = (session.entity('publisher',(ros_type,interface,data.get('qos_reliability')),
+                                  lambda:node.create_publisher(cls,interface,qos)) if session else
+                   node.create_publisher(cls, interface, qos))
             msg = message(cls, data.get('payload', {}))
             if kind == 'publish_once':
                 if stop.is_set(): return 'CANCELED'
@@ -134,29 +175,57 @@ def _run_task(data, stop, feedback=None, *, context=None, unconfirmed=None):
                 if _matches(msg, data.get('condition', {})):
                     response = _message_as_dict(msg)
                     matched.set()
-            sub = node.create_subscription(cls, interface, observe, qos)
+            # A new reader cannot consume a previous task's queued volatile samples
+            subscription=node.create_subscription(cls, interface, observe, qos)
             while not matched.is_set() and not stop.is_set() and remaining() > 0:
                 executor.spin_once(timeout_sec=min(.05, remaining()))
             return outcome({'state': 'CANCELED' if stop.is_set() else 'SUCCEEDED' if matched.is_set() else 'FAILED', 'response': response})
         if kind == 'service':
             cls = get_service(ros_type)
-            client = node.create_client(cls, interface)
+            client = (session.entity('service',(ros_type,interface),lambda:node.create_client(cls,interface))
+                      if session else node.create_client(cls, interface))
+            readonly = data.get('execution_policy', {}).get('readonly') is True
+
+            def ended_wait():
+                canceled = stop.is_set()
+                result = {'state': 'CANCELED' if canceled else 'FAILED',
+                          'response': {}, 'stop_confirmed': True}
+                if not canceled:
+                    result['error'] = {'code': 'task_timeout', 'reason': 'Service 等待响应超时',
+                                       'retryable': False}
+                return result
+
             while not client.wait_for_service(timeout_sec=.1):
-                if stop.is_set(): return 'CANCELED'
-                if remaining() <= 0: return 'FAILED'
+                if stop.is_set() or remaining() <= 0:
+                    return ended_wait()
+            if stop.is_set() or remaining() <= 0:
+                return ended_wait()
             future = client.call_async(message(cls.Request, data.get('payload', {})))
-            if not spin_until(future):
+            finished = spin_until(future)
+            if not finished or readonly and (stop.is_set() or remaining() <= 0):
                 future.cancel()
+                if readonly:
+                    return ended_wait()
                 # 服务请求可能已到达设备，取消本地等待并不等于服务端停止执行
                 raise RuntimeError('Service 请求已发出但未收到响应，设备执行状态未知，请人工核对')
             result = future.result()
+            if readonly and (stop.is_set() or remaining() <= 0):
+                return ended_wait()
             if feedback:
                 feedback(_message_as_dict(result))
             # 服务响应仅表示服务调用结束，并不证明实体动作已经完成
-            return outcome({'state': 'SUCCEEDED', 'response': _message_as_dict(result)})
+            value = outcome({'state': 'SUCCEEDED', 'response': _message_as_dict(result)})
+            if readonly and value['state'] == 'SUCCEEDED':
+                if stop.is_set() or remaining() <= 0:
+                    return ended_wait()
+                value['stop_confirmed'] = True
+                if completed:
+                    completed(value)
+            return value
         if kind == 'action':
             cls = get_action(ros_type)
-            client = ActionClient(node, cls, interface)
+            client = (session.entity('action',(ros_type,interface),lambda:ActionClient(node,cls,interface))
+                      if session else ActionClient(node, cls, interface))
             while not client.wait_for_server(timeout_sec=.1):
                 if stop.is_set(): return 'CANCELED'
                 if remaining() <= 0: return 'FAILED'
@@ -228,8 +297,10 @@ def _run_task(data, stop, feedback=None, *, context=None, unconfirmed=None):
             return outcome(result_value)
         raise ValueError('unsupported ROS task')
     finally:
-        if executor:
+        if subscription is not None and session:
+            node.destroy_subscription(subscription)
+        if executor and not session:
             executor.shutdown()
-        if node:
+        if node and not session:
             node.destroy_node()
         if owns_context:rclpy.shutdown(context=context)

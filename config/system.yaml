@@ -1,0 +1,5 @@
+system_id: integration_host
+packages: []
+backends: []
+required_roles: []
+roles: {}

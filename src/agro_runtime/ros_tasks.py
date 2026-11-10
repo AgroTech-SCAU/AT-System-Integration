@@ -9,6 +9,7 @@ import os
 import re
 import threading
 import time
+from functools import lru_cache
 from uuid import uuid4
 
 from .errors import ContractValidationError, fail, parse
@@ -18,10 +19,42 @@ from .registry import _values
 IDENT = re.compile(r'^[a-z][a-z0-9_]{0,63}$')
 KINDS = {'service', 'action', 'publish_once', 'publish_periodic', 'subscribe_wait', 'compute'}
 WAIT_MODES = {'response', 'result', 'message', 'sent', 'until_stopped'}
+STOP_OBSERVATION_OUTPUTS = {'$stop_observation.after_ns': 'integer', '$stop_observation.pose': 'json'}
+SUPPORT_FIELDS = ('field_types', 'output_field_types', 'feedback_field_types')
+
+
+def support_schema(schema):
+    return {name: schema.get(name, {}) for name in SUPPORT_FIELDS}
+
+
+@lru_cache(maxsize=128)
+def compiled_support(project_id, definitions_json):
+    """Cache exact definition contents, retaining every transitive wire type."""
+    from .ros_interfaces import InterfaceLibrary
+    schemas = InterfaceLibrary(None, project_id).compile(json.loads(definitions_json), saved_definitions=False)
+    return {name: support_schema(schema) for name, schema in schemas.items()}
+
+
+def stop_observation_output(data, port, path):
+    """Validate the two executor evidence fields, separate from the native ROS result."""
+    if not isinstance(path, str) or not path.startswith('$stop_observation'):
+        return None
+    location = '$.output_bindings.' + port
+    if path not in STOP_OBSERVATION_OUTPUTS:
+        fail(location, 'invalid_binding', '停止观测仅支持 after_ns 和 pose 输出')
+    observation = data.get('stop_observation')
+    if data.get('kind') != 'action' or not isinstance(observation, dict) or not observation:
+        fail(location, 'stop_observation_required', '此输出需要 Action 任务配置停止观测')
+    if path == '$stop_observation.pose' and not all(isinstance(observation.get(key), str) and observation[key].strip()
+                                                 for key in ('base_frame', 'tcp_frame')):
+        fail(location, 'stop_pose_required', '停止位姿输出需要配置基坐标系和工具坐标系')
+    if data.get('outputs', {}).get(port, {}).get('type') != STOP_OBSERVATION_OUTPUTS[path]:
+        fail(location, 'invalid_output_type', '停止观测输出类型应为 ' + STOP_OBSERVATION_OUTPUTS[path])
+    return path.split('.', 1)[1]
 
 
 def execution_policy(task):
-    readonly = task.get('kind') == 'subscribe_wait' or task.get('kind') == 'compute' and task.get('operation') in {'wait_stationary','transform_targets','bounded_pose_step','copy_fields'}
+    readonly = task.get('kind') == 'subscribe_wait' or task.get('kind') == 'compute' and task.get('operation') in {'wait_stationary','copy_fields'}
     defaults = {'readonly':readonly, 'repeatable':readonly, 'cancelable':readonly, 'concurrent':readonly}
     return {**defaults, **task.get('execution_policy', {})}
 
@@ -129,7 +162,8 @@ def validate_task(raw):
             fail('$.'+field, 'invalid_bindings', '字段映射必须是对象')
         for key, value in mapping.items():
             path, port_name = (key, value) if field == 'input_bindings' else (value, key)
-            if not isinstance(path, str) or path!='$' and not re.fullmatch(r'[A-Za-z_]\w*(?:\.(?:[A-Za-z_]\w*|[0-9]+))*', path) or port_name not in names:
+            evidence = stop_observation_output(data, port_name, path) if field == 'output_bindings' else None
+            if not isinstance(path, str) or path!='$' and not evidence and not re.fullmatch(r'[A-Za-z_]\w*(?:\.(?:[A-Za-z_]\w*|[0-9]+))*', path) or port_name not in names:
                 fail('$.'+field, 'invalid_binding', '字段路径或端口名称无效')
         if field == 'output_bindings' and set(mapping) != set(names):
             fail('$.'+field, 'missing_binding', '每个输出端口都需要结果字段映射')
@@ -194,6 +228,8 @@ def validate_task_schema(data, schema):
         if path == '$' and len(data['input_bindings']) != 1:
             fail('$.input_bindings', 'invalid_root_binding', '完整消息绑定需要单个 JSON 对象输入')
     for port, path in data.get('output_bindings', {}).items():
+        if stop_observation_output(data, port, path):
+            continue
         descriptor = descriptor_at(path, response, '$.output_bindings.' + port)
         _check_field_contract(data['outputs'][port], descriptor, '$.output_bindings.' + port)
     for name in ('condition', 'success_condition'):
@@ -264,8 +300,11 @@ def prepared_task(data, inputs=None, schema=None):
     return prepared
 
 
-def mapped_outputs(data, response):
-    output = {key: field_value(response, path) for key, path in data.get('output_bindings', {}).items()}
+def mapped_outputs(data, response, *, stop_observation=None):
+    output = {}
+    for key, path in data.get('output_bindings', {}).items():
+        evidence = stop_observation_output(data, key, path)
+        output[key] = field_value(stop_observation or {}, evidence) if evidence else field_value(response, path)
     return _values(output, {name: parse(TypeDescriptor, spec) for name, spec in data.get('outputs', {}).items()}, '$.outputs')
 
 
@@ -292,14 +331,19 @@ class RosTasks:
         return [self._bound(task) for task in self.store.list('ros_task') if task.get('robot_system_id') == key]
 
     def _bound(self, task):
-        binding = next((item for item in self.store.list('ros_binding')
-                        if item['task_id'] == task['id'] and item['robot_system_id'] == self._robot()), None)
-        result = {**task, 'interface': binding['interface'] if binding else task.get('interface', '')}
+        key = self._robot()
+        binding = self.store.db.execute(
+            "SELECT json_extract(body,'$.interface') FROM documents WHERE kind='ros_binding' "
+            "AND json_extract(body,'$.task_id')=? AND json_extract(body,'$.robot_system_id')=? "
+            "ORDER BY rowid LIMIT 1", (task['id'], key)).fetchone()
+        result = {**task, 'interface': binding[0] if binding else task.get('interface', '')}
         if task.get('icon_mode') == 'workspace':
             first = next(iter(task.get('workspace_ids', [])), None)
-            workspace = next((item for item in self.store.list('interface_workspace')
-                              if item['id'] == first and item.get('project_id') == self._robot()), None)
-            result['icon'] = workspace.get('icon', 'generic') if workspace else 'generic'
+            workspace = self.store.db.execute(
+                "SELECT json_extract(body,'$.icon'),json_type(body,'$.icon') FROM documents "
+                "WHERE kind='interface_workspace' AND id=? AND json_extract(body,'$.project_id')=?",
+                (first, key)).fetchone()
+            result['icon'] = workspace[0] if workspace and workspace[1] else 'generic'
         return result
 
     def bind(self, identity, interface):
@@ -472,13 +516,15 @@ class RosTasks:
         return next((item for item in self.store.list('ros_connection') if item['id']==key),
                     {'id':key,'domain_id':int(os.environ.get('ROS_DOMAIN_ID','0')),'namespace':'/'})
 
-    def save_connection(self, domain_id, namespace):
+    def save_connection(self, domain_id, namespace, use_sim_time=False):
         if not isinstance(domain_id,int) or isinstance(domain_id,bool) or not 0<=domain_id<=232:
             fail('$.domain_id','invalid_domain','ROS 域需为 0 到 232 的整数')
         if not isinstance(namespace,str) or not re.fullmatch(r'/(?:[A-Za-z_][A-Za-z0-9_]*(?:/[A-Za-z_][A-Za-z0-9_]*)*)?/?',namespace):
             fail('$.namespace','invalid_namespace','命名空间需要以 / 开头，并使用 ROS 名称')
+        if not isinstance(use_sim_time,bool):
+            fail('$.use_sim_time','invalid_clock','仿真时钟选项需为布尔值')
         self.close()
-        return self.store.put('ros_connection',self._robot(),{'id':self._robot(),'domain_id':domain_id,'namespace':namespace.rstrip('/') or '/'})
+        return self.store.put('ros_connection',self._robot(),{'id':self._robot(),'domain_id':domain_id,'namespace':namespace.rstrip('/') or '/','use_sim_time':use_sim_time})
 
     def discover(self,connection=None,execution_environment=None):
         connection=connection or self.connection()
@@ -543,6 +589,7 @@ class RosTasks:
         self.require_snapshot(data)
         if data['kind']=='compute':
             data['_ros_domain']=self.connection()['domain_id']
+            data['_use_sim_time']=self.connection().get('use_sim_time',False)
             return copy.deepcopy(data)
         if not data.get('interface'):
             fail('$.task.' + identity, 'missing_endpoint', '任务尚未绑定机器人端点：' + data['name'])
@@ -551,30 +598,49 @@ class RosTasks:
         data['interface_schema'] = {name: value for name, value in expected.items() if name not in ('source', 'schema_id')}
         self.validate_structure(data)
         data['_ros_domain'] = self.connection()['domain_id']
+        data['_use_sim_time'] = self.connection().get('use_sim_time',False)
         return copy.deepcopy(data)
 
     def verify_support(self, data):
+        schemas, config, request = self._prepare_support(data)
+        from .execution_environments import EnvironmentFailure
+        try:
+            result = self.environments.call(config, request) if config is not None else None
+        except EnvironmentFailure as error:
+            if data.get('kind') == 'compute':raise
+            fail('$.task.'+data['id'],'environment_not_ready',str(error))
+        self._validate_support(data, schemas, result)
+
+    async def verify_support_async(self, data):
+        schemas, config, request = self._prepare_support(data)
+        from .execution_environments import EnvironmentFailure
+        try:
+            result = await asyncio.to_thread(self.environments.call, config, request) if config is not None else None
+        except EnvironmentFailure as error:
+            if data.get('kind') == 'compute':raise
+            fail('$.task.'+data['id'],'environment_not_ready',str(error))
+        self._validate_support(data, schemas, result)
+
+    def _prepare_support(self, data):
         if data.get('kind')=='compute':
             self.validate_structure(data)
             config=self.environments.snapshot(data)
-            self.environments.call(config,{'op':'compute_probe','operation':data.get('operation'),'entrypoint':data.get('compute_entrypoint') if data.get('operation')=='extension' else ''})
-            return
-        from .ros_interfaces import InterfaceLibrary, PRIMITIVES, installed_schema
+            return None,config,{'op':'compute_probe','operation':data.get('operation'),'entrypoint':data.get('compute_entrypoint') if data.get('operation')=='extension' else ''}
         identity = data['id']
         expected = self.validate_structure(data)
-        schemas = {data['ros_type']: expected}
+        schemas = {data['ros_type']: support_schema(expected)}
         if data.get('schema_id'):
             record = self.store.get('ros_schema', data['schema_id'])
             if record.get('project_id') != self._robot():
                 fail('$.task.' + identity, 'ownership', '任务接口定义不属于当前工程')
-            schemas.update(InterfaceLibrary(self.store, self._robot()).compile(record['definitions'], saved_definitions=False))
-        actual_schemas = None
-        if self.environments:
-            from .execution_environments import EnvironmentFailure
-            try:
-                actual_schemas = self.environments.call(self.environments.snapshot(data), {'op':'verify','expected':schemas})['schemas']
-            except EnvironmentFailure as error:
-                fail('$.task.'+identity,'environment_not_ready',str(error))
+            schemas.update(compiled_support(self._robot(), json.dumps(record['definitions'], sort_keys=True, ensure_ascii=False)))
+        return schemas,self.environments.snapshot(data) if self.environments else None,{'op':'verify','expected':schemas}
+
+    def _validate_support(self, data, schemas, result):
+        if schemas is None:return
+        from .ros_interfaces import PRIMITIVES, installed_schema
+        identity = data['id']
+        actual_schemas = result['schemas'] if result is not None else None
         def normalized(value, package):
             if isinstance(value, dict):
                 return {name: normalized(item, package) for name, item in value.items()}
@@ -614,21 +680,24 @@ class RosTasks:
         original = definition if definition is not None else self.get(task_id)
         if getattr(self.robots, 'deployment', None):
             await self.robots.deployment.require_tasks_ready([original])
-        data = prepared_task(original, inputs, self.validate_structure(original))
+        schema = self.validate_structure(original)
+        data = prepared_task(original, inputs, schema)
         data.setdefault('_ros_domain', self.connection()['domain_id'])
+        data.setdefault('_use_sim_time', self.connection().get('use_sim_time',False))
         if self.environments:
             data.setdefault('_execution_environment', self.environments.snapshot(data))
-            data['_expected_schemas'] = {data['ros_type']: self.validate_structure(original)} if data['kind']!='compute' else {}
+            data['_expected_schemas'] = {data['ros_type']: support_schema(schema)} if data['kind']!='compute' else {}
             if data.get('schema_id'):
-                from .ros_interfaces import InterfaceLibrary
                 record = self.store.get('ros_schema', data['schema_id'])
-                data['_expected_schemas'].update(InterfaceLibrary(self.store, self._robot()).compile(record['definitions'], saved_definitions=False))
+                data['_expected_schemas'].update(compiled_support(self._robot(), json.dumps(record['definitions'], sort_keys=True, ensure_ascii=False)))
         result = await asyncio.to_thread(self._execute, data, stop, feedback)
         if isinstance(result, str):
             result = {'state':result,'response':data.get('payload',{})}
+        stop_evidence = None
         if original.get('stop_observation') and result.get('terminal_received') and original['kind']=='action':
             confirmation={'kind':'compute','operation':'wait_stationary','payload':original['stop_observation'],
-                          'timeout_s':original['stop_observation'].get('timeout_s',5),'_ros_domain':original.get('_ros_domain',self.connection()['domain_id'])}
+                          'timeout_s':original['stop_observation'].get('timeout_s',5),'_ros_domain':original.get('_ros_domain',self.connection()['domain_id']),
+                          '_use_sim_time':data.get('_use_sim_time',False)}
             # Cancellation must still wait for measured standstill after the action reaches a terminal state
             try:
                 measured=await asyncio.to_thread(self.environments.compute,self.environments.snapshot(original),confirmation,threading.Event())
@@ -638,14 +707,17 @@ class RosTasks:
                 result.update(state='UNKNOWN',stop_confirmed=False,error={'code':'stop_unconfirmed','reason':'动作已结束但关节停止尚未确认','retryable':False})
             else:
                 result.update(state=result.get('terminal_state',result['state']),stop_confirmed=True)
+                if result['state'] == 'SUCCEEDED':
+                    stop_evidence = measured.get('response', {})
                 if result.get('error',{}).get('code')=='stop_unconfirmed':
-                    result['error']={'code':'action_failed','reason':'动作未成功完成，已确认关节停止','retryable':False} if result['state']=='FAILED' else None
+                    reason=result['error'].get('reason') or result.get('response',{}).get('message') or '动作未成功完成'
+                    result['error']={'code':'action_failed','reason':str(reason)+'；已确认关节停止','retryable':False} if result['state']=='FAILED' else None
         if result['state']=='SUCCEEDED' and not _matches_value(result.get('response',{}),data.get('success_condition',{})):
             result['state']='FAILED'
             result['error']={'code':'completion_condition_failed','reason':'返回结果未满足完成条件','retryable':False}
         if result['state'] == 'SUCCEEDED':
             try:
-                result['output'] = mapped_outputs(data, result.get('response', {}))
+                result['output'] = mapped_outputs(data, result.get('response', {}), stop_observation=stop_evidence)
             except ContractValidationError as exc:
                 result.update(state='FAILED',output={},error={'code':'output_binding_failed','reason':str(exc),'retryable':False})
         else:
@@ -662,6 +734,9 @@ class RosTasks:
             if not unchanged:
                 return {'state':'FAILED','stop_confirmed':True,'response':{},'error':{'code':'environment_changed','reason':'冻结的工作区执行环境已变化，请重新加载','retryable':False}}
             expected = data.pop('_expected_schemas', {})
+            # Form descriptors were already checked in this process; workers
+            # validate the live wire types and request values without this duplicate
+            data.pop('interface_schema', None)
             if data['kind']=='compute':
                 return self.environments.compute(config,data,stop)
             return self.environments.call(config, {'op':'run','task':data,'expected':expected}, stop, feedback)

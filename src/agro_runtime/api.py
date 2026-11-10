@@ -11,22 +11,22 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from .errors import ContractValidationError, field_path, fail
+from .execution_environments import EnvironmentFailure
 from .models import ExecutionRequest, Positive
 from .registry import load_package
 from .tasks import TaskManager, TaskStart
 from .configuration import ActiveContext, ConfigurationService, WorkspaceStore
 from .management import ManagementJobs
 from .robot_systems import RobotSystems
-from .assets import AssetService
 from .diagnostics import Diagnostics
 from uuid import uuid4
-from .workspace_models import (DescriptionUpload, DraftCreate, DraftSave, ConfigurationApply, PlanCreate, TaskIntent, LifecycleIntent)
+from .workspace_models import (DescriptionUpload, DraftCreate, DraftSave, ConfigurationApply, TaskIntent, LifecycleIntent)
 
 
 class ControlTake(BaseModel):
@@ -78,7 +78,7 @@ class GuiFiles(StaticFiles):
 
 
 def create_app(runtime, *, session_secret, session_identity='local_session', task_engine=None, endpoint=None,
-               ui_directory=None, tutorial_only=False, robot_profile=None):
+               ui_directory=None, robot_profile=None):
     if not session_secret or not session_identity:
         fail('$.session', 'invalid_session_secret', '本地会话身份与密钥不能为空')
     runtime = ActiveContext(runtime)
@@ -96,11 +96,10 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     management = ManagementJobs(store)
     jobs = management.workers
     robot_systems = RobotSystems(runtime,store,configuration)
-    assets = AssetService(runtime,store,robot_systems)
     diagnostics = Diagnostics(runtime)
     from .task_documents import TaskDocuments
     from .tree_models import TreeCreate,TreeSave,TreePublish,TreeExtract,TreeValidate
-    documents = TaskDocuments(runtime,store,assets)
+    documents = TaskDocuments(runtime,store,robot_systems)
     runtime.tasks.documents = documents
     from .state_machines import StateMachines
     from .ros_tasks import RosTasks
@@ -119,11 +118,6 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
                                                              ('Bearer ' + session_secret).encode('utf-8')):
             raise HTTPException(status_code=401, detail='local_session_required')
         return session_identity
-
-    tutorial = None
-    if not tutorial_only:
-        from .tutorial_sandbox import TutorialSandbox
-        tutorial = TutorialSandbox(session_secret, task_engine=task_engine, endpoint=endpoint, ui_directory=ui_directory)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -149,8 +143,6 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
         try:
             yield
         finally:
-            if tutorial is not None:
-                await tutorial.close()
             for task in jobs.values():
                 if task and not task.done():
                     await task
@@ -165,15 +157,6 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     app = FastAPI(title='Agro runtime management',
                   lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     @app.middleware('http')
-    async def tutorial_guard(request, call_next):
-        # A tutorial must never install third-party code, import projects or control a real device
-        if tutorial_only and request.method not in {'GET', 'HEAD', 'OPTIONS'}:
-            path = request.url.path.removeprefix('/tutorial')
-            if path.startswith(('/catalog', '/packages/', '/assets', '/robot-systems/import')):
-                return JSONResponse(status_code=403, content={'errors':[{'path':'$.tutorial','code':'mock_only','reason':'教学环境只能使用内置模拟适配器'}]})
-        return await call_next(request)
-
-    @app.middleware('http')
     async def blocked_writes(request, call_next):
         if runtime.state == 'BLOCKED' and request.method not in {'GET','HEAD','OPTIONS'}:
             return JSONResponse(status_code=409,content={'errors':[{'path':'$.system','code':'runtime_blocked','reason':'配置恢复失败，写入已阻塞，请保留诊断并人工检查'}]})
@@ -181,7 +164,6 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     app.state.runtime = runtime
     app.state.configuration = configuration
-    app.state.assets = assets
     app.state.robot_systems = robot_systems
     app.state.management = management
     app.state.diagnostics = diagnostics
@@ -207,6 +189,11 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     @app.exception_handler(ContractValidationError)
     async def contract_error(request, exc):
         return JSONResponse(status_code=409, content={'errors': [issue.model_dump() for issue in exc.issues]})
+
+    @app.exception_handler(EnvironmentFailure)
+    async def environment_error(request, exc):
+        return JSONResponse(status_code=503, content={'errors': [{
+            'path': '$.environment', 'code': 'execution_environment_unavailable', 'reason': str(exc)}]})
 
     @app.exception_handler(RequestValidationError)
     async def request_error(request, exc):
@@ -238,7 +225,6 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     class RobotSystemCreate(BaseModel):
         name: str = Field(min_length=1, max_length=60)
-        example_id: str | None = None
         storage_path: str = Field(min_length=1)
 
     @api.post('/robot-profiles/open')
@@ -308,7 +294,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     @api.post('/robot-systems')
     async def create_robot_system(body: RobotSystemCreate):
-        record = robot_systems.create(body.name, body.example_id)
+        record = robot_systems.create(body.name)
         try:
             return profiles.attach(record['id'], body.storage_path)
         except BaseException:
@@ -558,7 +544,8 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
                 finally:
                     store.delete('tree_draft',draft['id'])
             standalone=runtime.state=='STOPPED' and not robot_systems.selected().get('configured')
-            result=await tasks.start_task(documents.definition_request(definition['id'],body.request_id),owner,standalone=standalone)
+            request=await documents.definition_request(definition['id'],body.request_id)
+            result=await tasks.start_task(request,owner,standalone=standalone)
             return result
 
     @api.get('/ros/tasks')
@@ -605,6 +592,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     class RosConnection(BaseModel):
         domain_id: int = Field(ge=0,le=232)
         namespace: str = '/'
+        use_sim_time: bool = False
 
     @api.get('/ros/connection')
     async def ros_connection():
@@ -615,7 +603,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
         async with runtime.transition:
             if deployment.has_processes() or hsm.running() or any(item['state'] in ('ACCEPTED','RUNNING','CANCELING','UNKNOWN') for item in tasks.list()) or any(item['snapshot']['state'] in ('ACCEPTED','RUNNING','CANCELING','UNKNOWN') for item in store.list('ros_operation')):
                 fail('$.connection','running','请先停止运行并确认设备状态，再切换 ROS 域')
-            return ros_tasks.save_connection(body.domain_id,body.namespace)
+            return ros_tasks.save_connection(body.domain_id,body.namespace,body.use_sim_time)
 
     @api.get('/ros/message')
     async def ros_message(interface: str, ros_type: str):
@@ -703,7 +691,8 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
             phase('preparing_subsystems')
             return await deployment.prepare(plan['kind'],plan['reference'],True,inputs=inputs)
         job=management.accept('prepare_subsystems',body.get('request_id') or 'request_'+uuid4().hex,{**plan,'inputs':inputs},work,
-                              on_accept=lambda:setattr(deployment,'stopping',False))
+                              on_accept=lambda:setattr(deployment,'stopping',False),
+                              context={'kind':plan['kind'],'reference':plan['reference'],'robot_system_id':robot_systems.selected_id()})
         return {'management_job_id':job['id'],'accepted':True}
 
     @api.post('/deployment/stop',status_code=202)
@@ -712,7 +701,8 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
         async def work(phase):
             phase('stopping_subsystems')
             return await deployment.stop()
-        job=management.accept('stop_subsystems',body.get('request_id') or 'request_'+uuid4().hex,{},work)
+        job=management.accept('stop_subsystems',body.get('request_id') or 'request_'+uuid4().hex,{},work,
+                              context={'robot_system_id':robot_systems.selected_id()})
         return {'management_job_id':job['id'],'accepted':True}
 
     @api.get('/ros/interface-workspaces/{workspace_id}/environment')
@@ -840,11 +830,11 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     @api.get('/studio/flow-runs')
     async def studio_flow_runs():
         key=robot_systems.selected_id()
-        return {'runs':[{k:item.get(k) for k in ('id','machine_id','status','sequence','active','error')} | {'name':item.get('definition',{}).get('name','状态流程')} for item in store.list('hsm_session') if key and item.get('robot_system_id')==key]}
+        return {'runs':[{k:item.get(k) for k in ('id','machine_id','status','sequence','active','error')} | {'name':item.get('definition',{}).get('name','状态流程')} for item in hsm.sessions.list() if key and item.get('robot_system_id')==key]}
 
     @api.get('/studio/flow-runs/{run_id}')
     async def studio_flow_run(run_id: str):
-        result=store.get('hsm_session',run_id)
+        result=hsm.sessions.get(run_id)
         if not robot_systems.selected_id() or result.get('robot_system_id')!=robot_systems.selected_id():
             fail('$.run','ownership','运行记录不属于当前机器人')
         return {**result,'operations':ros_operations.operations(run_id)}
@@ -865,9 +855,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
 
     @api.get('/state-machines/status')
     async def hsm_status():
-        session=hsm.status()
-        if session:session={**session,'operations':ros_operations.operations(session['id'])}
-        return {'session':session}
+        return Response('{"session":'+hsm.status_json(ros_operations.operations_json)+'}',media_type='application/json')
 
     @api.post('/state-machines/{machine_id}/start',status_code=202)
     async def hsm_start(machine_id: str,body: StateMachineStart):
@@ -885,39 +873,6 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     @api.post('/state-machines/stop',status_code=202)
     async def hsm_stop():
         return hsm.request_stop()
-
-    @api.get('/templates')
-    async def templates():
-        return {'templates':assets.templates()}
-
-    @api.get('/assets')
-    async def asset_list():
-        return {'assets':store.list('asset')}
-
-    @api.post('/assets')
-    async def asset_import(body: DescriptionUpload):
-        body=body.model_dump()
-        return assets.import_asset(body.get('filename'),body.get('content'))
-
-    @api.get('/plans')
-    async def plan_list():
-        return {'plans':[item for item in store.list('plan') if item.get('robot_system_id') == robot_systems.selected_id() and robot_systems.active()]}
-
-    @api.post('/plans')
-    async def plan_create(body: PlanCreate):
-        body=body.model_dump()
-        return assets.create_plan(body.get('parameters',{}),body.get('asset_id'),body.get('template_id'))
-
-    @api.get('/plans/{plan_id}/preflight')
-    async def plan_preflight(plan_id: str):
-        return assets.preflight(plan_id)
-
-    @api.post('/plans/{plan_id}/start', status_code=202)
-    async def plan_start(plan_id: str,body: TaskIntent,owner: str=Depends(authenticate)):
-        if hsm.running(): fail('$.machine','hsm_busy','状态机持有任务控制权，请从状态机发送事件')
-        body=body.model_dump()
-        async with runtime.transition:
-            return await tasks.start_task(assets.request(plan_id,body.get('request_id')),owner)
 
     @api.get('/diagnostics')
     async def diagnostic_status():
@@ -1084,7 +1039,7 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
     async def definition_preflight(key: str):
         # Validate the immutable definition, matching its eventual start path,
         # but never dispatch any operation or change the runtime mode.
-        documents.definition_request(key,'preflight_check')
+        await documents.definition_request(key,'preflight_check')
         return {'valid':True,'definition_id':key}
 
     class TreeRunIntent(TaskIntent):
@@ -1099,20 +1054,10 @@ def create_app(runtime, *, session_secret, session_identity='local_session', tas
         if standalone and not body.confirm_safety:
             fail('$.safety','confirmation_required','启动 ROS 行为前需确认实体急停与通信失联保护')
         async with runtime.transition:
-            return await tasks.start_task(documents.definition_request(key,body.request_id),owner,standalone=standalone)
-
-    if tutorial is not None:
-        @api.post('/tutorial/session')
-        async def tutorial_start():
-            return await tutorial.start()
-
-        @api.delete('/tutorial/session')
-        async def tutorial_close():
-            return await tutorial.close()
+            request=await documents.definition_request(key,body.request_id)
+            return await tasks.start_task(request,owner,standalone=standalone)
 
     app.include_router(api)
-    if tutorial is not None:
-        app.mount('/tutorial', tutorial, name='tutorial-api')
     directory = gui_directory(ui_directory)
     if (directory / 'index.html').is_file():
         app.mount('/ui', GuiFiles(directory=directory, html=True), name='gui')

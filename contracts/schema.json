@@ -18,29 +18,11 @@
           "pattern": "^[0-9a-f]{64}$",
           "title": "Sha256",
           "type": "string"
-        },
-        "device_id": {
-          "pattern": "^[a-z][a-z0-9_]*$",
-          "title": "Device Id",
-          "type": "string"
-        },
-        "source_frame": {
-          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
-          "title": "Source Frame",
-          "type": "string"
-        },
-        "target_frame": {
-          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
-          "title": "Target Frame",
-          "type": "string"
         }
       },
       "required": [
         "path",
-        "sha256",
-        "device_id",
-        "source_frame",
-        "target_frame"
+        "sha256"
       ],
       "title": "AssetReference",
       "type": "object"
@@ -892,7 +874,8 @@
             "string",
             "integer",
             "number",
-            "boolean"
+            "boolean",
+            "json"
           ],
           "title": "Type",
           "type": "string"
@@ -988,6 +971,30 @@
           "default": null,
           "title": "Max Age S"
         },
+        "frame_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Frame Path"
+        },
+        "stamp_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stamp Path"
+        },
         "required": {
           "default": false,
           "title": "Required",
@@ -1012,87 +1019,6 @@
         "apply_policy"
       ],
       "title": "ParameterDescriptor",
-      "type": "object"
-    },
-    "PickResult": {
-      "additionalProperties": false,
-      "properties": {
-        "extensions": {
-          "additionalProperties": {
-            "$ref": "#/$defs/JsonValue"
-          },
-          "title": "Extensions",
-          "type": "object"
-        },
-        "target_id": {
-          "pattern": "^[a-z][a-z0-9_]*$",
-          "title": "Target Id",
-          "type": "string"
-        },
-        "outcome": {
-          "enum": [
-            "picked",
-            "skipped",
-            "failed",
-            "unknown"
-          ],
-          "title": "Outcome",
-          "type": "string"
-        },
-        "reason": {
-          "anyOf": [
-            {
-              "minLength": 1,
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Reason"
-        }
-      },
-      "required": [
-        "target_id",
-        "outcome"
-      ],
-      "title": "PickResult",
-      "type": "object"
-    },
-    "PlanCreate": {
-      "additionalProperties": false,
-      "properties": {
-        "template_id": {
-          "default": "tomato_picker",
-          "pattern": "^[a-z][a-z0-9_]*$",
-          "title": "Template Id",
-          "type": "string"
-        },
-        "parameters": {
-          "patternProperties": {
-            "^[a-z][a-z0-9_]*$": {
-              "$ref": "#/$defs/JsonValue"
-            }
-          },
-          "title": "Parameters",
-          "type": "object"
-        },
-        "asset_id": {
-          "anyOf": [
-            {
-              "pattern": "^[a-z][a-z0-9_]*$",
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Asset Id"
-        }
-      },
-      "title": "PlanCreate",
       "type": "object"
     },
     "PortBinding": {
@@ -1434,7 +1360,6 @@
           "items": {
             "$ref": "#/$defs/BackendInstance"
           },
-          "minItems": 1,
           "title": "Backends",
           "type": "array"
         },
@@ -1443,7 +1368,6 @@
             "pattern": "^[a-z][a-z0-9_]*$",
             "type": "string"
           },
-          "minItems": 1,
           "title": "Required Roles",
           "type": "array"
         },
@@ -1458,10 +1382,7 @@
         }
       },
       "required": [
-        "system_id",
-        "backends",
-        "required_roles",
-        "roles"
+        "system_id"
       ],
       "title": "SystemConfig",
       "type": "object"
@@ -1499,7 +1420,8 @@
           "type": "object"
         },
         "kind": {
-          "pattern": "^(tomato_picker|simulation_inspection)$",
+          "default": "general",
+          "pattern": "^general$",
           "title": "Kind",
           "type": "string"
         },
@@ -1521,30 +1443,14 @@
           "title": "Parameters",
           "type": "object"
         },
-        "max_targets": {
-          "maximum": 8,
-          "minimum": 1,
-          "title": "Max Targets",
-          "type": "integer"
-        },
-        "max_recovery_attempts": {
-          "maximum": 0,
-          "minimum": 0,
-          "title": "Max Recovery Attempts",
-          "type": "integer"
-        },
         "timeout_ms": {
-          "maximum": 60000,
+          "maximum": 3660000,
           "minimum": 1000,
           "title": "Timeout Ms",
           "type": "integer"
         }
       },
       "required": [
-        "kind",
-        "assets",
-        "max_targets",
-        "max_recovery_attempts",
         "timeout_ms"
       ],
       "title": "TaskManifest",
@@ -1616,13 +1522,39 @@
           "title": "Xml"
         },
         "template": {
-          "default": "simulation_inspection",
-          "enum": [
-            "tomato_picker",
-            "simulation_inspection"
-          ],
+          "const": "general",
+          "default": "general",
           "title": "Template",
           "type": "string"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        },
+        "owner": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner"
         }
       },
       "title": "TreeCreate",
@@ -1867,6 +1799,20 @@
           },
           "title": "Parameters",
           "type": "object"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
         }
       },
       "required": [
@@ -1885,11 +1831,8 @@
           "$ref": "#/$defs/TreeDocument"
         },
         "policy": {
-          "default": "simulation_inspection",
-          "enum": [
-            "simulation_inspection",
-            "tomato_picker"
-          ],
+          "const": "general",
+          "default": "general",
           "title": "Policy",
           "type": "string"
         },
@@ -1927,7 +1870,7 @@
             "boolean",
             "stamped_pose",
             "target_list",
-            "pick_result"
+            "json"
           ],
           "title": "Type",
           "type": "string"
@@ -2022,6 +1965,30 @@
           ],
           "default": null,
           "title": "Max Age S"
+        },
+        "frame_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Frame Path"
+        },
+        "stamp_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stamp Path"
         }
       },
       "required": [
@@ -2031,6 +1998,6 @@
       "type": "object"
     }
   },
-  "title": "Agricultural capability contracts",
+  "title": "Robot integration contracts",
   "$schema": "https://json-schema.org/draft/2020-12/schema"
 }

@@ -25,7 +25,7 @@ function loadSettings(): Settings {
 }
 function currentWorkspace(): Workspace {
   const path = location.pathname.split('/')[2]
-  return path === 'templates' ? 'editor' : path === 'overview' || path === 'system' || path === 'runtime' || path === 'settings' || path === 'records' || path === 'editor' ? path : 'overview'
+  return path === 'overview' || path === 'system' || path === 'runtime' || path === 'settings' || path === 'records' || path === 'editor' ? path : 'overview'
 }
 
 export default function App() {
@@ -273,7 +273,7 @@ export default function App() {
         <section className="content-wrap">
           <div className="top-status"><span className="breadcrumb">{text.subtitle} / {text[workspace]}</span><span className="pill">{text.localOnly}</span><span className="pill"><span className={`dot ${observation ? 'live' : ''}`} />{observation ? text.connected : text.offline}</span></div>
           <main className="content"><motion.div initial={{opacity:0}} animate={{opacity:1}} transition={fade} key={workspace+':'+(robotDirectory?.selected_id||'none')} className="page page-enter">
-          <div className="page-heading"><div><p className="eyebrow">AGROTECH · WORKSPACE</p><h1>{workspace === 'settings' ? text.settingsTitle : text[workspace]}</h1><p className="page-description">{workspace === 'settings' ? text.settingsHint : text[workspace === 'overview' ? 'overviewHint' : workspace === 'system' ? 'systemHint' : workspace === 'templates' ? 'templateHint' : workspace === 'editor' ? 'editorHint' : workspace === 'records' ? 'recordsHint' : 'runtimeHint']}</p></div>
+          <div className="page-heading"><div><p className="eyebrow">AGROTECH · WORKSPACE</p><h1>{workspace === 'settings' ? text.settingsTitle : text[workspace]}</h1><p className="page-description">{workspace === 'settings' ? text.settingsHint : text[workspace === 'overview' ? 'overviewHint' : workspace === 'system' ? 'systemHint' : workspace === 'editor' ? 'editorHint' : workspace === 'records' ? 'recordsHint' : 'runtimeHint']}</p></div>
             {client && <div className="buttons"><button disabled={busy} onClick={refresh}><Icon name="refresh" />{text.refresh}</button></div>}
           </div>
           {workspace === 'settings' ? <>

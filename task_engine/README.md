@@ -25,11 +25,11 @@ cmake --build /tmp/agro-task-engine -j2
   --models /tmp/agro-node-models.xml
 ```
 
-`bt.registry.json` 提供模拟包与系统描述的离线注册样例，运行模式从 Agent 读取当前冻结快照，指定 `--registry` 时会精确比较快照，因此运行时应传入对应的冻结注册表
+`bt.registry.json` 提供空系统的离线注册样例，运行模式从 Agent 读取当前冻结快照，指定 `--registry` 时会精确比较快照，因此运行时应传入对应的冻结注册表
 
 ## 直接运行执行器
 
-下面的能力桥示例需要先按[模拟接入说明](../adapters/mock/README.md)启动 Agent 和系统并获取 AUTO 控制令牌，将令牌响应保存为 JSON，将本地会话密钥保存到权限受限文件
+运行时需先启动 Agent，并获取对应会话的 AUTO 控制令牌；将令牌响应保存为 JSON，将本地会话密钥保存到权限受限文件
 
 ```bash
 /tmp/agro-task-engine/agro-bt --xml task_engine/examples/bridge.xml \
@@ -38,7 +38,7 @@ cmake --build /tmp/agro-task-engine -j2
   --task-run-id task_observe --state-file /tmp/task-observe.json
 ```
 
-示例观察目标并展示 Sequence、Fallback、SubTree 和类型转换，完整番茄采摘与 Agent 任务会话见[番茄采摘示例](../examples/tomato_picker/README.md)
+示例使用固定示例位姿展示 Sequence、Fallback、SubTree 和通用类型转换，不派发设备操作；实际能力节点和 ROS 2 任务节点由工作区提供的注册表生成
 
 标准输出为最终 JSON，诊断输出到标准错误，成功退出码为 0，校验失败、执行失败、超时或取消退出码为 1，SIGINT、SIGTERM 和 `--cancel-after-ms` 请求停止，`--timeout-ms` 默认 30000
 
@@ -61,16 +61,15 @@ ROS 2 任务节点注册为 `RosTask_<任务标识>`，沿用相同输入输出�
 | 整数 | 带 `value` 和 `unit` 的 IntegerQuantity，拒绝小数及超出有符号整数范围的数据 |
 | 位姿 | StampedPose |
 | 目标列表 | TargetList |
-| 单果结果 | PickResult |
 | 通用 JSON | JsonValue |
 
 XML 对象与列表字面量加 `json:` 前缀并转义引号，黑板引用使用 `{blackboard_key}`，`--blackboard` 接受按键组织的 `{type,value,unit}` 初始数据
 
 加载前拒绝未知节点、缺失绑定、重复节点标识、无来源输入、类型冲突、单位与坐标系冲突，动态观测有效期由 Python 请求入口按同域单调时钟检查
 
-转换节点为 TargetsFromPose、SelectTarget 和 MakePickResult，条件节点为 HasTarget 和 PickSucceeded，MakePickResult 生成单果业务数据，设备动作与记账由对应能力执行
+位姿转换节点为 TargetsFromPose 和 SelectTarget，条件节点为 HasTarget 和 IsTrue；工作区自定义结果使用 json 端口，执行器不定义业务结果结构或成功标准
 
-ForEachTarget 在最多 8 个互异目标上执行子树，空列表成功结束，子树失败立即中止，任务模板还提供 IsTrue 条件节点
+ForEachTarget 按必填正整数 max_targets 限制目标数量，在互异目标上执行子树，空列表成功结束，子树失败立即中止
 
 ## 根树输出边界
 
@@ -112,6 +111,6 @@ halt 立即停止后续派发并移交取消追踪，停止超时独立为 2000 
 
 发布服务使用 `--validate-only --instance-ids` 对标准 XML 和初始 Blackboard 做实际加载校验，返回真实节点路径、UID 与能力操作标识，执行同样使用 `--instance-ids`，通过调用路径区分同一子树的不同实例
 
-默认执行保留原 node_id 语义，启用实例标识时能力操作标识由实际调用路径生成，显示标签用于观察，业务阶段映射由服务端校验结构后生成并冻结
+默认执行保留原 node_id 语义，启用实例标识时能力操作标识由实际调用路径生成，显示标签用于观察
 
 实时节点与操作报告通过原子替换状态文件交给 Agent，报告包含单调递增 event_sequence 和最近 512 条 node_events，每条记录实际节点路径、前后状态与编辑标识，完整节点状态与事件共同用于重连观察，设备停止继续使用独立 stop_confirmed

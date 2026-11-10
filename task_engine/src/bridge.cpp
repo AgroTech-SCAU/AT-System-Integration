@@ -422,9 +422,6 @@ std::ostream &operator<<(std::ostream &s, const TargetList &v) {
 std::ostream &operator<<(std::ostream &s, const JsonValue &v) {
   return s << v.value.dump();
 }
-std::ostream &operator<<(std::ostream &s, const PickResult &v) {
-  return s << v.value.dump();
-}
 } // namespace agro_bt
 namespace BT {
 namespace {
@@ -468,10 +465,6 @@ agro_bt::TargetList convertFromString<agro_bt::TargetList>(StringView text) {
 }
 template <>
 agro_bt::JsonValue convertFromString<agro_bt::JsonValue>(StringView text) {
-  return {literal(text)};
-}
-template <>
-agro_bt::PickResult convertFromString<agro_bt::PickResult>(StringView text) {
   return {literal(text)};
 }
 } // namespace BT
